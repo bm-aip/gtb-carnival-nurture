@@ -140,6 +140,7 @@ def admin_pause():
 def admin_poll_now():
     selldo.poll_all()
     meta.poll_meta_leads()
+    meta.poll_campaign_stats()
     match.run_matching()
     sequencer.tick()
     return jsonify({"ok": True})
@@ -161,15 +162,23 @@ def _tick_with_matching():
 
 # ---------- scheduler ----------
 def start_scheduler():
+    from datetime import datetime, timedelta
+    soon = lambda s: datetime.now() + timedelta(seconds=s)
     sched = BackgroundScheduler(timezone="Asia/Kolkata")
+    # next_run_time=soon(...) -> first run right after boot, staggered so the
+    # Graph API isn't hit by everything at once; then normal intervals.
     sched.add_job(selldo.poll_all, "interval", minutes=config.SELLDO_POLL_MIN,
-                  id="selldo", max_instances=1, coalesce=True)
-    sched.add_job(meta.poll_campaign_stats, "interval", minutes=config.META_ADS_POLL_MIN,
-                  id="meta", max_instances=1, coalesce=True)
+                  id="selldo", max_instances=1, coalesce=True,
+                  next_run_time=soon(5))
     sched.add_job(meta.poll_meta_leads, "interval", minutes=config.SELLDO_POLL_MIN,
-                  id="meta_leads", max_instances=1, coalesce=True)
+                  id="meta_leads", max_instances=1, coalesce=True,
+                  next_run_time=soon(20))
+    sched.add_job(meta.poll_campaign_stats, "interval", minutes=config.META_ADS_POLL_MIN,
+                  id="meta", max_instances=1, coalesce=True,
+                  next_run_time=soon(60))
     sched.add_job(_tick_with_matching, "interval", minutes=config.SEQUENCER_TICK_MIN,
-                  id="seq", max_instances=1, coalesce=True)
+                  id="seq", max_instances=1, coalesce=True,
+                  next_run_time=soon(90))
     sched.start()
 
 
