@@ -168,14 +168,33 @@ ALLOWED_ACCOUNTS = [a.strip() for a in
 
 
 def poll_campaign_stats():
-    """Campaign insights, restricted to META_ACCOUNT_IDS if set; both tokens
-    see the same accounts so `seen` prevents double-polling."""
+    """Campaign insights. If META_ACCOUNT_IDS is set, those accounts are polled
+    directly (authoritative list) — each with the first token that works;
+    per-account failures are recorded, not fatal. If unset, falls back to
+    discovering accounts per token."""
     seen = set()
+    if ALLOWED_ACCOUNTS:
+        errs = []
+        for acct_id in ALLOWED_ACCOUNTS:
+            if acct_id in seen:
+                continue
+            last_err = None
+            for pk in config.META_TOKENS:
+                try:
+                    _poll_account(pk, acct_id)
+                    seen.add(acct_id)
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = str(e)[:200]
+            if last_err:
+                errs.append(f"{acct_id}: {last_err}")
+        db.set_setting("meta_error_RON", "")
+        db.set_setting("meta_error_ELEMENTS", " | ".join(errs) if errs else "")
+        return
     for pk in config.META_TOKENS:
         try:
             for acct in discover_accounts(pk):
-                if ALLOWED_ACCOUNTS and acct["id"] not in ALLOWED_ACCOUNTS:
-                    continue
                 if acct["id"] in seen:
                     continue
                 seen.add(acct["id"])
@@ -185,8 +204,28 @@ def poll_campaign_stats():
             db.set_setting(f"meta_error_{pk}", str(e)[:500])
 
 
+LEADGEN_OBJECTIVES = {"OUTCOME_LEADS", "LEAD_GENERATION"}
+
+
+def _campaign_objectives(token, account_id):
+    """campaign_id -> objective for an account."""
+    out = {}
+    j = _get(f"{config.GRAPH}/{account_id}/campaigns",
+             {"access_token": token, "fields": "id,objective", "limit": 200})
+    for c in j.get("data", []):
+        out[c["id"]] = c.get("objective")
+    return out
+
+
 def _poll_account(project_key, account_id):
     token = config.META_TOKENS[project_key]
+    objectives = _campaign_objectives(token, account_id)
+    if not objectives:
+        # distinguish "no campaigns" from "no access": probe the account node
+        probe = _get(f"{config.GRAPH}/{account_id}", {"access_token": token,
+                                                      "fields": "id"})
+        if "error" in probe:
+            raise RuntimeError(probe["error"].get("message", "no access"))
     r = requests.get(
         f"{config.GRAPH}/{account_id}/insights",
         params={
@@ -198,15 +237,19 @@ def _poll_account(project_key, account_id):
             "limit": 200,
         }, timeout=40)
     for row in r.json().get("data", []):
+        obj = objectives.get(row["campaign_id"])
+        if obj not in LEADGEN_OBJECTIVES:
+            continue
         leads = 0
         for a in row.get("actions", []) or []:
             if a.get("action_type") in ("lead", "onsite_conversion.lead_grouped",
                                         "leadgen_grouped"):
                 leads += int(float(a.get("value", 0)))
-        db.x("""INSERT INTO campaign_mapping (campaign_id, campaign_name, account_id)
-                VALUES (%s,%s,%s)
-                ON CONFLICT (campaign_id) DO UPDATE SET campaign_name=EXCLUDED.campaign_name""",
-             (row["campaign_id"], row.get("campaign_name"), account_id))
+        db.x("""INSERT INTO campaign_mapping (campaign_id, campaign_name, account_id, objective)
+                VALUES (%s,%s,%s,%s)
+                ON CONFLICT (campaign_id) DO UPDATE SET
+                  campaign_name=EXCLUDED.campaign_name, objective=EXCLUDED.objective""",
+             (row["campaign_id"], row.get("campaign_name"), account_id, obj))
         db.x("""INSERT INTO campaign_stats (campaign_id, stat_date, spend, impressions, clicks, leads)
                 VALUES (%s,%s,%s,%s,%s,%s)
                 ON CONFLICT (campaign_id, stat_date) DO UPDATE SET

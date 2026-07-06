@@ -44,8 +44,10 @@ CREATE TABLE IF NOT EXISTS campaign_mapping (
     campaign_id TEXT PRIMARY KEY,
     campaign_name TEXT,
     account_id TEXT,
+    objective TEXT,
     project TEXT                      -- RON | ELEMENTS | NULL (unmapped)
 );
+ALTER TABLE campaign_mapping ADD COLUMN IF NOT EXISTS objective TEXT;
 
 CREATE TABLE IF NOT EXISTS campaign_stats (
     campaign_id TEXT,

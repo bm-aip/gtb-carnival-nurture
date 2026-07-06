@@ -106,6 +106,8 @@ def api_campaigns():
                           COALESCE(sum(s.clicks),0) clicks
                    FROM campaign_mapping m
                    LEFT JOIN campaign_stats s ON s.campaign_id = m.campaign_id
+                   WHERE m.objective IN ('OUTCOME_LEADS','LEAD_GENERATION')
+                      OR m.project IS NOT NULL
                    GROUP BY m.campaign_id, m.campaign_name, m.account_id, m.project
                    ORDER BY spend DESC""")
     for r in rows:
