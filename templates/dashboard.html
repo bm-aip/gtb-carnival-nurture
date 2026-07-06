@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ event }} — Command</title>
+<style>
+  :root{
+    --ink:#0d1330; --panel:#141b3f; --panel2:#1a2350; --line:#2a3568;
+    --gold:#d4a53c; --gold-soft:#e8c877; --text:#e9ecf7; --dim:#8f97bd;
+    --ok:#4cc38a; --warn:#e5484d;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--ink);color:var(--text);
+       font:15px/1.5 "Segoe UI",system-ui,sans-serif;padding:0 0 60px}
+  header{display:flex;align-items:baseline;gap:14px;padding:22px 28px 10px;
+         border-bottom:1px solid var(--line)}
+  header h1{font-size:20px;letter-spacing:.12em;text-transform:uppercase;
+            color:var(--gold);font-weight:600}
+  header .dates{color:var(--dim);font-size:13px}
+  header .right{margin-left:auto;display:flex;gap:10px;align-items:center}
+  .pill{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line)}
+  .pill.ok{color:var(--ok);border-color:var(--ok)}
+  .pill.bad{color:var(--warn);border-color:var(--warn)}
+  nav{display:flex;gap:4px;padding:12px 28px;border-bottom:1px solid var(--line)}
+  nav button{background:none;border:1px solid transparent;color:var(--dim);
+             padding:7px 16px;border-radius:8px;cursor:pointer;font-size:14px}
+  nav button.active{color:var(--gold-soft);border-color:var(--gold);background:var(--panel)}
+  main{padding:24px 28px;max-width:1200px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card .k{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
+  .card .v{font-size:30px;font-weight:600;color:var(--gold-soft);margin-top:2px}
+  .card .sub{font-size:12px;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+        border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  th,td{padding:9px 12px;text-align:left;font-size:13px;border-bottom:1px solid var(--line)}
+  th{color:var(--dim);text-transform:uppercase;font-size:11px;letter-spacing:.08em;
+     background:var(--panel2)}
+  tr:last-child td{border-bottom:none}
+  .tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--panel2);
+       border:1px solid var(--line)}
+  .tag.gold{color:var(--gold-soft);border-color:var(--gold)}
+  .tag.green{color:var(--ok);border-color:var(--ok)}
+  .tag.red{color:var(--warn);border-color:var(--warn)}
+  select,input{background:var(--panel2);color:var(--text);border:1px solid var(--line);
+        border-radius:6px;padding:5px 8px;font-size:13px}
+  .btn{background:var(--gold);color:#1a1405;border:none;border-radius:8px;
+       padding:7px 14px;font-weight:600;cursor:pointer;font-size:13px}
+  .btn.ghost{background:none;color:var(--gold-soft);border:1px solid var(--gold)}
+  .errbar{background:#3a1420;border:1px solid var(--warn);color:#ffb4b4;
+          padding:8px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;display:none}
+  .hidden{display:none}
+  h2{font-size:15px;color:var(--dim);margin:18px 0 10px;text-transform:uppercase;
+     letter-spacing:.08em}
+</style>
+</head>
+<body>
+<header>
+  <h1>{{ event }}</h1>
+  <span class="dates">10 · 11 · 12 July 2026 — GTB Lounge, EA Mall</span>
+  <div class="right">
+    <span id="rate" class="pill">…</span>
+    <span id="pausePill" class="pill ok">LIVE</span>
+    <button id="pauseBtn" class="btn ghost">Pause sending</button>
+    <button id="pollBtn" class="btn">Poll now</button>
+  </div>
+</header>
+<nav>
+  <button data-tab="overview" class="active">Overview</button>
+  <button data-tab="leads">Leads</button>
+  <button data-tab="campaigns">Campaigns</button>
+  <button data-tab="unmatched">Unmatched</button>
+</nav>
+<main>
+  <div id="errbar" class="errbar"></div>
+
+  <section id="tab-overview">
+    <div class="cards" id="dayCards"></div>
+    <h2>Pipeline by project</h2>
+    <table id="funnelTable"><thead><tr>
+      <th>Project</th><th>Queued</th><th>M1 sent</th><th>M2 sent</th>
+      <th>Date selected</th><th>Unmatched</th><th>Suppressed</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-leads" class="hidden">
+    <div style="margin-bottom:12px">
+      <select id="leadProject">
+        <option value="">All projects</option>
+        <option value="RON">RON</option>
+        <option value="ELEMENTS">Elements</option>
+      </select>
+    </div>
+    <table id="leadsTable"><thead><tr>
+      <th>Name</th><th>Project</th><th>Phone</th><th>Sell.do status</th>
+      <th>WhatsApp state</th><th>Selected day</th><th>Last reply</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-campaigns" class="hidden">
+    <table id="campTable"><thead><tr>
+      <th>Campaign</th><th>Account</th><th>Mapped to</th><th>Spend ₹</th>
+      <th>Leads</th><th>CPL ₹</th><th>Clicks</th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="tab-unmatched" class="hidden">
+    <p style="color:var(--dim);font-size:13px;margin-bottom:12px">
+      Leads whose phone number could not be pulled from the Meta lead form.
+      Enter the number manually to queue them.</p>
+    <table id="unmatchedTable"><thead><tr>
+      <th>Name</th><th>Project</th><th>Sell.do ID</th><th>Meta lead ID</th>
+      <th>Phone</th><th></th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+</main>
+
+<script>
+const $=s=>document.querySelector(s);
+const fmtD=d=>new Date(d+"T00:00").toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"});
+
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
+  b.classList.add("active");
+  document.querySelectorAll("main section").forEach(s=>s.classList.add("hidden"));
+  $("#tab-"+b.dataset.tab).classList.remove("hidden");
+  load(b.dataset.tab);
+});
+
+async function j(url,opt){const r=await fetch(url,opt);return r.json()}
+
+async function loadSummary(){
+  const s=await j("/api/summary");
+  $("#rate").textContent=s.sends_last_hour+" sends / hr";
+  $("#pausePill").textContent=s.paused?"PAUSED":"LIVE";
+  $("#pausePill").className="pill "+(s.paused?"bad":"ok");
+  $("#pauseBtn").textContent=s.paused?"Resume sending":"Pause sending";
+  $("#pauseBtn").dataset.paused=s.paused;
+  const errs=Object.entries(s.errors).filter(([k,v])=>v).map(([k,v])=>k+": "+v);
+  $("#errbar").style.display=errs.length?"block":"none";
+  $("#errbar").textContent=errs.join(" | ");
+
+  const byDate={}, byProj={};
+  s.day_counts.forEach(r=>{
+    byDate[r.selected_date]=(byDate[r.selected_date]||0)+r.n;
+    byProj[r.selected_date]=byProj[r.selected_date]||{};
+    byProj[r.selected_date][r.project]=r.n;
+  });
+  $("#dayCards").innerHTML=s.event_dates.map(d=>{
+    const p=byProj[d]||{};
+    return `<div class="card"><div class="k">${fmtD(d)}</div>
+      <div class="v">${byDate[d]||0}</div>
+      <div class="sub">RON ${p.RON||0} · Elements ${p.ELEMENTS||0}</div></div>`;
+  }).join("")+`<div class="card"><div class="k">Total confirmed</div>
+      <div class="v">${Object.values(byDate).reduce((a,b)=>a+b,0)}</div>
+      <div class="sub">via WhatsApp date selection</div></div>`;
+
+  const f={};
+  s.funnel.forEach(r=>{f[r.project]=f[r.project]||{};f[r.project][r.wa_state]=r.n});
+  $("#funnelTable tbody").innerHTML=["RON","ELEMENTS"].map(p=>{
+    const g=f[p]||{};
+    return `<tr><td>${p}</td><td>${g.queued||0}</td><td>${g.m1_sent||0}</td>
+      <td>${g.m2_sent||0}</td><td>${g.date_selected||0}</td>
+      <td>${g.unmatched||0}</td><td>${g.suppressed||0}</td></tr>`;
+  }).join("");
+}
+
+async function loadLeads(){
+  const p=$("#leadProject").value;
+  const rows=await j("/api/leads"+(p?("?project="+p):""));
+  $("#leadsTable tbody").innerHTML=rows.map(r=>`<tr>
+    <td>${r.name||"—"}</td><td>${r.project}</td><td>${r.phone||"—"}</td>
+    <td><span class="tag">${r.selldo_status||"—"}</span></td>
+    <td><span class="tag ${r.wa_state==='date_selected'?'green':(r.wa_state==='suppressed'||r.wa_state==='unmatched'?'red':'gold')}">${r.wa_state}</span></td>
+    <td>${r.selected_date?fmtD(r.selected_date):"—"}</td>
+    <td>${r.last_inbound_text||"—"}</td></tr>`).join("");
+}
+$("#leadProject").onchange=loadLeads;
+
+async function loadCampaigns(){
+  const rows=await j("/api/campaigns");
+  $("#campTable tbody").innerHTML=rows.map(r=>`<tr>
+    <td>${r.campaign_name||r.campaign_id}</td><td>${r.account_id||""}</td>
+    <td><select onchange="mapC('${r.campaign_id}',this.value)">
+      <option value="" ${!r.project?"selected":""}>—</option>
+      <option value="RON" ${r.project==="RON"?"selected":""}>RON</option>
+      <option value="ELEMENTS" ${r.project==="ELEMENTS"?"selected":""}>Elements</option>
+    </select></td>
+    <td>${(+r.spend).toLocaleString("en-IN")}</td><td>${r.leads}</td>
+    <td>${r.cpl??"—"}</td><td>${r.clicks}</td></tr>`).join("");
+}
+async function mapC(cid,project){
+  await j(`/api/campaigns/${cid}/map`,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({project})});
+}
+
+async function loadUnmatched(){
+  const rows=await j("/api/unmatched");
+  $("#unmatchedTable tbody").innerHTML=rows.length?rows.map(r=>`<tr>
+    <td>${r.name||"—"}</td><td>${r.project}</td><td>${r.selldo_lead_id}</td>
+    <td>${r.meta_lead_id||"—"}</td>
+    <td><input id="ph${r.id}" placeholder="98xxxxxxxx"></td>
+    <td><button class="btn" onclick="fixPhone(${r.id})">Queue</button></td></tr>`).join("")
+    :`<tr><td colspan="6" style="color:var(--dim)">Nothing unmatched. Good.</td></tr>`;
+}
+async function fixPhone(id){
+  const phone=$("#ph"+id).value;
+  const r=await j(`/api/unmatched/${id}/phone`,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({phone})});
+  if(r.ok)loadUnmatched();else alert(r.error||"failed");
+}
+
+$("#pauseBtn").onclick=async()=>{
+  const cur=$("#pauseBtn").dataset.paused==="true";
+  await j("/admin/pause",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({paused:!cur})});
+  loadSummary();
+};
+$("#pollBtn").onclick=async()=>{
+  $("#pollBtn").textContent="Polling…";
+  await j("/admin/poll-now",{method:"POST"});
+  $("#pollBtn").textContent="Poll now";
+  load(document.querySelector("nav button.active").dataset.tab);
+};
+
+function load(tab){
+  loadSummary();
+  if(tab==="leads")loadLeads();
+  if(tab==="campaigns")loadCampaigns();
+  if(tab==="unmatched")loadUnmatched();
+}
+load("overview");
+setInterval(()=>load(document.querySelector("nav button.active").dataset.tab),60000);
+</script>
+</body>
+</html>
