@@ -28,9 +28,19 @@ def resolve_phone(project_key, meta_lead_id):
 
 # ---------- lead-form polling (primary phone source) ----------
 
-def _get(url, params):
-    r = requests.get(url, params=params, timeout=40)
-    return r.json()
+import time
+
+def _get(url, params, retries=3):
+    """GET with retry/backoff — Meta resets connections under burst load."""
+    last = None
+    for attempt in range(retries):
+        try:
+            r = requests.get(url, params=params, timeout=40)
+            return r.json()
+        except (requests.ConnectionError, requests.Timeout) as e:
+            last = e
+            time.sleep(2 ** attempt)  # 1s, 2s, 4s
+    raise last
 
 
 def get_pages(project_key):
@@ -93,8 +103,21 @@ def fetch_form_leads(form_id, page_token, since_iso):
     return out
 
 
+FORM_FILTER = [k.strip().lower() for k in
+               os.environ.get("FORM_FILTER", "").split(",") if k.strip()]
+
+
+def _form_wanted(form_name):
+    if not FORM_FILTER:
+        return True
+    n = (form_name or "").lower()
+    return any(k in n for k in FORM_FILTER)
+
+
 def poll_meta_leads():
-    """Cache all lead-form submissions since LEADS_SINCE into meta_leads."""
+    """Cache lead-form submissions since LEADS_SINCE into meta_leads.
+    FORM_FILTER (comma keywords, case-insensitive substring on form name)
+    limits which forms are pulled; throttled to avoid Meta connection resets."""
     since = config.LEADS_SINCE + "T00:00:00+0000"
     for pk in config.META_TOKENS:
         try:
@@ -103,6 +126,9 @@ def poll_meta_leads():
                 if not ptoken:
                     continue
                 for form in get_forms(page["id"], ptoken):
+                    if not _form_wanted(form.get("name")):
+                        continue
+                    time.sleep(0.4)
                     for lead in fetch_form_leads(form["id"], ptoken, since):
                         import parser as reply_parser
                         pd = reply_parser.parse_date_reply(
