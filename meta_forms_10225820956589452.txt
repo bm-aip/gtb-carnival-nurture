@@ -1,0 +1,85 @@
+Identity: {'name': 'Kripa Sankar', 'id': '10225820956589452'}
+
+Pages with tokens: 1
+
+=== PAGE 100728566307909  Elements Senior Living ===
+   form 1308795408090775  Elements Carnival - E4 New  [ACTIVE]  recent leads fetched: 3
+      2026-07-06T02:28:45+0000  {'which_bhk_are_you_interested_in?': '2_bhk', 'would_you_like_to_visit_the_event_on_july_10–12?': "yes,_i'll_attend", 'full_name': 'Ruchi tiwari', 'phone_number': '+918****410', 'email': 'ajjs6@gmail.com'}
+      2026-07-05T23:42:01+0000  {'which_bhk_are_you_interested_in?': '2_bhk', 'full_name': 'Loganathan', 'phone_number': '+919****633', 'would_you_like_to_visit_the_event_on_july_10–12?': 'prefer_a_site_visit_instead', 'email': 'logut50@gmail.com'}
+      2026-07-05T14:20:00+0000  {'which_bhk_are_you_interested_in?': '1_bhk', 'full_name': 'Raji Govindaraj', 'email': 'raji.govindaraj@gmail.com', 'would_you_like_to_visit_the_event_on_july_10–12?': 'maybe', 'phone_number': '+919****888'}
+   form 1325841153050996  Elements- 3 Carnival  [ACTIVE]  recent leads fetched: 3
+      2026-07-06T08:58:11+0000  {'full_name': 'S Manivannan', 'purpose_of_purchasing_a_senior_living_apartment': 'for_myself', 'phone_number': '+919****814', 'would_you_like_to_visit_the_event_on_july_10–12?': "yes,_i'll_attend", 'email': 'inforayontyres@gmail.com'}
+      2026-07-06T08:06:45+0000  {'email': 'Karunakarrenu@gmail.com', 'full_name': 'Renuka Karunakar', 'would_you_like_to_visit_the_event_on_july_10–12?': 'maybe', 'phone_number': '+919****506', 'purpose_of_purchasing_a_senior_living_apartment': 'for_myself'}
+      2026-07-06T06:42:06+0000  {'purpose_of_purchasing_a_senior_living_apartment': 'for_myself', 'would_you_like_to_visit_the_event_on_july_10–12?': 'maybe', 'full_name': 'ayush singh', 'phone_number': '+917****798', 'email': 'ayushsingha8574@gmail.com'}
+   form 852738860956530  Elements Carnival - E3  [ACTIVE]  recent leads fetched: 0
+   form 1165197976684578  Elements Carnival - E4  [ACTIVE]  recent leads fetched: 0
+   form 943442338665848  Uptown Investment  [ACTIVE]  recent leads fetched: 3
+      2026-07-06T07:36:03+0000  {'when_are_you_planning_to_invest?': '3–6_months', 'are_you_planning_to_visit_the_site_before_investing?': 'yes_-_i_would_like_to_visit_the_property', 'full_name': 'Sivaguru Ravikumar', 'phone_number': '+918****293', 'email': 'sivacse27@gmail.com'}
+      2026-07-06T06:00:41+0000  {'when_are_you_planning_to_invest?': 'just_exploring', 'are_you_planning_to_visit_the_site_before_investing?': 'undecided', 'full_name': 'reji', 'phone_number': '+919****600', 'email': 'rejish_rk@yahoo.com'}
+      2026-07-06T05:08:29+0000  {'full_name': 'Ajay Kumar', 'phone_number': '+918****980', 'when_are_you_planning_to_invest?': '3–6_months', 'are_you_planning_to_visit_the_site_before_investing?': 'undecided', 'email': 'ajaupurhan@gmail.com'}
+   form 1771633577144361  Uptown Investment (v1)  [ACTIVE]  recent leads fetched: 1
+      2026-05-02T12:17:06+0000  {'when_are_you_planning_to_invest?': 'immediately_(within_1_month)', 'are_you_planning_to_visit_the_site_before_investing?': 'no_-_virtual_tour_/_video_call_is_sufficient', 'full_name': 'Muruganandhan Test', 'phone_number': '+916****034', 'email': 'test3034@gmail.com'}
+   form 936868738938766  Chithirai Thiruvizha April  [ACTIVE]  recent leads fetched: 3
+      2026-04-24T03:14:38+0000  {'purpose_of_buying_senior_living_apartment': 'self', 'your_preferred_location': 'vandalur', 'full_name': 'Tamil Selvi', 'phone_number': '+919****117', 'email': 'ktamilselvi9292@gmail.com'}
+      2026-04-23T11:48:42+0000  {'purpose_of_buying_senior_living_apartment': 'self', 'full_name': 'Urmila Sivaraj', 'your_preferred_location': 'vandalur', 'phone_number': '+919****728', 'email': 'urmilasivaraj@gmail.com'}
+      2026-04-23T09:49:08+0000  {'purpose_of_buying_senior_living_apartment': 'self', 'full_name': 'Patent Mrs. CHENDRA NAGARAJAN,', 'your_preferred_location': 'vandalur', 'phone_number': '+919****216', 'email': 'nagakodur@gmail.com'}
+   form 2838627279810384  Chithirai Thiruvizha Form  [ACTIVE]  recent leads fetched: 2
+      2026-04-10T03:02:04+0000  {'purpose_of_buying_senior_living_apartment': 'self', 'full_name': 'Amarneedhi', 'preferred_location': 'vandalur', 'phone_number': '+917****543', 'email': 'amarneedhi009@gmail.com'}
+      2026-04-09T21:29:44+0000  {'purpose_of_buying_senior_living_apartment': 'parents', 'full_name': 'Dilip Kumar C K', 'preferred_location': 'kandigai', 'phone_number': '+919****321', 'email': 'jndentalscan@gmail.com'}
+   form 1665852984420065  Uptown April  [ACTIVE]  recent leads fetched: 3
+      2026-04-22T10:27:07+0000  {'purpose_of_buying_senior_living_apartment': 'own_use', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'full_name': 'K.Usha', 'phone_number': '+918****609', 'email': 'ramkyssn@gmail.com'}
+      2026-04-22T04:05:24+0000  {'purpose_of_buying_senior_living_apartment': 'own_use', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'full_name': 'Rajalakshmi', 'phone_number': '+919****445', 'email': 'sriraghavashram@yahoo.co.in'}
+      2026-04-22T03:15:56+0000  {'purpose_of_buying_senior_living_apartment': 'own_use', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'full_name': 'Laila Sundaram', 'phone_number': '+918****095', 'email': 'lilasundaram3@gmail.com'}
+   form 940247171787594  Uptown Mar 26  [ACTIVE]  recent leads fetched: 0
+   form 910869831572386  Sattva 2026  [ACTIVE]  recent leads fetched: 3
+      2026-06-15T07:33:02+0000  {'phone_number': '+919****132', 'full_name': 'Rajangam Govindan', 'purpose_of_buying_a_senior_living_apartment': 'own_use', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'email': 'rajangamg1234@gmail.com'}
+      2026-06-14T22:31:46+0000  {'full_name': 'Pushpa Jesudas', 'purpose_of_buying_a_senior_living_apartment': 'own_use', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'phone_number': '+918****668', 'email': 'jpushpat@gmail.com'}
+      2026-06-14T13:13:22+0000  {'full_name': 'Sriram Krishnamurti', 'purpose_of_buying_a_senior_living_apartment': 'relatives', 'when_are_you_planning_to_visit_the_community?': 'not_decided_yet', 'phone_number': '+919****755', 'email': 'ksriram1951@hotmail.com'}
+   form 872105365795504  Sattva MG Form  [ACTIVE]  recent leads fetched: 0
+   form 2053360725518449  Sattva Feb New  [ACTIVE]  recent leads fetched: 0
+   form 922641316832700  Uptown Feb  [ACTIVE]  recent leads fetched: 0
+   form 1442983450592957  Sattva Feb  [ACTIVE]  recent leads fetched: 0
+   form 1244957410846918  Elements Madhuram 2026  [ACTIVE]  recent leads fetched: 3
+      2026-07-05T22:45:01+0000  {'purpose_of_buying_senior_living_apartment': 'own_use', 'when_are_you_planning_for_site_visit?': 'immediately', 'full_name': 'Gajalakshmi', 'phone_number': '7305****760', 'email': 'gaja35757@gmail.com'}
+      2026-07-05T13:26:44+0000  {'purpose_of_buying_senior_living_apartment': 'own_use', 'when_are_you_planning_for_site_visit?': 'not_decided_yet', 'full_name': 'Jayashankar Rajagopal', 'phone_number': '+919****755', 'email': 'rajagopaljayashankar@gmail.com'}
+      2026-07-05T12:21:50+0000  {'purpose_of_buying_senior_living_apartment': 'parents_/_relatives', 'when_are_you_planning_for_site_visit?': 'not_decided_yet', 'full_name': 'Ramesh', 'phone_number': '+919****849', 'email': 'thirulogam@gmail.com'}
+   form 749091624420900  Madhuram Jan  [ACTIVE]  recent leads fetched: 0
+   form 25398208989871199  Sattva Jan 26  [ACTIVE]  recent leads fetched: 0
+   form 1299901015188250  Madhuram Jan 26  [ACTIVE]  recent leads fetched: 0
+   form 1989690275309097  Rising Palms Jan 26  [ACTIVE]  recent leads fetched: 0
+   form 1428222685526256  Elements Brand Form  [ACTIVE]  recent leads fetched: 0
+   form 1395435732089218  Elements Brand Video  [ACTIVE]  recent leads fetched: 0
+   form 1998752520670439  Uptown Dec  [ACTIVE]  recent leads fetched: 0
+   form 1223940242971672  Rising Palms Dec  [ACTIVE]  recent leads fetched: 0
+   form 2289061651614429  Madhuram Dec  [ACTIVE]  recent leads fetched: 0
+   form 2100085017399175  Elements Common Form  [ACTIVE]  recent leads fetched: 0
+   form 1309903014218802  Elements Event - GTB Lounge  [ACTIVE]  recent leads fetched: 0
+   form 651091967835101  Elements Sattva Oct Form  [ACTIVE]  recent leads fetched: 0
+   form 1522451275441290  Sattva Expo Form  [ACTIVE]  recent leads fetched: 0
+   form 2300205273730262  Elements Rising Palms CMG  [ACTIVE]  recent leads fetched: 0
+   form 815787794467841  Elements Rising Palms  [ACTIVE]  recent leads fetched: 0
+   form 673708391871823  Elements Sattva opn  [ACTIVE]  recent leads fetched: 0
+   form 2193562891112148  Elements Madhuram Form  [ACTIVE]  recent leads fetched: 0
+   form 1740076330008729  Kaveri Video Form  [ACTIVE]  recent leads fetched: 3
+      2026-05-04T14:55:13+0000  {'please_help_us_with_your_contactable_number:': '7892104506', 'full_name': 'Arjun M', 'city': 'Mysore', 'you_are_interested_in_buying?': 'senior_living_villa', 'looking_retirement_home_for': 'own_use', 'phone_number': '+917****506', 'email': 'marjunchik@gmail.com', 'which_type_of_retirement_homes_are_you_planning_to_buy?': '3_bhk_villa_at_rs._1.17_cr*'}
+      2026-05-04T12:04:25+0000  {'looking_retirement_home_for': 'own_use', 'you_are_interested_in_buying?': 'senior_living_apartment', 'which_type_of_retirement_homes_are_you_planning_to_buy?': '2_bhk_apartments_at_rs.69_lakhs*', 'please_help_us_with_your_contactable_number:': '9845015690', 'full_name': 'Padmaja Ramanathan', 'phone_number': '+919****690', 'email': 'padmaja.ramanathan@gmail.com', 'city': 'Bangalore'}
+      2026-05-04T08:32:34+0000  {'please_help_us_with_your_contactable_number:': '8619174557', 'full_name': 'Sheshadri K', 'city': 'Bangalore', 'you_are_interested_in_buying?': 'senior_living_villa', 'looking_retirement_home_for': 'own_use', 'phone_number': '+918****557', 'email': 'sheshadri1976@gmail.com', 'which_type_of_retirement_homes_are_you_planning_to_buy?': '2_bhk_villa_at_rs.99_lakhs*'}
+   form 1640539750237047  Elements Sattva Sep  [ACTIVE]  recent leads fetched: 0
+   form 1298670938657622  Elements Uptown  [ACTIVE]  recent leads fetched: 0
+   form 1091710526424403  Elements Aug New  [ACTIVE]  recent leads fetched: 0
+   form 2779853102213566  Elements Sales OTP Form  [ACTIVE]  recent leads fetched: 0
+   form 1452647256066530  Elements Aug Form  [ACTIVE]  recent leads fetched: 0
+   form 1032659152134684  Elements Video Form  [ACTIVE]  recent leads fetched: 0
+   form 1737366216911597  Elements Project Form-copy  [ACTIVE]  recent leads fetched: 0
+   form 1464642328057150  Elements Sales Form  [ACTIVE]  recent leads fetched: 0
+   form 1120711390113190  ElementsSattva Aug  [ACTIVE]  recent leads fetched: 0
+   form 1425294852135216  Elements Madhuram Aug  [ACTIVE]  recent leads fetched: 0
+   form 24340823088847209  Elements Kaveri Aug  [ACTIVE]  recent leads fetched: 3
+      2026-05-04T04:36:56+0000  {'looking_retirement_home_for': 'my_relatives', 'when_are_you_planning_for_site_visit?': 'within_2_to_3_days', 'full_name': 'Vny Any   Kumar', 'phone_number': '+917****912', 'email': 'shaktikumar72737@gmail.com'}
+      2026-05-04T03:25:21+0000  {'looking_retirement_home_for': 'my_relatives', 'when_are_you_planning_for_site_visit?': 'immediately', 'full_name': 'amisha kujur', 'phone_number': '+917****209', 'email': 'nawalkishororaon059@gmail.com'}
+      2026-05-03T10:45:19+0000  {'full_name': 'Jawanthiswera Anand', 'when_are_you_planning_for_site_visit?': 'not_decided_yet', 'looking_retirement_home_for': 'own_use', 'phone_number': '+919****019', 'email': 'janandiyer2006@yahoo.co.in'}
+   form 1900894664024909  Maintainace  [ACTIVE]  recent leads fetched: 0
+   form 706942098903411  Elements Event July  [ACTIVE]  recent leads fetched: 0
+   form 1787636825148467  Elements Maintenance July  [ACTIVE]  recent leads fetched: 0
+   form 1484159539234151  Elements Project Form  [ACTIVE]  recent leads fetched: 0
+   form 10063935497054557  Testimonial Camp Form  [ACTIVE]  recent leads fetched: 0

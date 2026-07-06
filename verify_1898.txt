@@ -1,0 +1,57 @@
+### client 1898 | params {'project': 'Elements Common', 'campaign': 'Meta'}
+
+--- 1. ALL lead stages (exact names matter) ---
+     29157  [pre_sales]  (Pre Sales) Booked
+     29655  [pre_sales]  (Pre Sales) In Progress
+     29156  [pre_sales]  (Pre Sales) Interested
+     29162  [pre_sales]  (Pre Sales) Lost
+     29152  [pre_sales]  (Pre Sales) New
+     29654  [pre_sales]  (Pre Sales) Not Connected
+     29653  [pre_sales]  (Pre Sales) Site Visit Scheduled
+     29155  [pre_sales]  (Pre Sales) Under Validation
+     29160  [pre_sales]  (Pre Sales) Unqualified
+     29158  [sales]  Booked
+     29660  [sales]  Booking Cancelled
+     29658  [sales]  In Progress
+     29154  [sales]  Interested
+     29161  [sales]  Lost
+     29151  [sales]  New
+     29657  [sales]  Not Connected
+     29659  [sales]  Site Visit Completed
+     29656  [sales]  Site Visit Scheduled
+     29153  [sales]  Under Validation
+     29159  [sales]  Unqualified
+
+--- 2. Campaigns matching target / carnival / meta ---
+     31787  active=True  Meta  (2026-04-09 08:43:53.327000)
+
+--- 3. Distinct sub_sources on responses since June 25 (top 15) ---
+     168  Chennai virtual number
+     123  Uptown Investment
+     117  Elements Website
+      47  Elements Madhuram 2026
+      20  Mysore Virtual Number
+      15  Elements Carnival - E4
+      11  RL | Codename Suncrest Conditional Logic
+      11  Elements Carnival - E3
+       9  None
+       8  New SunCrest form inHouse
+       4  Google Ads
+       3  Website_lead
+
+--- 4. utm_lead_id population on 'fb lead ad' responses since June 25 ---
+   fb-lead-ad responses: 214 | utm_lead_id set: 0 | utm_form_id set: 0
+   !! utm_lead_id is NEVER populated — phone resolution design must change.
+
+--- 5. THE ACTUAL QUERY ---
+   rows returned: 24
+   by status: {'(Pre Sales) New': 3, '(Pre Sales) Not Connected': 11, '(Pre Sales) Interested': 1, '(Pre Sales) In Progress': 4, '(Pre Sales) Lost': 1, '(Pre Sales) Unqualified': 4}
+   meta_lead_id present: 0 / 24
+   sample: {'selldo_lead_id': '36577936', 'meta_lead_id': None, 'name': 'V. Dhaasekaran Dhaasekaran (#2543)', 'status': '(Pre Sales) New'}
+   sample: {'selldo_lead_id': '37240275', 'meta_lead_id': None, 'name': 'Madavan Gopalsamy Gopalsamy (#5713)', 'status': '(Pre Sales) Not Connected'}
+   sample: {'selldo_lead_id': '37350577', 'meta_lead_id': None, 'name': 'Suresh Babuji S (#6540)', 'status': '(Pre Sales) Interested'}
+   sample: {'selldo_lead_id': '38168265', 'meta_lead_id': None, 'name': 'Sivakumar Thiagarajan (#7726)', 'status': '(Pre Sales) In Progress'}
+   sample: {'selldo_lead_id': '38249397', 'meta_lead_id': None, 'name': 'Loganathan (#7881)', 'status': '(Pre Sales) In Progress'}
+
+--- 6. NULL-project responses on target campaign (leakage check) ---
+   responses with NULL project on target campaign: 0

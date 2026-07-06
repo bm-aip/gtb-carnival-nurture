@@ -61,11 +61,11 @@ def poll_project(project_key):
 
         # New qualified lead → phone comes from the meta_leads matcher
         db.x("""INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name,
-                                   selldo_status, wa_state)
-                VALUES (%s,%s,%s,%s,%s,'pending_match')
+                                   selldo_status, selldo_response_at, wa_state)
+                VALUES (%s,%s,%s,%s,%s,%s,'pending_match')
                 ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
              (project_key, sid, r.get("meta_lead_id"), r.get("name"),
-              r.get("status")))
+              r.get("status"), r.get("response_at")))
 
 
 def poll_all():

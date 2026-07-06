@@ -1,0 +1,271 @@
+
+===== reporting_leads =====
+   id                                   bigint
+   name                                 character varying
+   uuid                                 character varying
+   client_uuid                          character varying
+   new_lead                             boolean
+   touched                              boolean
+   reporting_lead_last_follow_up_status_id bigint
+   last_followup_date                   timestamp without time zone
+   reporting_lead_future_follow_up_status_id bigint
+   reporting_lead_last_incoming_call_status_id bigint
+   reporting_lead_last_outgoing_call_status_id bigint
+   next_activity_scheduled_on           timestamp without time zone
+   next_activity_scheduled              boolean
+   next_followup_scheduled_on           timestamp without time zone
+   next_site_visit_scheduled_on         timestamp without time zone
+   last_contacted_at                    timestamp without time zone
+   last_contact_attempted_at            timestamp without time zone
+   last_sales_contacted_at              timestamp without time zone
+   last_sales_attempted_at              timestamp without time zone
+   last_contact                         timestamp without time zone
+   ttfc                                 bigint
+   ttfac                                bigint
+   last_acted_on                        timestamp without time zone
+   total_incoming_calls                 integer
+   total_outgoing_calls                 integer
+   total_answered_calls                 integer
+   total_not_answered_calls             integer
+   total_incoming_answered_calls        integer
+   total_incoming_not_answered_calls    integer
+   total_outgoing_answered_calls        integer
+   total_outgoing_not_answered_calls    integer
+   total_incoming_calls_duration        integer
+   total_outgoing_calls_duration        integer
+   total_calls_duration                 integer
+   current_outgoing_not_answered_calls  integer
+   currently_in                         integer
+   min_budget                           double precision
+   max_budget                           double precision
+   reporting_lead_min_possession_id     bigint
+   reporting_lead_max_possession_id     bigint
+   reporting_lead_transaction_type_id   bigint
+   interested_in_resale                 boolean
+   reporting_lead_funding_source_id     bigint
+   phone_verified                       boolean
+   reporting_sales_id                   bigint
+   reporting_team_id                    bigint
+   country                              character varying
+   state                                character varying
+   city                                 character varying
+   locality                             character varying
+   nri                                  boolean
+   reporting_lead_status_id             bigint
+   reporting_lead_droped_stage_id       bigint
+   reporting_lead_stage_id              bigint
+   reporting_lead_stage_drop_reason_id  bigint
+   reporting_lead_stage_change_reason_id bigint
+   hotness                              integer
+   last_stage_changed_on                timestamp without time zone
+   re_engaged                           boolean
+   reporting_channel_partner_id         bigint
+   lead_crm_id                          bigint
+   age                                  integer
+   reporting_lead_gender_id             bigint
+   married                              boolean
+   is_original                          boolean
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   total_followup_conducted             integer
+   total_site_visit_conducted           integer
+   reporting_dropped_by_id              bigint
+   dropped_from_department              integer
+   sample: {'id': '39446875', 'name': 'Varadha Raj (#51246)', 'uuid': '6a4b4fc058f1e78e6504884e', 'client_uuid': '687a19bb2f31c68d8ee12933', 'new_lead': 'True', 'touched': 'False', 'next_activity_scheduled': 'False', 'total_incoming_calls': '0', 'total_outgoing_calls': '0', 'total_answered_calls': '0', 'total_not_answered_calls': '0', 'total_incoming_answered_calls': '0', 'total_incoming_not_answered_calls': '0', 'total_outgoing_answered_calls': '0', 'total_outgoing_not_answered_calls': '0', 'total_incoming_calls_duration': '0', 'total_outgoing_calls_duration': '0', 'total_calls_duration': '0', 'current_outgoing_not_answered_calls': '0', 'currently_in': '1', 'phone_verified': 'False', 'reporting_sales_id': '31373', 'reporting_team_id': '8059', 'country': 'India', 'nri': 'False', 'reporting_lead_stage_id': '21834', 'hotness': '10', 'last_stage_changed_on': '2026-07-06 06:48:33', 're_engaged': 'False', 'lead_crm_id': '51246', 'is_original': 'True', 'reporting_client_id': '1436', 'created_at': '2026-07-06 06:48:33.132000', 'updated_at': '2026-07-06 06:55:29.752734', 'total_followup_conducted': '0', 'total_site_visit_conducted': '0'}
+   sample: {'id': '39446120', 'name': 'paul paul (#51245)', 'uuid': '6a4b4d7b58f1e789fb048921', 'client_uuid': '687a19bb2f31c68d8ee12933', 'new_lead': 'True', 'touched': 'False', 'next_activity_scheduled': 'False', 'total_incoming_calls': '0', 'total_outgoing_calls': '0', 'total_answered_calls': '0', 'total_not_answered_calls': '0', 'total_incoming_answered_calls': '0', 'total_incoming_not_answered_calls': '0', 'total_outgoing_answered_calls': '0', 'total_outgoing_not_answered_calls': '0', 'total_incoming_calls_duration': '0', 'total_outgoing_calls_duration': '0', 'total_calls_duration': '0', 'current_outgoing_not_answered_calls': '0', 'currently_in': '1', 'phone_verified': 'False', 'reporting_sales_id': '25689', 'reporting_team_id': '8059', 'country': 'India', 'nri': 'False', 'reporting_lead_stage_id': '21834', 'hotness': '10', 'last_stage_changed_on': '2026-07-06 06:38:51', 're_engaged': 'False', 'lead_crm_id': '51245', 'is_original': 'True', 'reporting_client_id': '1436', 'created_at': '2026-07-06 06:38:51.317000', 'updated_at': '2026-07-06 06:44:45.230459', 'total_followup_conducted': '0', 'total_site_visit_conducted': '0'}
+   sample: {'id': '39445338', 'name': 'Sathish sathish (#51244)', 'uuid': '6a4b4b3c2f31c649468a1375', 'client_uuid': '687a19bb2f31c68d8ee12933', 'new_lead': 'True', 'touched': 'False', 'next_activity_scheduled': 'False', 'total_incoming_calls': '0', 'total_outgoing_calls': '0', 'total_answered_calls': '0', 'total_not_answered_calls': '0', 'total_incoming_answered_calls': '0', 'total_incoming_not_answered_calls': '0', 'total_outgoing_answered_calls': '0', 'total_outgoing_not_answered_calls': '0', 'total_incoming_calls_duration': '0', 'total_outgoing_calls_duration': '0', 'total_calls_duration': '0', 'current_outgoing_not_answered_calls': '0', 'currently_in': '2', 'phone_verified': 'False', 'reporting_sales_id': '25407', 'reporting_team_id': '8098', 'country': 'India', 'nri': 'False', 'reporting_lead_stage_id': '21829', 'hotness': '10', 'last_stage_changed_on': '2026-07-06 06:29:16', 're_engaged': 'False', 'lead_crm_id': '51244', 'is_original': 'True', 'reporting_client_id': '1436', 'created_at': '2026-07-06 06:29:16.846000', 'updated_at': '2026-07-06 06:32:44.381994', 'total_followup_conducted': '0', 'total_site_visit_conducted': '0'}
+
+===== reporting_lead_stages =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   uuid                                 character varying
+   pipeline                             character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '27002', 'name': 'Invalid', 'key': 'custom_40', 'uuid': '696507b058f1e7bd776cdac3', 'pipeline': 'sales', 'reporting_client_id': '1436', 'created_at': '2026-01-12 14:41:45.655542', 'updated_at': '2026-01-12 14:41:45.655542'}
+   sample: {'id': '27001', 'name': 'New Upload', 'key': 'custom_39', 'uuid': '696507a158f1e7bd9e6cd1c9', 'pipeline': 'sales', 'reporting_client_id': '1436', 'created_at': '2026-01-12 14:41:41.649801', 'updated_at': '2026-01-12 14:41:41.649801'}
+   sample: {'id': '27000', 'name': 'Under Validation', 'key': 'custom_38', 'uuid': '696507870d1851c9c3fe0ac0', 'pipeline': 'sales', 'reporting_client_id': '1436', 'created_at': '2026-01-12 14:41:05.870285', 'updated_at': '2026-01-12 14:41:05.870285'}
+   sample: {'id': '26999', 'name': 'E Lost', 'key': 'custom_37', 'uuid': '696507765d8def34bdaf9172', 'pipeline': 'sales', 'reporting_client_id': '1436', 'created_at': '2026-01-12 14:40:49.309054', 'updated_at': '2026-01-12 14:40:49.309054'}
+   sample: {'id': '26998', 'name': 'Visit Lost', 'key': 'custom_36', 'uuid': '6965075c0d1851c9e7fdae48', 'pipeline': 'sales', 'reporting_client_id': '1436', 'created_at': '2026-01-12 14:40:23.530712', 'updated_at': '2026-01-12 14:40:23.530712'}
+
+===== reporting_lead_statuses =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   pipeline                             character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   reporting_lead_stage_id              bigint
+   sample: {'id': '18172', 'name': '(Pre Sales) NC Nine', 'key': 'NC Nine', 'pipeline': 'pre_sales', 'reporting_client_id': '1436', 'created_at': '2026-06-26 07:19:53.936639', 'updated_at': '2026-06-26 07:19:53.936639', 'reporting_lead_stage_id': '21839'}
+   sample: {'id': '18171', 'name': '(Pre Sales) NC Ten', 'key': 'NC Ten', 'pipeline': 'pre_sales', 'reporting_client_id': '1436', 'created_at': '2026-06-26 07:19:53.797312', 'updated_at': '2026-06-26 07:19:53.797312', 'reporting_lead_stage_id': '21839'}
+   sample: {'id': '17296', 'name': '(Pre Sales) NC Six', 'key': 'NC Six', 'pipeline': 'pre_sales', 'reporting_client_id': '1436', 'created_at': '2026-05-07 06:56:34.289659', 'updated_at': '2026-05-07 06:56:34.289659', 'reporting_lead_stage_id': '22685'}
+   sample: {'id': '17085', 'name': '(Pre Sales) NC Seven', 'key': 'NC Seven', 'pipeline': 'pre_sales', 'reporting_client_id': '1436', 'created_at': '2026-04-24 05:43:28.027936', 'updated_at': '2026-04-24 05:43:28.027936', 'reporting_lead_stage_id': '22685'}
+   sample: {'id': '17084', 'name': '(Pre Sales) NC Eight', 'key': 'NC Eight', 'pipeline': 'pre_sales', 'reporting_client_id': '1436', 'created_at': '2026-04-24 05:43:27.942584', 'updated_at': '2026-04-24 05:43:27.942584', 'reporting_lead_stage_id': '22685'}
+
+===== reporting_lead_stage_change_logs =====
+   id                                   bigint
+   uuid                                 character varying
+   utm_source                           character varying
+   utm_medium                           character varying
+   utm_campaign                         character varying
+   utm_term                             character varying
+   utm_content                          character varying
+   medium_value                         character varying
+   sub_source                           character varying
+   new_department_in                    integer
+   old_department_in                    integer
+   age                                  bigint
+   reporting_lead_stage_change_reason_id bigint
+   reporting_medium_type_id             bigint
+   new_stage_id                         bigint
+   old_stage_id                         bigint
+   reporting_recipe_id                  bigint
+   reporting_campaign_id                bigint
+   reporting_source_id                  bigint
+   reporting_project_id                 bigint
+   reporting_lead_id                    bigint
+   reporting_sales_id                   bigint
+   reporting_team_id                    bigint
+   new_status_id                        bigint
+   old_status_id                        bigint
+   reporting_client_id                  bigint
+   entered_at                           timestamp without time zone
+   exited_at                            timestamp without time zone
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '33659919', 'uuid': '6a4b4fc1e64cb96bd76e757d', 'utm_source': 'fb', 'utm_campaign': 'RP_RM_NEW_JUNE_Lookalike_Video', 'utm_content': 'RP_RM_NEW_JUNE_Lookalike_Video', 'sub_source': 'FB_Rising_Palms_1', 'new_department_in': '1', 'old_department_in': '1', 'reporting_medium_type_id': '3885', 'new_stage_id': '21834', 'reporting_campaign_id': '25351', 'reporting_source_id': '47430', 'reporting_project_id': '84637', 'reporting_lead_id': '39446875', 'reporting_sales_id': '31373', 'reporting_team_id': '8059', 'reporting_client_id': '1436', 'entered_at': '2026-07-06 06:48:33.682000', 'created_at': '2026-07-06 06:57:22.575737', 'updated_at': '2026-07-06 06:57:22.575737'}
+   sample: {'id': '33658520', 'uuid': '6a4b4e65360d7e3565495b6e', 'utm_source': 'ig', 'utm_campaign': 'Rising_palm_Pre_Launch_April_Adst_Investors', 'utm_content': 'Rising_palm_Ads_April_Investors_Video', 'sub_source': 'fb_lead_gen', 'new_department_in': '1', 'old_department_in': '1', 'reporting_medium_type_id': '3885', 'new_stage_id': '22673', 'old_stage_id': '22672', 'reporting_campaign_id': '25351', 'reporting_source_id': '47430', 'reporting_project_id': '84637', 'reporting_lead_id': '38605114', 'reporting_sales_id': '31373', 'reporting_team_id': '8059', 'new_status_id': '13567', 'old_status_id': '12859', 'reporting_client_id': '1436', 'entered_at': '2026-07-06 06:42:45.609000', 'created_at': '2026-07-06 06:50:56.260034', 'updated_at': '2026-07-06 06:50:56.260034'}
+   sample: {'id': '33657546', 'uuid': '6a4b4d7be64cb96c189951fa', 'sub_source': 'Haffeez  (Propsteps Realty)', 'new_department_in': '1', 'old_department_in': '1', 'reporting_medium_type_id': '3885', 'new_stage_id': '21834', 'reporting_campaign_id': '28194', 'reporting_source_id': '57001', 'reporting_project_id': '70081', 'reporting_lead_id': '39446120', 'reporting_sales_id': '25689', 'reporting_team_id': '8059', 'reporting_client_id': '1436', 'entered_at': '2026-07-06 06:38:51.896000', 'created_at': '2026-07-06 06:46:29.239073', 'updated_at': '2026-07-06 06:46:29.239073'}
+   sample: {'id': '33655320', 'uuid': '6a4b4b673354986676390725', 'utm_source': 'fb', 'utm_campaign': 'Rising_palm_Pre_Launch_April_Adst_Investors', 'utm_content': 'Rising_palm_Ads_April_Investors_Video', 'sub_source': 'fb_New_RP_4', 'new_department_in': '1', 'old_department_in': '1', 'reporting_lead_stage_change_reason_id': '166440', 'reporting_medium_type_id': '3885', 'new_stage_id': '21835', 'old_stage_id': '21832', 'reporting_campaign_id': '25351', 'reporting_source_id': '47430', 'reporting_project_id': '84637', 'reporting_lead_id': '39432538', 'reporting_sales_id': '31373', 'reporting_team_id': '8059', 'reporting_client_id': '1436', 'entered_at': '2026-07-06 06:29:59.373000', 'created_at': '2026-07-06 06:36:14.873418', 'updated_at': '2026-07-06 06:36:14.873418'}
+   sample: {'id': '33655157', 'uuid': '6a4b4b417b93447a7a95aaaf', 'utm_source': 'fb', 'utm_campaign': 'Rising_palm_Pre_Launch_April_Adst_Investors', 'utm_content': 'Rising_palm_Ads_April_Investors_Video', 'sub_source': 'fb_New_RP_4', 'new_department_in': '1', 'old_department_in': '1', 'age': '37', 'reporting_medium_type_id': '3885', 'new_stage_id': '21832', 'old_stage_id': '21834', 'reporting_campaign_id': '25351', 'reporting_source_id': '47430', 'reporting_project_id': '84637', 'reporting_lead_id': '39432538', 'reporting_sales_id': '31373', 'reporting_team_id': '8059', 'reporting_client_id': '1436', 'entered_at': '2026-07-06 06:29:22.172000', 'exited_at': '2026-07-06 06:29:59.373000', 'created_at': '2026-07-06 06:35:40.434846', 'updated_at': '2026-07-06 06:36:14.854902'}
+
+===== Other candidate tables (project/campaign/source/activity) =====
+Found: ['reporting_campaign_responses', 'reporting_campaigns', 'reporting_interested_project_units', 'reporting_lead_funding_sources', 'reporting_project_tower_stages', 'reporting_project_towers', 'reporting_project_unit_approval_statuses', 'reporting_project_unit_bands', 'reporting_project_unit_custom_date_times', 'reporting_project_unit_custom_dates', 'reporting_project_unit_custom_multi_selects', 'reporting_project_unit_custom_numeric_fields', 'reporting_project_unit_custom_selects', 'reporting_project_unit_custom_text_fields', 'reporting_project_unit_property_purposes', 'reporting_project_unit_statuses', 'reporting_project_units', 'reporting_projects', 'reporting_receipt_funding_sources', 'reporting_sources']
+
+===== reporting_campaign_responses =====
+   id                                   bigint
+   uuid                                 character varying
+   reporting_client_id                  bigint
+   reporting_lead_id                    bigint
+   reporting_campaign_id                bigint
+   is_new                               boolean
+   reporting_project_id                 bigint
+   reporting_medium_type_id             bigint
+   medium_value                         character varying
+   reporting_source_id                  bigint
+   sub_source                           character varying
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   utm_id                               character varying
+   utm_campaign                         character varying
+   utm_medium                           character varying
+   utm_source                           character varying
+   utm_term                             character varying
+   utm_content                          character varying
+   utm_page_id                          character varying
+   utm_form_id                          character varying
+   utm_lead_id                          character varying
+   utm_campaign_id                      character varying
+   utm_group_id                         character varying
+   sample: {'id': '45198831', 'uuid': '6a4b4fc158f1e78e65048852', 'reporting_client_id': '1436', 'reporting_lead_id': '39446875', 'reporting_campaign_id': '25351', 'is_new': 'True', 'reporting_project_id': '84637', 'reporting_medium_type_id': '3885', 'medium_value': 'fb lead ad', 'reporting_source_id': '47430', 'sub_source': 'FB_Rising_Palms_1', 'created_at': '2026-07-06 06:48:33', 'updated_at': '2026-07-06 06:57:21.958720', 'utm_campaign': 'RP_RM_NEW_JUNE_Lookalike_Video', 'utm_source': 'fb', 'utm_content': 'RP_RM_NEW_JUNE_Lookalike_Video'}
+   sample: {'id': '45197974', 'uuid': '6a4b4d7b58f1e789fb048926', 'reporting_client_id': '1436', 'reporting_lead_id': '39446120', 'reporting_campaign_id': '28194', 'is_new': 'True', 'reporting_project_id': '70081', 'reporting_medium_type_id': '3885', 'medium_value': 'iris channel partner', 'reporting_source_id': '57001', 'sub_source': 'Haffeez  (Propsteps Realty)', 'created_at': '2026-07-06 06:38:51', 'updated_at': '2026-07-06 06:46:28.994759'}
+   sample: {'id': '45197090', 'uuid': '6a4b4b3c2f31c649468a1378', 'reporting_client_id': '1436', 'reporting_lead_id': '39445338', 'reporting_campaign_id': '28194', 'is_new': 'True', 'reporting_medium_type_id': '3885', 'medium_value': 'iris channel partner', 'reporting_source_id': '57001', 'sub_source': 'Manikandan Shivakumar   (Pragathi Proptech Private Limited)', 'created_at': '2026-07-06 06:29:16', 'updated_at': '2026-07-06 06:35:31.164733'}
+
+===== reporting_campaigns =====
+   id                                   bigint
+   name                                 character varying
+   uuid                                 character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   active                               boolean
+   sample: {'id': '34224', 'name': 'RON_Carnival', 'uuid': '6a48ebed5d8defe7e0543935', 'reporting_client_id': '1436', 'created_at': '2026-07-04 11:18:05.493000', 'updated_at': '2026-07-04 11:20:30.108687', 'active': 'True'}
+   sample: {'id': '33628', 'name': 'Lambo CTI', 'uuid': '6a2a79135d8defda34ba177d', 'reporting_client_id': '1436', 'created_at': '2026-06-11 09:00:03.896000', 'updated_at': '2026-06-11 09:02:10.491352', 'active': 'True'}
+   sample: {'id': '32444', 'name': 'Rising Palms Facebook Campaign', 'uuid': '69f9a87e2f31c6335560dd26', 'reporting_client_id': '1436', 'created_at': '2026-05-05 08:21:18.390000', 'updated_at': '2026-05-05 08:46:38.200944', 'active': 'True'}
+
+===== reporting_interested_project_units =====
+   id                                   bigint
+   reporting_client_id                  bigint
+   reporting_lead_id                    bigint
+   reporting_project_id                 bigint
+   reporting_project_unit_id            bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '22575', 'reporting_client_id': '1436', 'reporting_lead_id': '32950730', 'reporting_project_id': '70082', 'reporting_project_unit_id': '244965', 'created_at': '2026-04-15 20:01:36.468165', 'updated_at': '2026-04-15 20:01:36.468165'}
+
+===== reporting_lead_funding_sources =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   uuid                                 character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '2310', 'name': 'Home Loan', 'key': 'home_loan', 'uuid': '687a1a69a3d855ac8fa69686', 'reporting_client_id': '1436', 'created_at': '2025-07-18 10:42:46.665718', 'updated_at': '2025-07-18 10:42:46.665718'}
+   sample: {'id': '2309', 'name': 'Self', 'key': 'self', 'uuid': '687a1a69a3d855ac8fa69685', 'reporting_client_id': '1436', 'created_at': '2025-07-18 10:42:46.510652', 'updated_at': '2025-07-18 10:42:46.510652'}
+
+===== reporting_project_tower_stages =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   uuid                                 character varying
+   reporting_project_tower_id           bigint
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '71414', 'name': 'On Beginning of External & Internal Painting', 'key': 'stage_9910451983202', 'uuid': '695ea90b2f31c68193a4a016', 'reporting_project_tower_id': '45525', 'reporting_client_id': '1436', 'created_at': '2026-01-07 18:44:22.795918', 'updated_at': '2026-01-07 18:44:22.795918'}
+   sample: {'id': '71413', 'name': 'On Beginning of Ground Floor Roof slab', 'key': 'stage_8000062388926', 'uuid': '695ea90b2f31c68193a4a014', 'reporting_project_tower_id': '45525', 'reporting_client_id': '1436', 'created_at': '2026-01-07 18:44:22.794391', 'updated_at': '2026-01-07 18:44:22.794391'}
+   sample: {'id': '71412', 'name': 'On intimation of Possession', 'key': 'stage_7757487693103', 'uuid': '695ea90b2f31c68193a4a013', 'reporting_project_tower_id': '45525', 'reporting_client_id': '1436', 'created_at': '2026-01-07 18:44:22.775243', 'updated_at': '2026-01-07 18:44:22.775243'}
+
+===== reporting_project_towers =====
+   id                                   bigint
+   uuid                                 character varying
+   name                                 character varying
+   reporting_project_id                 bigint
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '45525', 'uuid': '695ac2e1e114870efba59f29', 'name': 'Phase II', 'reporting_project_id': '70082', 'reporting_client_id': '1436', 'created_at': '2026-01-04 19:43:29.820000', 'updated_at': '2026-01-04 19:46:12.981009'}
+   sample: {'id': '45524', 'uuid': '695ac212e114870f1ea59b57', 'name': 'Phase I', 'reporting_project_id': '70082', 'reporting_client_id': '1436', 'created_at': '2026-01-04 19:40:02.708000', 'updated_at': '2026-01-04 19:43:50.448161'}
+   sample: {'id': '45523', 'uuid': '695a8ad90d18514167f902a1', 'name': 'dummy', 'reporting_project_id': '70082', 'reporting_client_id': '1436', 'created_at': '2026-01-04 15:44:25.643000', 'updated_at': '2026-01-04 19:43:32.501881'}
+
+===== reporting_project_unit_approval_statuses =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+
+===== reporting_project_unit_bands =====
+   id                                   bigint
+   name                                 character varying
+   key                                  character varying
+   reporting_client_id                  bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+   sample: {'id': '1133', 'name': 'Higher', 'key': 'higher', 'reporting_client_id': '1436', 'created_at': '2025-07-18 10:42:45.534275', 'updated_at': '2025-07-18 10:42:45.534275'}
+   sample: {'id': '1132', 'name': 'Middle', 'key': 'middle', 'reporting_client_id': '1436', 'created_at': '2025-07-18 10:42:45.336516', 'updated_at': '2025-07-18 10:42:45.336516'}
+   sample: {'id': '1131', 'name': 'Lower', 'key': 'lower', 'reporting_client_id': '1436', 'created_at': '2025-07-18 10:42:45.152859', 'updated_at': '2025-07-18 10:42:45.152859'}
+
+===== reporting_project_unit_custom_date_times =====
+   id                                   bigint
+   value                                timestamp without time zone
+   reporting_client_id                  bigint
+   reporting_project_unit_id            bigint
+   reporting_custom_field_id            bigint
+
+===== reporting_project_unit_custom_dates =====
+   id                                   bigint
+   value                                date
+   reporting_client_id                  bigint
+   reporting_project_unit_id            bigint
+   reporting_custom_field_id            bigint
+   created_at                           timestamp without time zone
+   updated_at                           timestamp without time zone
+
+===== reporting_leads columns matching fb/meta/lead_id/reference =====

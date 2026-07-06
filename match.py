@@ -43,7 +43,9 @@ def score(a, b):
 
 
 def run_matching():
-    pending = db.q("""SELECT id, project, name, created_at FROM leads
+    pending = db.q("""SELECT id, project, name,
+                             COALESCE(selldo_response_at, created_at) AS anchor
+                      FROM leads
                       WHERE wa_state='pending_match' AND phone IS NULL""")
     if not pending:
         return
@@ -52,8 +54,8 @@ def run_matching():
                         WHERE project=%s AND phone IS NOT NULL
                           AND created_time BETWEEN %s AND %s""",
                      (lead["project"],
-                      lead["created_at"] - timedelta(hours=TIME_WINDOW_H),
-                      lead["created_at"] + timedelta(hours=TIME_WINDOW_H)))
+                      lead["anchor"] - timedelta(hours=TIME_WINDOW_H),
+                      lead["anchor"] + timedelta(hours=TIME_WINDOW_H)))
         lt = norm_tokens(lead["name"])
         scored = sorted(((score(lt, norm_tokens(c["name"])), c) for c in cands),
                         key=lambda x: -x[0])

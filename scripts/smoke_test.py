@@ -142,6 +142,17 @@ assert not sent, "pause switch ignored"
 db.set_setting("global_pause", "false")
 print("PAUSE_OK")
 
+# --- late qualification: form 3 days ago, qualified now -> must still match ---
+db.x("""INSERT INTO leads (project, selldo_lead_id, name, selldo_status, selldo_response_at, wa_state)
+        VALUES ('ELEMENTS','sd7','Suresh Babuji S (#6540)','(Pre Sales) Interested',
+                now() - interval '3 days','pending_match')""")
+db.x("""INSERT INTO meta_leads (meta_lead_id, project, name, phone, created_time)
+        VALUES ('m7','ELEMENTS','Suresh Babuji','919444555666', now() - interval '3 days')""")
+match.run_matching()
+r = db.q("SELECT phone, wa_state FROM leads WHERE selldo_lead_id='sd7'", one=True)
+assert r["phone"]=='919444555666' and r["wa_state"]=='queued', r
+print("LATE_QUALIFY_MATCH_OK")
+
 # --- form-date preference: confirm-style M1, no M2, straight to date_selected ---
 db.x("""INSERT INTO leads (project, selldo_lead_id, name, selldo_status, wa_state)
         VALUES ('RON','sd6','Baptista (#200)','(Pre Sales) Interested','pending_match')""")

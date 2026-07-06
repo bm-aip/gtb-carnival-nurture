@@ -1,0 +1,88 @@
+### client 1436 | params {'project': 'Republic Of Nature', 'campaign': 'RON_Carnival'}
+
+--- 1. ALL lead stages (exact names matter) ---
+     22699  [pre_sales]  (Pre Sales) Customer No Show
+     22685  [pre_sales]  (Pre Sales) E Lost
+     22683  [pre_sales]  (Pre Sales) EOI
+     26989  [pre_sales]  (Pre Sales) Followup
+     22673  [pre_sales]  (Pre Sales) In Progress
+     22674  [pre_sales]  (Pre Sales) Interested
+     23498  [pre_sales]  (Pre Sales) Invalid
+     21834  [pre_sales]  (Pre Sales) New Enquiry
+     23367  [pre_sales]  (Pre Sales) New Upload
+     22672  [pre_sales]  (Pre Sales) Not Connected
+     21835  [pre_sales]  (Pre Sales) Not Qualified
+     21831  [pre_sales]  (Pre Sales) Opp Test
+     22680  [pre_sales]  (Pre Sales) Opportunity Lost
+     21832  [pre_sales]  (Pre Sales) Prospect
+     21839  [pre_sales]  (Pre Sales) Q Lost
+     22682  [pre_sales]  (Pre Sales) ReMeeting Done
+     22681  [pre_sales]  (Pre Sales) ReMeeting Scheduled
+     21833  [pre_sales]  (Pre Sales) Test Booked 
+     22686  [pre_sales]  (Pre Sales) Under Validation
+     22677  [pre_sales]  (Pre Sales) Visit Confirmed
+     22684  [pre_sales]  (Pre Sales) Visit Done
+     22679  [pre_sales]  (Pre Sales) Visit Expired
+     22678  [pre_sales]  (Pre Sales) Visit Lost
+     22676  [pre_sales]  (Pre Sales) Visit ReSchedule
+     22675  [pre_sales]  (Pre Sales) Visit Schedule
+     22671  [pre_sales]  (Pre Sales) test
+     21840  [sales]  Booked
+     26999  [sales]  E Lost
+     22700  [sales]  EOI
+     23978  [sales]  EOI Cancelled
+     21837  [sales]  First Visit Lost
+     26988  [sales]  Followup 
+     26993  [sales]  In Progress
+     26994  [sales]  Interested
+     27002  [sales]  Invalid
+     21829  [sales]  New Enquiry
+     27001  [sales]  New Upload
+     26992  [sales]  Not Connected
+     26990  [sales]  Not Qualified
+     21836  [sales]  Opportunity
+     21838  [sales]  Opportunity Lost
+     21830  [sales]  Prospect
+     23944  [sales]  Prospect Lost
+     26991  [sales]  Q Lost
+     22702  [sales]  Re Meeting Done
+     22701  [sales]  Re Meeting Scheduled
+     27000  [sales]  Under Validation
+     26997  [sales]  Visit Confirmed
+     26998  [sales]  Visit Lost
+     26996  [sales]  Visit ReSchedule
+     26995  [sales]  Visit Schedule
+
+--- 2. Campaigns matching target / carnival / meta ---
+     34224  active=True  RON_Carnival  (2026-07-04 11:18:05.493000)
+     31458  active=True  Realatte SunCrest Meta   (2026-03-26 12:36:46.021000)
+     27732  active=True  Meta_Soulstreet  (2025-10-16 11:41:15.442000)
+
+--- 3. Distinct sub_sources on responses since June 25 (top 15) ---
+     153  fb_new_June_Cp
+     110  Lambo CTI
+     105  FB_Rising_Palms_3
+      96  FB_Rising_Palms_1
+      78  Digital Inbound
+      62  Hoarding & Newspaper
+      55  Haffeez  (Propsteps Realty)
+      43  99acres_leads
+      38  Marutham Prop Consulting Pvt Ltd
+      38  acres_project_pusher
+      37  fb_New_RP_4
+      34  Rajesh Katariya  (Propleaf Realty Tech Pvt Ltd)
+      33  Rajkamal  (Propmart Technologies Ltd)
+      29  None
+      28  3bhk
+
+--- 4. utm_lead_id population on 'fb lead ad' responses since June 25 ---
+   fb-lead-ad responses: 650 | utm_lead_id set: 0 | utm_form_id set: 0
+   !! utm_lead_id is NEVER populated — phone resolution design must change.
+
+--- 5. THE ACTUAL QUERY ---
+   rows returned: 0
+   by status: {}
+   meta_lead_id present: 0 / 0
+
+--- 6. NULL-project responses on target campaign (leakage check) ---
+   responses with NULL project on target campaign: 0

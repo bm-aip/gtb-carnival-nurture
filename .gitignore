@@ -1,7 +1,3 @@
 .env
 __pycache__/
 *.pyc
-verify_*.txt
-discover2_*.txt
-meta_forms_*.txt
-*_schema.txt

@@ -6,7 +6,8 @@ SELECT DISTINCT ON (l.id)
     l.id::text          AS selldo_lead_id,
     cr.utm_lead_id      AS meta_lead_id,
     l.name              AS name,
-    st.name             AS status
+    st.name             AS status,
+    cr.created_at       AS response_at
 FROM reporting_leads l
 JOIN reporting_campaign_responses cr ON cr.reporting_lead_id = l.id
 JOIN reporting_campaigns c           ON c.id = cr.reporting_campaign_id

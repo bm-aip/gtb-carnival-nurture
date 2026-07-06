@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS leads (
     name TEXT,
     phone TEXT,
     selldo_status TEXT,
+    selldo_response_at TIMESTAMPTZ,
     wa_state TEXT NOT NULL DEFAULT 'queued',  -- queued|unmatched|m1_sent|m2_sent|date_selected|suppressed|done
     selected_date DATE,
     m1_sent_at TIMESTAMPTZ,
@@ -69,6 +70,7 @@ CREATE TABLE IF NOT EXISTS meta_leads (
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ALTER TABLE meta_leads ADD COLUMN IF NOT EXISTS preferred_date DATE;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS selldo_response_at TIMESTAMPTZ;
 CREATE INDEX IF NOT EXISTS idx_meta_leads_proj_time ON meta_leads (project, created_time);
 
 CREATE TABLE IF NOT EXISTS settings (
