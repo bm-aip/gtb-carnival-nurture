@@ -1,4 +1,5 @@
 import os
+import threading
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -138,12 +139,19 @@ def admin_pause():
 @app.route("/admin/poll-now", methods=["POST"])
 @auth
 def admin_poll_now():
-    selldo.poll_all()
-    meta.poll_meta_leads()
-    meta.poll_campaign_stats()
-    match.run_matching()
-    sequencer.tick()
-    return jsonify({"ok": True})
+    # tick() can now block for minutes (send jitter), so run the whole pass in a
+    # background thread and return immediately -- the dashboard button must not
+    # hang. _seq_lock serializes this against the scheduled tick so the two never
+    # send concurrently (which would double the per-tick batch budget).
+    def _worker():
+        with _seq_lock:
+            selldo.poll_all()
+            meta.poll_meta_leads()
+            meta.poll_campaign_stats()
+            match.run_matching()
+            sequencer.tick()
+    threading.Thread(target=_worker, name="poll-now", daemon=True).start()
+    return jsonify({"ok": True, "started": True})
 
 
 @app.route("/admin/test-send", methods=["POST"])
@@ -155,9 +163,19 @@ def admin_test_send():
     return jsonify({"ok": ok, "detail": detail})
 
 
+# Serializes the scheduled tick against a manual Poll-now pass so bulk sends
+# from the two paths never overlap and blow past the per-tick batch budget.
+_seq_lock = threading.Lock()
+
+
 def _tick_with_matching():
-    match.run_matching()
-    sequencer.tick()
+    if not _seq_lock.acquire(blocking=False):
+        return  # a Poll-now pass is already running; skip this scheduled tick
+    try:
+        match.run_matching()
+        sequencer.tick()
+    finally:
+        _seq_lock.release()
 
 
 # ---------- scheduler ----------

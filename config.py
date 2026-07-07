@@ -56,6 +56,13 @@ LEADS_SINCE = "2026-06-25"
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 GLOBAL_PAUSE_ENV = _b(os.environ.get("GLOBAL_PAUSE", "false"))
 
+# Anti-bulk-blast pacing (Balanced profile). Random pause between each bulk
+# outbound send; batch cap keeps a single tick bounded and spreads sends across
+# ticks. Acks (1:1 replies) are never jittered.
+SEND_JITTER_MIN_SEC = float(os.environ.get("SEND_JITTER_MIN_SEC", "5"))
+SEND_JITTER_MAX_SEC = float(os.environ.get("SEND_JITTER_MAX_SEC", "20"))
+SEND_BATCH_PER_TICK = int(os.environ.get("SEND_BATCH_PER_TICK", "10"))
+
 DASH_USER = os.environ.get("DASH_USER", "admin")
 DASH_PASS = os.environ.get("DASH_PASS", "change-me")
 

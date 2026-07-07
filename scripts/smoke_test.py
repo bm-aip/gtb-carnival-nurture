@@ -6,6 +6,9 @@ os.environ.update({
     "META_TOKEN_RON": "t1", "META_TOKEN_ELEMENTS": "t2",
     "WASENDER_API_KEY": "k", "DISABLE_SCHEDULER": "1",
     "EVENT_MAPS_LINK": "https://maps.app.goo.gl/MU1rPtQ6qLFC74jy8",
+    # Neutralize anti-blast pacing for deterministic, fast tests: no jitter
+    # sleeps, no per-tick batch truncation. Both are exercised separately.
+    "SEND_JITTER_MAX_SEC": "0", "SEND_BATCH_PER_TICK": "100000",
 })
 from datetime import datetime, timedelta, date
 from unittest.mock import patch
@@ -89,7 +92,9 @@ db.x("UPDATE leads SET m1_sent_at = now() - interval '25 hours' WHERE selldo_lea
 with patch.object(sequencer, "now_ist") as mock_now:
     mock_now.return_value = datetime(2026, 7, 7, 11, 0, tzinfo=sequencer.IST)
     sequencer.tick()
-assert any("checking in" in b for _, b in sent), sent
+# v9: M2 opener now varies (checking in / following up / reaching out) -- assert
+# the FIXED M2 marker line instead ("suits you?" is M2-only; M1 says "will you visit?")
+assert any("Which day suits you?" in b for _, b in sent), sent
 print("M2_OK")
 
 # --- M3 evening before selected date ---
