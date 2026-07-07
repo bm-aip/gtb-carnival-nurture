@@ -50,7 +50,18 @@ def wasender_webhook():
     if config.WASENDER_WEBHOOK_SECRET:
         if request.headers.get("X-Webhook-Secret") != config.WASENDER_WEBHOOK_SECRET:
             return "", 403
-    phone, text = wasender.parse_inbound(request.get_json(silent=True) or {})
+    payload = request.get_json(silent=True) or {}
+    # Dedup: Wasender delivers one message via several events -> claim the msg id
+    # once so we don't ack twice.
+    _m = payload.get("data", payload)
+    _m = _m.get("messages", _m)
+    if isinstance(_m, list):
+        _m = _m[0] if _m else {}
+    _mid = ((_m.get("key") or {}).get("id") if isinstance(_m, dict) else None) or \
+           (_m.get("id") if isinstance(_m, dict) else None)
+    if not db.mark_webhook_new(_mid):
+        return jsonify({"ok": True, "dup": True})
+    phone, text = wasender.parse_inbound(payload)
     if phone and text:
         sequencer.handle_inbound(phone, text)
     return jsonify({"ok": True})

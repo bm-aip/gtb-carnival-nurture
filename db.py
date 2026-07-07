@@ -79,6 +79,11 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS processed_webhooks (
+    msg_id TEXT PRIMARY KEY,
+    ts TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 
@@ -126,6 +131,17 @@ def get_setting(key, default=None):
 def set_setting(key, value):
     x("""INSERT INTO settings (key, value) VALUES (%s,%s)
          ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value""", (key, str(value)))
+
+
+def mark_webhook_new(msg_id):
+    """Return True if this Wasender msg_id is new (and claim it); False if it
+    was already processed. Wasender delivers the same message via multiple
+    events (messages.upsert + messages.received), so dedup on the message id to
+    avoid double-processing (double acks). No id -> can't dedup, process it."""
+    if not msg_id:
+        return True
+    return x("INSERT INTO processed_webhooks (msg_id) VALUES (%s) ON CONFLICT DO NOTHING",
+             (msg_id,)) == 1
 
 
 def log_msg(lead_id, direction, msg_type, body, ok=True, detail=None):
