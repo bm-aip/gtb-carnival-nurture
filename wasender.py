@@ -49,23 +49,36 @@ def rate_ok():
 
 def parse_inbound(payload):
     """Extract (phone, text) from Wasender webhook payload.
-    Handles both plain messages and poll vote updates; shapes vary by
-    Wasender version, so probe multiple paths."""
+    Handles plain messages and poll votes; shapes vary by Wasender version.
+
+    IMPORTANT: current Wasender uses LID addressing -- key.remoteJid is a LID
+    (e.g. '24172126318761@lid'), NOT the phone. The real number lives in
+    key.cleanedSenderPn / key.senderPn. Read those first; fall back to
+    remoteJid only when it is not a @lid. Text is in message.conversation or
+    the unified top-level 'messageBody' field."""
     try:
         data = payload.get("data", payload) or {}
         msgs = data.get("messages", data)
         if isinstance(msgs, list):
             msgs = msgs[0] if msgs else {}
-        key = msgs.get("key", {})
-        jid = key.get("remoteJid") or msgs.get("from") or data.get("from") or ""
-        phone = jid.split("@")[0] if "@" in jid else jid
+        key = msgs.get("key", {}) or {}
         if key.get("fromMe") or msgs.get("fromMe"):
             return None, None
 
-        m = msgs.get("message", msgs)
+        remote = key.get("remoteJid") or msgs.get("remoteJid") or ""
+        # phone: prefer real-number fields; use remoteJid only if it's a phone jid
+        jid = (key.get("cleanedSenderPn")
+               or key.get("senderPn")
+               or msgs.get("senderPn")
+               or (remote if "@lid" not in remote else "")
+               or msgs.get("from") or data.get("from") or remote or "")
+        phone = jid.split("@")[0] if "@" in jid else jid
+
+        m = msgs.get("message", {}) or {}
         text = (m.get("conversation")
                 or (m.get("extendedTextMessage") or {}).get("text")
                 or (m.get("pollUpdateMessage") or {}).get("vote")
+                or msgs.get("messageBody")          # Wasender unified text field
                 or msgs.get("text") or msgs.get("body"))
         if isinstance(text, dict):
             opts = text.get("selectedOptions") or []
