@@ -171,6 +171,17 @@ def _send(lead, msg_type, body, jitter=True):
         time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
     ok, detail = wasender.send_text(lead["phone"], body)
     db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail)
+    if not ok:
+        # Don't retry forever. A permanent failure (number not on WhatsApp) or
+        # too many attempts -> terminal 'invalid' + suppress so no message type
+        # re-picks it. Transient failures keep their queued state and retry.
+        attempts = (lead.get("send_attempts") or 0) + 1
+        permanent = bool(detail) and "does not exist" in detail.lower()
+        db.x("UPDATE leads SET send_attempts=%s, updated_at=now() WHERE id=%s",
+             (attempts, lead["id"]))
+        if permanent or attempts >= 3:
+            db.x("UPDATE leads SET wa_state='invalid', suppressed=TRUE, updated_at=now() WHERE id=%s",
+                 (lead["id"],))
     return ok
 
 

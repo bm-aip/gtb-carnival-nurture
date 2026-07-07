@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS meta_leads (
 );
 ALTER TABLE meta_leads ADD COLUMN IF NOT EXISTS preferred_date DATE;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS selldo_response_at TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_meta_leads_proj_time ON meta_leads (project, created_time);
 
 CREATE TABLE IF NOT EXISTS settings (
