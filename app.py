@@ -38,6 +38,15 @@ def dashboard():
 # ---------- webhook ----------
 @app.route("/webhook/wasender", methods=["POST"])
 def wasender_webhook():
+    # Diagnostic: stash the raw payload so we can see what Wasender actually
+    # delivers (and confirm it delivers at all). Non-fatal if it fails.
+    try:
+        raw = request.get_data(as_text=True) or ""
+        db.set_setting("last_webhook_raw", (sequencer.now_ist().isoformat() + " " + raw)[:2000])
+        n = int(db.get_setting("webhook_hits", "0") or "0") + 1
+        db.set_setting("webhook_hits", str(n))
+    except Exception:
+        pass
     if config.WASENDER_WEBHOOK_SECRET:
         if request.headers.get("X-Webhook-Secret") != config.WASENDER_WEBHOOK_SECRET:
             return "", 403
