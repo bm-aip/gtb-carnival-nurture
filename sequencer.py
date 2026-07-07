@@ -21,8 +21,15 @@ def _fmt(d: date):
 
 BRAND = {"RON": "Republic Of Nature", "ELEMENTS": "Elements Senior Living"}
 
-DATE_ASK = ("Which day will you visit? Reply 1 \u2013 Fri 10 July, "
-            "2 \u2013 Sat 11 July, 3 \u2013 Sun 12 July.")
+# Tappable poll (rendered by Wasender) + the reliable text fallback ("1/2/3").
+# Poll option text matches parser weekday tokens (Fri/Sat/Sun), so a tap round-
+# trips exactly like a typed "1/2/3".
+DAY_LINES = ("1\ufe0f\u20e3 Fri 10 July\n"
+             "2\ufe0f\u20e3 Sat 11 July\n"
+             "3\ufe0f\u20e3 Sun 12 July")
+REPLY_HINT = "_Just reply 1, 2 or 3._"
+DAY_POLL_Q = "Which day will you visit?"
+DAY_POLL_OPTS = ["Fri 10 July", "Sat 11 July", "Sun 12 July"]
 
 # ---------------------------------------------------------------------------
 # Copy variation (anti-bulk-blast). Only the "soft" wrapper sentences swap;
@@ -82,23 +89,23 @@ def m1_body(lead, combined=False):
         greet = _pick(lead, "ron_greet").format(name=name)
         thanks = _pick(lead, "ron_thanks")
         invite = _pick(lead, "ron_invite").format(event=ev)
-        intro = (f"{greet} {thanks} {invite} \u2014 10, 11 & 12 July at {venue}. "
-                 f"Carnival savings up to \u20b987L*, no registration fees, no pre-EMI. ")
+        intro = (f"{greet}\n\n{thanks}\n\n{invite}.\n"
+                 f"\U0001F389 Carnival savings up to \u20b987L* \u2014 no registration fees, no pre-EMI.\n"
+                 f"\U0001F4CD {venue}\n\U0001F5D3\ufe0f 10, 11 & 12 July")
     else:
         greet = _pick(lead, "el_greet").format(name=name)
         invite = _pick(lead, "el_invite").format(event=ev)
-        intro = (f"{greet} Thank you for your interest in Madhuram, Vandalur. "
-                 f"{invite} \u2014 10, 11 & 12 July at {venue}. ")
+        intro = (f"{greet}\n\nThank you for your interest in Madhuram, Vandalur.\n\n"
+                 f"{invite}.\n\U0001F4CD {venue}\n\U0001F5D3\ufe0f 10, 11 & 12 July")
     if lead.get("selected_date"):
         # Form already captured their preferred day: confirm, don't re-ask
         close = _pick(lead, "confirm_close")
-        body = intro + (f"You've chosen {_fmt(lead['selected_date'])} \u2014 {close} "
-                        f"If you'd like to change the day, "
-                        f"reply 1 (Fri 10), 2 (Sat 11), 3 (Sun 12).")
+        body = intro + (f"\n\nYou've chosen {_fmt(lead['selected_date'])} \u2014 {close}\n\n"
+                        f"If you'd like to change the day:\n{DAY_LINES}")
     else:
-        body = intro + DATE_ASK
+        body = intro + f"\n\nWhich day will you visit?\n{DAY_LINES}\n\n{REPLY_HINT}"
     if combined:
-        body += f"\n\nLocation: {config.EVENT_MAPS_LINK}\nOpen all day."
+        body += f"\n\n\U0001F4CD Location: {config.EVENT_MAPS_LINK}\nOpen all day."
     return body
 
 
@@ -108,8 +115,8 @@ def m2_body(lead):
     greet = _pick(lead, "greet").format(name=name)
     checkin = _pick(lead, "m2_checkin").format(brand=brand)
     want = _pick(lead, "m2_want").format(event=config.EVENT_NAME)
-    return (f"{greet} {checkin} \u2014 {want} at {config.EVENT_VENUE}. "
-            f"Which day suits you? Reply 1 (Fri 10), 2 (Sat 11), 3 (Sun 12).")
+    return (f"{greet}\n\n{checkin} \u2014 {want}.\n\U0001F4CD {config.EVENT_VENUE}\n\n"
+            f"Which day suits you?\n{DAY_LINES}\n\n{REPLY_HINT}")
 
 
 def m3_body(lead):
@@ -121,8 +128,9 @@ def m3_body(lead):
     remind = _pick(lead, "m3_remind").format(brand=brand)
     lookfwd = _pick(lead, "m3_lookfwd")
     close = _pick(lead, "close")
-    return (f"{greet} {remind}: {lookfwd} {when} at {config.EVENT_VENUE}. Open all day. "
-            f"Location: {config.EVENT_MAPS_LINK}. Show this message at the entrance as your entry pass. {close}")
+    return (f"{greet}\n\n{remind}: {lookfwd} {when} at {config.EVENT_VENUE}.\nOpen all day.\n\n"
+            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
+            f"Show this message at the entrance as your entry pass.\n{close}")
 
 
 def m3_generic_body(lead):
@@ -131,17 +139,19 @@ def m3_generic_body(lead):
     greet = _pick(lead, "greet").format(name=name)
     invite = _pick(lead, "gen_invite")
     close = _pick(lead, "gen_close")
-    return (f"{greet} the {config.EVENT_NAME} by {brand} runs this "
-            f"Friday to Sunday (10\u201312 July) at {config.EVENT_VENUE}, all day. "
-            f"Walk in on any day \u2014 {invite}. "
-            f"Location: {config.EVENT_MAPS_LINK}. Show this message at the entrance as your entry pass. {close}")
+    return (f"{greet}\n\nThe {config.EVENT_NAME} by {brand} runs this "
+            f"Friday to Sunday (10\u201312 July) at {config.EVENT_VENUE}, all day.\n\n"
+            f"Walk in on any day \u2014 {invite}.\n\n"
+            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
+            f"Show this message at the entrance as your entry pass.\n{close}")
 
 
 def ack_body(lead):
     opener = _pick(lead, "ack_open")
     close = _pick(lead, "close")
-    return (f"{opener} \u2014 see you on {_fmt(lead['selected_date'])} at {config.EVENT_VENUE}. "
-            f"Location: {config.EVENT_MAPS_LINK}. Show this message at the entrance as your entry pass. {close}")
+    return (f"{opener} \u2014 see you on {_fmt(lead['selected_date'])} at {config.EVENT_VENUE}.\n\n"
+            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
+            f"Show this message at the entrance as your entry pass.\n{close}")
 
 
 def paused():
@@ -161,6 +171,24 @@ def _send(lead, msg_type, body, jitter=True):
         time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
     ok, detail = wasender.send_text(lead["phone"], body)
     db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail)
+    return ok
+
+
+def _send_poll(lead, msg_type, jitter=True):
+    """Send the day-selection poll (tappable options) after a date-ask text.
+    Best-effort: the text already carries the reliable '1/2/3' path, so a poll
+    failure is non-fatal. Same pause/rate/jitter guards as _send."""
+    if paused():
+        return False
+    if not wasender.rate_ok():
+        db.set_setting("rate_capped_at", now_ist().isoformat())
+        return False
+    if jitter and config.SEND_JITTER_MAX_SEC > 0:
+        lo = min(config.SEND_JITTER_MIN_SEC, config.SEND_JITTER_MAX_SEC)
+        time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
+    ok, detail = wasender.send_poll(lead["phone"], DAY_POLL_Q, DAY_POLL_OPTS)
+    db.log_msg(lead["id"], "out", msg_type,
+               f"[poll] {DAY_POLL_Q} :: {', '.join(DAY_POLL_OPTS)}", ok=ok, detail=detail)
     return ok
 
 
@@ -188,6 +216,8 @@ def tick():
             new_state = "date_selected" if lead.get("selected_date") else "m1_sent"
             db.x("UPDATE leads SET wa_state=%s, m1_sent_at=now(), updated_at=now() WHERE id=%s",
                  (new_state, lead["id"]))
+            if not lead.get("selected_date"):   # date-ask -> offer tappable poll
+                _send_poll(lead, "m1_poll")
 
     # ---- M2: 24h after M1, no reply, no date ----
     for lead in db.q("""SELECT * FROM leads WHERE wa_state='m1_sent' AND NOT suppressed
@@ -202,6 +232,7 @@ def tick():
             budget -= 1
             db.x("UPDATE leads SET wa_state='m2_sent', m2_sent_at=now(), updated_at=now() WHERE id=%s",
                  (lead["id"],))
+            _send_poll(lead, "m2_poll")
 
     # ---- M3 rules ----
     # (a) evening before selected date, from 18:00 IST

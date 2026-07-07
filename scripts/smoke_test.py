@@ -20,6 +20,9 @@ def fake_send(phone, body):
 
 import wasender
 wasender.send_text = fake_send
+# Poll is a secondary tappable option after the date-ask text; mock it so it
+# makes no real HTTP call and doesn't count toward `sent` (which tracks text).
+wasender.send_poll = lambda phone, q, opts: (True, "poll")
 
 import app as appmod
 import db, sequencer, parser
@@ -31,7 +34,9 @@ AUTH = {"Authorization": "Basic " + base64.b64encode(b"admin:change-me").decode(
 d10, d11, d12 = date(2026, 7, 10), date(2026, 7, 11), date(2026, 7, 12)
 cases = {"1": d10, "2": d11, "3": d12, " 2 ": d11, "10": d10, "11th": d11,
          "on 12 july": d12, "Friday 10 July": d10, "saturday": d11,
-         "I will come on the 12th": d12, "ok": None, "yes": None, "5": None}
+         "I will come on the 12th": d12, "ok": None, "yes": None, "5": None,
+         # poll option texts (a tap returns the option name -> must parse)
+         "Fri 10 July": d10, "Sat 11 July": d11, "Sun 12 July": d12}
 for t, want in cases.items():
     got = parser.parse_date_reply(t)
     assert got == want, f"parser({t!r}) = {got}, want {want}"
