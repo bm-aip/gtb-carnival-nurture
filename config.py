@@ -46,9 +46,12 @@ WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
 # Template names as approved in Wati. Defaults match the copy handed to the
 # owner; override per-env if the approved names differ -- no code change needed.
 WATI_TEMPLATES = {
-    "m1_ron":      os.environ.get("WATI_TPL_M1_RON", "gtb_m1_ron"),
-    "m1_elements": os.environ.get("WATI_TPL_M1_ELEMENTS", "gtb_m1_elements"),
-    "m2":          os.environ.get("WATI_TPL_M2", "gtb_m2_followup"),
+    # Defaults = the correctly-variable-tagged templates owner confirmed in Wati
+    # (the *_final / *_1 versions). Override via env only if a different template
+    # gets approved instead.
+    "m1_ron":      os.environ.get("WATI_TPL_M1_RON", "gtb_m1_ron_final"),
+    "m1_elements": os.environ.get("WATI_TPL_M1_ELEMENTS", "gtb_m1_elements_1"),
+    "m2":          os.environ.get("WATI_TPL_M2", "gtb_m2_followup_final"),
     "m3":          os.environ.get("WATI_TPL_M3", "gtb_m3_reminder"),
     "m3_generic":  os.environ.get("WATI_TPL_M3_GENERIC", "gtb_m3_generic"),
     "ack":         os.environ.get("WATI_TPL_ACK", "gtb_ack"),
