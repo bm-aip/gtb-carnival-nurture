@@ -9,6 +9,7 @@ import selldo
 import meta
 import sequencer
 import wasender
+import wati
 import match
 
 app = Flask(__name__)
@@ -62,6 +63,34 @@ def wasender_webhook():
     if not db.mark_webhook_new(_mid):
         return jsonify({"ok": True, "dup": True})
     phone, text = wasender.parse_inbound(payload)
+    if phone and text:
+        sequencer.handle_inbound(phone, text)
+    return jsonify({"ok": True})
+
+
+@app.route("/webhook/wati", methods=["POST"])
+def wati_webhook():
+    # Same diagnostic stash + dedup as the wasender route so we can see exactly
+    # what Wati delivers and never process one message twice.
+    try:
+        raw = request.get_data(as_text=True) or ""
+        db.set_setting("last_wati_webhook_raw",
+                       (sequencer.now_ist().isoformat() + " " + raw)[:2000])
+        n = int(db.get_setting("wati_webhook_hits", "0") or "0") + 1
+        db.set_setting("wati_webhook_hits", str(n))
+    except Exception:
+        pass
+    if config.WATI_WEBHOOK_SECRET:
+        if request.headers.get("X-Webhook-Secret") != config.WATI_WEBHOOK_SECRET:
+            return "", 403
+    payload = request.get_json(silent=True) or {}
+    # Dedup on Wati's message id so retried deliveries ack once.
+    _d = payload.get("data", payload)
+    _mid = (_d.get("id") or _d.get("whatsappMessageId")
+            or _d.get("conversationId")) if isinstance(_d, dict) else None
+    if not db.mark_webhook_new(_mid):
+        return jsonify({"ok": True, "dup": True})
+    phone, text = wati.parse_inbound(payload)
     if phone and text:
         sequencer.handle_inbound(phone, text)
     return jsonify({"ok": True})
@@ -172,6 +201,14 @@ def admin_poll_now():
             sequencer.tick()
     threading.Thread(target=_worker, name="poll-now", daemon=True).start()
     return jsonify({"ok": True, "started": True})
+
+
+@app.route("/admin/wati-check")
+@auth
+def admin_wati_check():
+    # Connectivity probe: confirms WATI_BASE + WATI_TOKEN reach Wati and lists
+    # the templates Wati has for this number. No message sent.
+    return jsonify(wati.check_connection())
 
 
 @app.route("/admin/test-send", methods=["POST"])

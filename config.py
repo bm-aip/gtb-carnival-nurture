@@ -24,10 +24,35 @@ META_TOKENS = {
 }
 GRAPH = "https://graph.facebook.com/v19.0"
 
-WASENDER_API_KEY = os.environ["WASENDER_API_KEY"]
+WASENDER_API_KEY = os.environ.get("WASENDER_API_KEY", "")
 WASENDER_SESSION_ID = os.environ.get("WASENDER_SESSION_ID", "")
 WASENDER_BASE = "https://wasenderapi.com/api"
 WASENDER_WEBHOOK_SECRET = os.environ.get("WASENDER_WEBHOOK_SECRET", "")
+
+# --- WhatsApp provider switch ---
+# Which engine the sequencer sends through: "wasender" (legacy, default) or
+# "wati" (official). Deploy stays on wasender until this is flipped to wati in
+# the Railway env -- lets the new code ship dark and roll back in one flip.
+WHATSAPP_PROVIDER = os.environ.get("WHATSAPP_PROVIDER", "wasender").lower()
+
+# --- Wati (official WhatsApp Cloud API) ---
+# WATI_BASE example: https://live-server-12345.wati.io   (no trailing slash)
+WATI_BASE = os.environ.get("WATI_BASE", "").rstrip("/")
+# Store token WITHOUT the "Bearer " prefix; wati.py adds exactly one. Strip it
+# here so a pasted "Bearer xxx" doesn't become "Bearer Bearer xxx".
+WATI_TOKEN = os.environ.get("WATI_TOKEN", "").replace("Bearer ", "").strip()
+WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
+
+# Template names as approved in Wati. Defaults match the copy handed to the
+# owner; override per-env if the approved names differ -- no code change needed.
+WATI_TEMPLATES = {
+    "m1_ron":      os.environ.get("WATI_TPL_M1_RON", "gtb_m1_ron"),
+    "m1_elements": os.environ.get("WATI_TPL_M1_ELEMENTS", "gtb_m1_elements"),
+    "m2":          os.environ.get("WATI_TPL_M2", "gtb_m2_followup"),
+    "m3":          os.environ.get("WATI_TPL_M3", "gtb_m3_reminder"),
+    "m3_generic":  os.environ.get("WATI_TPL_M3_GENERIC", "gtb_m3_generic"),
+    "ack":         os.environ.get("WATI_TPL_ACK", "gtb_ack"),
+}
 
 EVENT_NAME = os.environ.get("EVENT_NAME", "GTB Carnival")
 EVENT_VENUE = os.environ.get("EVENT_VENUE", "GTB Lounge, EA Mall, Chennai")
