@@ -102,18 +102,29 @@ def check_connection():
             f"{config.WATI_BASE}/api/v1/getMessageTemplates",
             headers=_auth_headers(), params={"pageSize": 100}, timeout=30)
         ok = r.status_code == 200
-        names = []
+        templates = []
         try:
             j = r.json()
             items = j.get("messageTemplates") or j.get("data") or []
-            names = [t.get("elementName") or t.get("name")
-                     for t in items if isinstance(t, dict)]
+            for t in items:
+                if not isinstance(t, dict):
+                    continue
+                name = t.get("elementName") or t.get("name")
+                if not name:
+                    continue
+                nvars = len(t.get("customParams") or [])
+                templates.append({"name": name,
+                                  "status": t.get("status"),
+                                  "category": t.get("category"),
+                                  "vars": nvars})
         except Exception:
             pass
+        # Approved-only shortlist for quick scanning
+        approved = [t["name"] for t in templates if str(t.get("status")).upper() == "APPROVED"]
         return {"ok": ok, "status": r.status_code,
                 "base_set": True, "token_set": True,
-                "templates": [n for n in names if n],
-                "detail": r.text[:300]}
+                "approved": approved,
+                "templates": templates}
     except Exception as e:
         return {"ok": False, "base_set": True, "token_set": True,
                 "detail": str(e)}
