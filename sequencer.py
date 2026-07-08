@@ -5,7 +5,7 @@ import time
 from datetime import datetime, date, timedelta, timezone
 import config
 import db
-import wasender
+import wati
 import parser as reply_parser
 
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -158,10 +158,36 @@ def paused():
     return (db.get_setting("global_pause", "false") == "true") or config.GLOBAL_PAUSE_ENV
 
 
+def _template_for(lead, msg_type):
+    """Map a sequencer message type to (template_name, params) for Wati.
+
+    Returns None for types that go as free session text (acks -- always inside
+    the 24h window opened by the customer's own reply, so no template needed).
+    Proactive cold sends (m1/m2/m3/m3_generic) MUST be templates -- WhatsApp
+    forbids cold free text. Param order matches the approved template's
+    {{1}},{{2}},{{3}} slots; change a template's variables -> update here."""
+    name = (lead.get("name") or "").split(" ")[0] or "there"
+    proj = lead["project"]
+    brand = BRAND[proj]
+    T = config.WATI_TEMPLATES
+    if msg_type == "m1":
+        key = T["m1_ron"] if proj == "RON" else T["m1_elements"]
+        return key, [name]                          # {{1}} name
+    if msg_type == "m2":
+        return T["m2"], [name, brand]               # {{1}} name, {{2}} brand
+    if msg_type == "m3":
+        d = lead["selected_date"]
+        when = "today" if d == now_ist().date() else f"tomorrow, {_fmt(d)}"
+        return T["m3"], [name, brand, when]         # {{1}} name {{2}} brand {{3}} when
+    if msg_type == "m3_generic":
+        return T["m3_generic"], [name, brand]       # {{1}} name, {{2}} brand
+    return None                                     # ack -> session text
+
+
 def _send(lead, msg_type, body, jitter=True):
     if paused():
         return False
-    if not wasender.rate_ok():
+    if not wati.rate_ok():
         db.set_setting("rate_capped_at", now_ist().isoformat())
         return False
     # Human-like pause before bulk outbound so back-to-back sends don't read as
@@ -169,38 +195,45 @@ def _send(lead, msg_type, body, jitter=True):
     if jitter and config.SEND_JITTER_MAX_SEC > 0:
         lo = min(config.SEND_JITTER_MIN_SEC, config.SEND_JITTER_MAX_SEC)
         time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
-    ok, detail = wasender.send_text(lead["phone"], body)
+    # Proactive stages (m1/m2/m3/m3_generic) send as approved templates; acks
+    # (no template mapping) go as free session text inside the reply window.
+    # `body` is still logged so the dashboard shows readable copy per send.
+    tpl = _template_for(lead, msg_type)
+    if tpl:
+        template_name, params = tpl
+        ok, detail = wati.send_template(lead["phone"], template_name, params)
+    else:
+        ok, detail = wati.send_text(lead["phone"], body)
     db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail)
     if not ok:
-        # Don't retry forever. A permanent failure (number not on WhatsApp) or
-        # too many attempts -> terminal 'invalid' + suppress so no message type
-        # re-picks it. Transient failures keep their queued state and retry.
+        # Suppress ONLY on a clearly per-lead permanent error (number not on
+        # WhatsApp). We deliberately do NOT suppress on the attempt count: while
+        # templates are still PENDING every send fails for a reason that has
+        # nothing to do with the lead, and a 3-strike rule would wrongly kill
+        # off good leads. Such failures just keep their state and retry once the
+        # template is approved. `detail` is matched loosely across Wati/WhatsApp
+        # phrasings for an invalid/nonexistent recipient.
         attempts = (lead.get("send_attempts") or 0) + 1
-        permanent = bool(detail) and "does not exist" in detail.lower()
+        d = (detail or "").lower()
+        permanent = any(s in d for s in
+                        ("does not exist", "not a valid whatsapp",
+                         "invalid whatsapp number", "not a whatsapp"))
         db.x("UPDATE leads SET send_attempts=%s, updated_at=now() WHERE id=%s",
              (attempts, lead["id"]))
-        if permanent or attempts >= 3:
+        if permanent:
             db.x("UPDATE leads SET wa_state='invalid', suppressed=TRUE, updated_at=now() WHERE id=%s",
                  (lead["id"],))
     return ok
 
 
 def _send_poll(lead, msg_type, jitter=True):
-    """Send the day-selection poll (tappable options) after a date-ask text.
-    Best-effort: the text already carries the reliable '1/2/3' path, so a poll
-    failure is non-fatal. Same pause/rate/jitter guards as _send."""
-    if paused():
-        return False
-    if not wasender.rate_ok():
-        db.set_setting("rate_capped_at", now_ist().isoformat())
-        return False
-    if jitter and config.SEND_JITTER_MAX_SEC > 0:
-        lo = min(config.SEND_JITTER_MIN_SEC, config.SEND_JITTER_MAX_SEC)
-        time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
-    ok, detail = wasender.send_poll(lead["phone"], DAY_POLL_Q, DAY_POLL_OPTS)
-    db.log_msg(lead["id"], "out", msg_type,
-               f"[poll] {DAY_POLL_Q} :: {', '.join(DAY_POLL_OPTS)}", ok=ok, detail=detail)
-    return ok
+    """No-op under Wati. On official WhatsApp the day-picker is quick-reply
+    buttons baked INTO the approved M1/M2 templates, so they render with the
+    template send in _send -- there is no separate poll message. Kept as a stub
+    so tick()'s call sites stay unchanged; a tapped button returns through the
+    webhook as its label text ('Fri 10 July') and the reply parser handles it
+    exactly like a typed '1/2/3'."""
+    return True
 
 
 def tick():

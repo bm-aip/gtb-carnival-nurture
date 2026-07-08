@@ -111,7 +111,7 @@ def api_summary():
                "meta_leads_error_RON", "meta_leads_error_ELEMENTS", "rate_capped_at"]}
     return jsonify({"day_counts": counts, "funnel": funnel, "errors": errors,
                     "paused": sequencer.paused(),
-                    "sends_last_hour": wasender.sends_last_hour(),
+                    "sends_last_hour": wati.sends_last_hour(),
                     "event_dates": [d.isoformat() for d in config.EVENT_DATES]})
 
 
@@ -216,7 +216,10 @@ def admin_wati_check():
 def admin_test_send():
     j = request.get_json() or {}
     phone = meta.normalize_phone(j.get("phone", ""))
-    ok, detail = wasender.send_text(phone, j.get("body", "Test from GTB Carnival system."))
+    # Free-text test send: only DELIVERS if `phone` messaged this number within
+    # the last 24h (WhatsApp session rule). Outside that window WhatsApp rejects
+    # it, but the API response in `detail` still confirms token/URL wiring.
+    ok, detail = wati.send_text(phone, j.get("body", "Test from GTB Carnival system."))
     return jsonify({"ok": ok, "detail": detail})
 
 
