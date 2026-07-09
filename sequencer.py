@@ -158,6 +158,17 @@ def paused():
     return (db.get_setting("global_pause", "false") == "true") or config.GLOBAL_PAUSE_ENV
 
 
+# Quiet hours: no PROACTIVE cold sends (M1/M2/M3) after 19:30 IST -- late-night
+# marketing annoys recipients and drags sender quality. Acks (1:1 replies to a
+# lead's own tap) are exempt: they run through handle_inbound, not tick(), so a
+# lead who picks a day at 9pm still gets their pass confirmation immediately.
+QUIET_AFTER = (19, 30)  # IST hour, minute
+
+
+def _quiet_now(n):
+    return (n.hour, n.minute) >= QUIET_AFTER
+
+
 def _template_for(lead, msg_type):
     """Map a sequencer message type to (template_name, params) for Wati.
 
@@ -241,6 +252,11 @@ def tick():
     today = n.date()
     last_event_day = config.EVENT_DATES[-1]
     day_before_first = config.EVENT_DATES[0] - timedelta(days=1)   # July 9
+
+    # Quiet hours: after 19:30 IST do no proactive sends this tick. Acks are
+    # unaffected (they fire from the inbound webhook, not here).
+    if _quiet_now(n):
+        return
 
     # Bounded send budget per tick: keeps one tick short (jitter can make each
     # send take seconds) and spreads a backlog across ticks -> more human, and
