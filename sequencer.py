@@ -158,15 +158,28 @@ def paused():
     return (db.get_setting("global_pause", "false") == "true") or config.GLOBAL_PAUSE_ENV
 
 
-# Quiet hours: no PROACTIVE cold sends (M1/M2/M3) after 19:30 IST -- late-night
-# marketing annoys recipients and drags sender quality. Acks (1:1 replies to a
-# lead's own tap) are exempt: they run through handle_inbound, not tick(), so a
-# lead who picks a day at 9pm still gets their pass confirmation immediately.
-QUIET_AFTER = (19, 30)  # IST hour, minute
+# Quiet hours: 19:30 -> 08:00 IST. During this window we hold BACKLOG proactive
+# sends (old leads sitting in the queue, plus all M2/M3 follow-ups) so nobody
+# gets a cold marketing blast late at night. Two exemptions:
+#   - Fresh M1: a lead that just arrived via the Meta poll (created within the
+#     last hour) still gets its first message immediately -- they acted seconds
+#     ago, so an instant reply reads as a system response, not a night blast.
+#   - Acks: 1:1 replies to a lead's own tap, sent from handle_inbound (not here).
+QUIET_START = (19, 30)   # IST hour, minute
+QUIET_END = (8, 0)
+FRESH_SECONDS = 3600     # a lead created within this window counts as "fresh"
 
 
 def _quiet_now(n):
-    return (n.hour, n.minute) >= QUIET_AFTER
+    t = (n.hour, n.minute)
+    return t >= QUIET_START or t < QUIET_END
+
+
+def _is_fresh(lead, n):
+    ca = lead.get("created_at")
+    if not ca:
+        return False
+    return (n - ca.astimezone(IST)).total_seconds() <= FRESH_SECONDS
 
 
 def _template_for(lead, msg_type):
@@ -253,10 +266,9 @@ def tick():
     last_event_day = config.EVENT_DATES[-1]
     day_before_first = config.EVENT_DATES[0] - timedelta(days=1)   # July 9
 
-    # Quiet hours: after 19:30 IST do no proactive sends this tick. Acks are
-    # unaffected (they fire from the inbound webhook, not here).
-    if _quiet_now(n):
-        return
+    # Quiet hours (19:30-08:00 IST): hold backlog + all M2/M3, but let fresh M1
+    # (just-arrived leads) through. Acks fire from the webhook, unaffected.
+    quiet = _quiet_now(n)
 
     # Bounded send budget per tick: keeps one tick short (jitter can make each
     # send take seconds) and spreads a backlog across ticks -> more human, and
@@ -269,6 +281,10 @@ def tick():
         if budget <= 0:
             return
         if today > last_event_day:
+            continue
+        # In quiet hours only fresh (just-arrived) leads send; backlog waits for
+        # 08:00. Outside quiet hours everyone sends.
+        if quiet and not _is_fresh(lead, n):
             continue
         combined = (today >= day_before_first)  # late qualifier: fold venue into M1
         if _send(lead, "m1", m1_body(lead, combined=combined)):
@@ -286,6 +302,8 @@ def tick():
                         AND m2_sent_at IS NULL"""):
         if budget <= 0:
             return
+        if quiet:
+            break   # M2 is a backlog follow-up -- never sent during quiet hours
         if today > last_event_day:
             continue
         if _send(lead, "m2", m2_body(lead)):
@@ -302,6 +320,8 @@ def tick():
                         AND NOT suppressed AND m3_sent_at IS NULL"""):
         if budget <= 0:
             return
+        if quiet:
+            break   # M3 reminder is a backlog send -- held during quiet hours
         d = lead["selected_date"]
         m1_today = bool(lead["m1_sent_at"] and lead["m1_sent_at"].astimezone(IST).date() == today)
         send_now = ((d - timedelta(days=1) == today and n.hour >= 18) or
