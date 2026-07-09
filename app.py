@@ -1,7 +1,9 @@
 import os
+import datetime as _dt
 import threading
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
+from flask.json.provider import DefaultJSONProvider
 from apscheduler.schedulers.background import BackgroundScheduler
 import config
 import db
@@ -12,7 +14,22 @@ import wasender
 import wati
 import match
 
+
+class _ISOJSONProvider(DefaultJSONProvider):
+    """Serialize date/datetime as ISO 8601 (2026-07-10) instead of Flask's
+    default HTTP-date ("Fri, 10 Jul 2026 00:00:00 GMT"). The dashboard's
+    new Date() + day-card matching both expect ISO, so without this a lead's
+    selected_date renders as "Invalid Date" and the per-day counters never
+    match. Fixes every JSON endpoint at once; no data or send-path change."""
+    @staticmethod
+    def default(o):
+        if isinstance(o, (_dt.date, _dt.datetime)):
+            return o.isoformat()
+        return DefaultJSONProvider.default(o)
+
+
 app = Flask(__name__)
+app.json = _ISOJSONProvider(app)
 
 
 # ---------- auth ----------
