@@ -295,17 +295,9 @@ def tick():
             db.x("UPDATE leads SET m3_sent_at=now(), updated_at=now() WHERE id=%s",
                  (lead["id"],))
 
-    # ---- Generic M3 on July 9 evening to non-responders ----
-    if today == day_before_first and n.hour >= 18:
-        for lead in db.q("""SELECT * FROM leads WHERE selected_date IS NULL
-                            AND wa_state IN ('m1_sent','m2_sent') AND NOT suppressed
-                            AND m3_sent_at IS NULL"""):
-            if budget <= 0:
-                return
-            if _send(lead, "m3_generic", m3_generic_body(lead)):
-                budget -= 1
-                db.x("UPDATE leads SET m3_sent_at=now(), updated_at=now() WHERE id=%s",
-                     (lead["id"],))
+    # No generic M3 to no-day leads: owner chose not to remind non-responders the
+    # night before (no gtb_m3_generic template approved). Leads who never pick a
+    # day simply get no further message.
 
 
 def handle_inbound(phone, text):
