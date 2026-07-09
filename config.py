@@ -82,6 +82,11 @@ META_PAGE_IDS = {
 LEADS_SINCE = "2026-06-25"
 
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
+# Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
+# messaging tier. New number = 250/day; raise this as Meta bumps the tier
+# (250 -> 1K -> 10K). Acks don't count -- they're replies inside an open
+# conversation, not new business-initiated conversations.
+DAILY_SEND_CAP = int(os.environ.get("DAILY_SEND_CAP", "250"))
 GLOBAL_PAUSE_ENV = _b(os.environ.get("GLOBAL_PAUSE", "false"))
 
 # Anti-bulk-blast pacing (Balanced profile). Random pause between each bulk

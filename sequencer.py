@@ -182,6 +182,18 @@ def _is_fresh(lead, n):
     return (n - ca.astimezone(IST)).total_seconds() <= FRESH_SECONDS
 
 
+def _daily_sends():
+    """Count PROACTIVE outbound sends (m1/m2/m3) in the last rolling 24h. This
+    is what Meta's messaging tier limits -- each is a business-initiated
+    conversation. Acks are excluded: they reply inside a conversation the lead
+    already opened, so they don't consume the tier. Only ok=TRUE sends count, so
+    failed attempts never eat the daily allowance."""
+    r = db.q("""SELECT count(*) AS n FROM message_log
+                WHERE direction='out' AND ok AND msg_type IN ('m1','m2','m3')
+                AND ts > now() - interval '24 hours'""", one=True)
+    return r["n"] if r else 0
+
+
 def _template_for(lead, msg_type):
     """Map a sequencer message type to (template_name, params) for Wati.
 
@@ -273,7 +285,15 @@ def tick():
     # Bounded send budget per tick: keeps one tick short (jitter can make each
     # send take seconds) and spreads a backlog across ticks -> more human, and
     # /admin/poll-now returns without hanging. Remaining leads picked next tick.
-    budget = config.SEND_BATCH_PER_TICK
+    # Also clamp to the rolling-24h tier allowance (DAILY_SEND_CAP - already
+    # sent) so a big backlog never overruns the WhatsApp number's daily limit:
+    # once the day's 250 are gone, budget is 0 and everything holds until the
+    # 24h window rolls forward. Acks are excluded from the count, so replies
+    # still flow after the cap is hit.
+    day_left = config.DAILY_SEND_CAP - _daily_sends()
+    if day_left <= 0:
+        db.set_setting("daily_capped_at", now_ist().isoformat())
+    budget = max(0, min(config.SEND_BATCH_PER_TICK, day_left))
 
     # ---- M1 for queued leads ----
     for lead in db.q("""SELECT * FROM leads WHERE wa_state='queued'
