@@ -220,6 +220,21 @@ def admin_poll_now():
     return jsonify({"ok": True, "started": True})
 
 
+@app.route("/admin/webhook-status")
+@auth
+def admin_webhook_status():
+    # Read-only: did Wati's inbound webhook actually reach us? Shows the hit
+    # counter + the last raw payload stashed by /webhook/wati. Confirms the
+    # round-trip (e.g. a test reply/tap) even when the sender is NOT a known
+    # lead -- handle_inbound only acks matching leads, but every POST still
+    # bumps these counters. Sends nothing.
+    return jsonify({
+        "wati_webhook_hits": db.get_setting("wati_webhook_hits", "0"),
+        "last_wati_webhook_raw": db.get_setting("last_wati_webhook_raw", ""),
+        "wasender_webhook_hits": db.get_setting("webhook_hits", "0"),
+    })
+
+
 @app.route("/admin/wati-check")
 @auth
 def admin_wati_check():
