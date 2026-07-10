@@ -179,3 +179,25 @@ def parse_inbound(payload):
         return (phone or None), (text or None)
     except Exception:
         return None, None
+
+
+def parse_sender_name(payload):
+    """WhatsApp profile name of the sender, when Wati supplies one.
+
+    Only used for walk-ins: a lead created from an inbound message has no
+    Sell.do or Meta-form record to take a name from. Never trusted for anything
+    but display -- the sender controls this string, so it goes into `name`
+    (which only ever renders inside a message body), never into a lookup key.
+    """
+    try:
+        m = payload.get("data") or payload
+        if not isinstance(m, dict):
+            return None
+        n = (m.get("senderName") or m.get("name") or "").strip()
+        # Wati falls back to the raw phone number when no profile name is set;
+        # "Hi 919003044700!" reads worse than "Hi there!".
+        if not n or n.isdigit():
+            return None
+        return n[:80]
+    except Exception:
+        return None

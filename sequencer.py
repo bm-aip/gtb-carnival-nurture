@@ -182,6 +182,13 @@ def _is_fresh(lead, n):
     return (n - ca.astimezone(IST)).total_seconds() <= FRESH_SECONDS
 
 
+def today_in_event_window():
+    """Is the carnival still on? Guards the walk-in welcome: someone who messages
+    the number the week after should not be invited to an event that has ended.
+    tick() applies the same rule to M1/M2 via `today > last_event_day`."""
+    return now_ist().date() <= config.EVENT_DATES[-1]
+
+
 def _daily_sends():
     """Count PROACTIVE outbound sends (m1/m2/m3) in the last rolling 24h. This
     is what Meta's messaging tier limits -- each is a business-initiated
@@ -366,17 +373,117 @@ def tick():
     # day simply get no further message.
 
 
-def handle_inbound(phone, text):
-    """Called by webhook. Matches lead by phone, parses date, acks."""
+def _detect_project(text):
+    """Which brand did this walk-in come for?
+
+    The landing-page button opens WhatsApp with a pre-filled sentence naming the
+    brand. That sentence IS the routing signal -- there is nothing else to go on,
+    since a walk-in has no Sell.do row and no Meta form. The visitor can delete
+    it before sending, so returning None is an expected outcome, not an error:
+    the caller then hands them to a human rather than guessing a brand and
+    addressing them by the wrong project's name.
+    """
+    t = (text or "").lower()
+    if "republic of nature" in t or "republic" in t:
+        return "RON"
+    if "elements senior living" in t or "elements" in t:
+        return "ELEMENTS"
+    return None
+
+
+def welcome_body(lead):
+    """First reply to someone who messaged US first.
+
+    Sent as free session text, never a template: their message opened a 24h
+    WhatsApp service window, so this costs no template, consumes none of the
+    250/day business-initiated tier, and is exempt from the MARKETING gate that
+    Meta uses to block our cold sends. Mirrors m1_body's facts (dates, venue,
+    reply instruction) so a walk-in and a Meta lead see the same event.
+    """
+    name = (lead.get("name") or "").split(" ")[0] or "there"
+    brand = BRAND[lead["project"]]
+    loc = f"\n\U0001F4CD {config.EVENT_MAPS_LINK}" if config.EVENT_MAPS_LINK else ""
+    return (f"Hi {name}! Thanks for reaching out about the {config.EVENT_NAME} "
+            f"from {brand}.\n\n"
+            f"We're at {config.EVENT_VENUE} — {config.EVENT_TIMING}.{loc}\n\n"
+            f"{DAY_POLL_Q}\n{_remaining_day_lines()}\n\n{REPLY_HINT}")
+
+
+# Static DAY_LINES always lists all three days. A walk-in messaging on Saturday
+# must not be offered Friday. The ORIGINAL option number is kept (Saturday stays
+# "2") because parse_date_reply maps a bare 1/2/3 to EVENT_DATES by index --
+# renumbering the visible list would silently send Saturday's pickers to Friday.
+_DIGITS = ("1️⃣", "2️⃣", "3️⃣")
+
+
+def _remaining_day_lines():
+    today = now_ist().date()
+    lines = [f"{_DIGITS[i]} {DAY_POLL_OPTS[i]}"
+             for i, d in enumerate(config.EVENT_DATES) if d >= today]
+    return "\n".join(lines) if lines else "(the carnival has ended)"
+
+
+def handle_inbound(phone, text, sender_name=None, allow_create=False):
+    """Called by webhook. Matches lead by phone, parses date, acks.
+
+    `allow_create` is passed only by the authenticated webhook route. An inbound
+    message that creates a lead makes us send WhatsApp messages on a number that
+    is still on a probationary tier, so the unauthenticated route may only ever
+    update a lead that already exists -- exactly as before this feature.
+    """
     lead = db.q("""SELECT * FROM leads WHERE phone=%s
                    ORDER BY updated_at DESC LIMIT 1""", (phone,), one=True)
     if not lead:
-        return
+        if not (allow_create and config.WALKIN_ENABLED):
+            db.log_msg(None, "in", "unattributed", text,
+                       detail=f"phone={phone} walkin_disabled")
+            return
+        proj = _detect_project(text)
+        if not proj:
+            # No brand tag -> we do not know who they are or which project they
+            # want. Creating a lead here would make a wrong number into a
+            # marketing target. Log it; a human answers from the Team Inbox.
+            db.log_msg(None, "in", "unattributed", text,
+                       detail=f"phone={phone} no_brand_tag needs_human")
+            return
+        db.x("""INSERT INTO leads (project, selldo_lead_id, name, phone,
+                                   selldo_status, wa_state)
+                VALUES (%s,%s,%s,%s,'whatsapp_inbound','queued')
+                ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+             (proj, "wa:" + phone, sender_name, phone))
+        lead = db.q("SELECT * FROM leads WHERE project=%s AND selldo_lead_id=%s",
+                    (proj, "wa:" + phone), one=True)
+        if not lead:
+            return
+
     db.x("UPDATE leads SET last_inbound_at=now(), last_inbound_text=%s, updated_at=now() WHERE id=%s",
          (text, lead["id"]))
     db.log_msg(lead["id"], "in", "inbound", text)
 
     d = reply_parser.parse_date_reply(text)
+    # A day that has already passed is not a choice. Someone replying "1" on
+    # Saturday (or tapping an old message's Friday button) would otherwise be
+    # confirmed for Friday and sent an entry pass for a day that is over.
+    if d and d < now_ist().date():
+        d = None
+
+    # Never been messaged? Reply inside their open window. Covers the walk-in we
+    # just created AND a Meta lead still sitting in 'queued' whose template M1
+    # had not gone out yet -- for them this is strictly better: free, instant,
+    # and immune to the marketing gate. Stamping m1_sent_at is load-bearing: the
+    # M3 reminder query filters on `m1_sent_at IS NOT NULL`, so without it a
+    # walk-in who picks a day would never be reminded of it.
+    if not lead.get("m1_sent_at") and today_in_event_window():
+        if d:
+            # They named a day in their very first message. The ack below already
+            # carries venue + entry pass, so a welcome would just repeat it.
+            db.x("UPDATE leads SET m1_sent_at=now(), updated_at=now() WHERE id=%s",
+                 (lead["id"],))
+        elif _send(lead, "welcome", welcome_body(lead), jitter=False):
+            db.x("""UPDATE leads SET wa_state='m1_sent', m1_sent_at=now(), updated_at=now()
+                    WHERE id=%s""", (lead["id"],))
+        lead = db.q("SELECT * FROM leads WHERE id=%s", (lead["id"],), one=True)
+
     if d:
         db.x("""UPDATE leads SET selected_date=%s, wa_state='date_selected', updated_at=now()
                 WHERE id=%s""", (d, lead["id"]))
