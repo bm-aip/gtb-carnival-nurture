@@ -59,6 +59,14 @@ def poll_project(project_key):
         if not qualified:
             continue
 
+        # Already promoted straight from Meta (meta.promote_meta_leads). Sell.do
+        # hands us a different lead id for the same human, so without this guard
+        # we would insert a second row and message them twice.
+        if r.get("meta_lead_id") and db.q(
+                "SELECT 1 FROM leads WHERE project=%s AND meta_lead_id=%s",
+                (project_key, str(r["meta_lead_id"])), one=True):
+            continue
+
         # New qualified lead → phone comes from the meta_leads matcher
         db.x("""INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name,
                                    selldo_status, selldo_response_at, wa_state)

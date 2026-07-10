@@ -6,6 +6,10 @@ from flask import Flask, request, jsonify, render_template, Response
 from flask.json.provider import DefaultJSONProvider
 from apscheduler.schedulers.background import BackgroundScheduler
 import config
+
+# Bump on every deploy. /admin/config-check echoes it, so you can prove which
+# source is serving before flipping a switch that messages real people.
+CODE_VERSION = "2026-07-10-dash-replied-split"
 import db
 import selldo
 import meta
@@ -117,7 +121,14 @@ def wati_webhook():
 @app.route("/api/summary")
 @auth
 def api_summary():
-    counts = db.q("""SELECT project, selected_date, count(*) n FROM leads
+    # `replied` = the lead answered us on WhatsApp (tapped the day-picker or
+    # typed a date). Everyone else got their day from the Meta form's own
+    # preferred_date field, copied in at promotion -- they have never responded
+    # to a message. Two very different levels of intent; the dashboard shows
+    # them apart so nobody reads a form-fill as a confirmation.
+    counts = db.q("""SELECT project, selected_date, count(*) n,
+                            count(*) FILTER (WHERE last_inbound_at IS NOT NULL) replied
+                     FROM leads
                      WHERE selected_date IS NOT NULL AND NOT suppressed
                      GROUP BY project, selected_date ORDER BY selected_date""")
     funnel = db.q("""SELECT project, wa_state, count(*) n FROM leads
@@ -213,6 +224,7 @@ def admin_poll_now():
         with _seq_lock:
             selldo.poll_all()
             meta.poll_meta_leads()
+            meta.promote_meta_leads()
             meta.poll_campaign_stats()
             match.run_matching()
             sequencer.tick()
@@ -232,6 +244,26 @@ def admin_webhook_status():
         "wati_webhook_hits": db.get_setting("wati_webhook_hits", "0"),
         "last_wati_webhook_raw": db.get_setting("last_wati_webhook_raw", ""),
         "wasender_webhook_hits": db.get_setting("webhook_hits", "0"),
+    })
+
+
+@app.route("/admin/config-check")
+@auth
+def admin_config_check():
+    # Read-only: which build is actually serving, and what are the send gates
+    # set to? Env changes on Railway trigger a redeploy, so a container can come
+    # up with new variables but source that is not what you last pushed. Without
+    # a probe like this that mismatch is invisible until it sends the wrong
+    # messages to real people. Sends nothing, reads nothing but config.
+    return jsonify({
+        "code_version": CODE_VERSION,
+        "m2_enabled": config.M2_ENABLED,
+        "promote_enabled": config.PROMOTE_ENABLED,
+        "promote_forms": config.PROMOTE_FORMS,
+        "promote_window_hours": config.PROMOTE_WINDOW_HOURS,
+        "max_sends_per_hour": config.MAX_SENDS_PER_HOUR,
+        "send_batch_per_tick": config.SEND_BATCH_PER_TICK,
+        "daily_send_cap": config.DAILY_SEND_CAP,
     })
 
 
@@ -264,6 +296,7 @@ def _tick_with_matching():
     if not _seq_lock.acquire(blocking=False):
         return  # a Poll-now pass is already running; skip this scheduled tick
     try:
+        meta.promote_meta_leads()
         match.run_matching()
         sequencer.tick()
     finally:

@@ -141,20 +141,31 @@ async function loadSummary(){
   $("#errbar").style.display=errs.length?"block":"none";
   $("#errbar").textContent=errs.join(" | ");
 
-  const byDate={}, byProj={};
+  // Two populations, deliberately not summed into one headline number:
+  //   replied  -> answered us on WhatsApp (tapped the day-picker / typed a date)
+  //   formOnly -> day came from the Meta form's preferred_date; never responded
+  const byDate={}, byProj={}, byRep={};
   s.day_counts.forEach(r=>{
     byDate[r.selected_date]=(byDate[r.selected_date]||0)+r.n;
+    byRep[r.selected_date]=(byRep[r.selected_date]||0)+(r.replied||0);
     byProj[r.selected_date]=byProj[r.selected_date]||{};
     byProj[r.selected_date][r.project]=r.n;
   });
+  const tot=Object.values(byDate).reduce((a,b)=>a+b,0);
+  const rep=Object.values(byRep).reduce((a,b)=>a+b,0);
   $("#dayCards").innerHTML=s.event_dates.map(d=>{
-    const p=byProj[d]||{};
+    const p=byProj[d]||{}, n=byDate[d]||0, rd=byRep[d]||0;
     return `<div class="card"><div class="k">${fmtD(d)}</div>
-      <div class="v">${byDate[d]||0}</div>
+      <div class="v">${n}</div>
+      <div class="sub">${rd} replied · ${n-rd} form-only</div>
       <div class="sub">RON ${p.RON||0} · Elements ${p.ELEMENTS||0}</div></div>`;
-  }).join("")+`<div class="card"><div class="k">Total confirmed</div>
-      <div class="v">${Object.values(byDate).reduce((a,b)=>a+b,0)}</div>
-      <div class="sub">via WhatsApp date selection</div></div>`;
+  }).join("")
+  +`<div class="card"><div class="k">Replied to us</div>
+      <div class="v">${rep}</div>
+      <div class="sub">tapped or typed a day on WhatsApp</div></div>`
+  +`<div class="card"><div class="k">Form-picked only</div>
+      <div class="v">${tot-rep}</div>
+      <div class="sub">day taken from the Meta form; no reply yet</div></div>`;
 
   const f={};
   s.funnel.forEach(r=>{f[r.project]=f[r.project]||{};f[r.project][r.wa_state]=r.n});

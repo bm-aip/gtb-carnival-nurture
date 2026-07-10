@@ -81,6 +81,37 @@ META_PAGE_IDS = {
 }
 LEADS_SINCE = "2026-06-25"
 
+# Direct Meta -> sequencer promotion. A lead that lands on one of these forms is
+# invited straight away, without waiting for Sell.do to stage it as Interested.
+# The list is an EXACT form-name allow-list, not a keyword: meta_leads still
+# holds rows from other projects (Rising_Palms, Central_park, Uptown, Madhuram)
+# pulled before FORM_FILTER was narrowed, and substring matching on "carnival"
+# would also sweep in the broad-audience RON forms (~655 people) that we
+# deliberately do not message.
+# RON side is restricted to the _BM forms only. The other RON carnival forms
+# (_Apt, _Villa, _Villa 1, Ron_carnival_*) and the broad-audience forms are
+# deliberately excluded.
+PROMOTE_FORMS = [f.strip() for f in os.environ.get(
+    "PROMOTE_FORMS",
+    "GTB_Carnival_RON_2BHK_BM,"
+    "GTB_Carnival_RON_3BHK_BM,"
+    "GTB_Carnival_RON_3BHK_Villa BM,"
+    "GTB_Carnival_RON_4BHK_Villa BM,"
+    "GTB_Carnival_RON_Villa_BM,"
+    "Elements Carnival,"
+    "Elements Carnival - E4 New,"
+    "Elements- 3 Carnival"
+).split(",") if f.strip()]
+# Only promote recent form fills. Without this the first run would sweep the
+# entire LEADS_SINCE backlog (729 people) into the send queue at once -- three
+# days of sending on a 250/day tier, for an event that ends in two.
+PROMOTE_WINDOW_HOURS = int(os.environ.get("PROMOTE_WINDOW_HOURS", "24"))
+PROMOTE_ENABLED = _b(os.environ.get("PROMOTE_ENABLED", "false"))
+
+# M2 is the cold follow-up to people who never answered M1. On event day it
+# competes with venue reminders for the hourly allowance, so it can be held.
+M2_ENABLED = _b(os.environ.get("M2_ENABLED", "true"))
+
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
