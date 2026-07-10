@@ -146,6 +146,46 @@ def poll_meta_leads():
             db.set_setting(f"meta_leads_error_{pk}", str(e)[:500])
 
 
+def promote_meta_leads():
+    """Queue a cached Meta form lead straight into the sequencer, skipping the
+    Sell.do 'Interested' gate.
+
+    Rationale: Sell.do only stages a lead once presales has phoned them, which
+    on event day is far slower than the event itself. A lead who filled a
+    carnival form already declared intent, so the form fill IS the qualification.
+
+    Three hard bounds, because this bypasses the human check:
+      - form_name must be on config.PROMOTE_FORMS (exact match, never substring)
+      - created within config.PROMOTE_WINDOW_HOURS
+      - phone not already attached to any lead (a Sell.do-sourced row may have
+        matched the same person, and DISTINCT ON collapses same-phone refills)
+
+    The form's own preferred_date rides along as selected_date, so someone who
+    already picked a day gets the reminder track, not another invite. Rows land
+    as 'queued' with a phone already set -- match.run_matching() never sees them.
+    """
+    if not config.PROMOTE_ENABLED or not config.PROMOTE_FORMS:
+        return 0
+    n = db.x("""
+        INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name, phone,
+                           selldo_status, selldo_response_at, wa_state, selected_date)
+        SELECT DISTINCT ON (m.phone)
+               m.project, 'meta:' || m.meta_lead_id, m.meta_lead_id, m.name, m.phone,
+               'meta_direct', m.created_time, 'queued', m.preferred_date
+        FROM meta_leads m
+        WHERE m.phone IS NOT NULL
+          AND m.form_name = ANY(%s)
+          AND m.created_time > now() - (%s || ' hours')::interval
+          AND NOT EXISTS (SELECT 1 FROM leads l WHERE l.meta_lead_id = m.meta_lead_id)
+          AND NOT EXISTS (SELECT 1 FROM leads l WHERE l.phone = m.phone)
+        ORDER BY m.phone, m.created_time DESC
+        ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+        (config.PROMOTE_FORMS, str(config.PROMOTE_WINDOW_HOURS)))
+    if n:
+        db.set_setting("last_promoted_at", f"{n} leads")
+    return n
+
+
 def normalize_phone(raw):
     d = re.sub(r"\D", "", raw or "")
     if len(d) == 10:

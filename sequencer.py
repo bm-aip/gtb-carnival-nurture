@@ -295,6 +295,33 @@ def tick():
         db.set_setting("daily_capped_at", now_ist().isoformat())
     budget = max(0, min(config.SEND_BATCH_PER_TICK, day_left))
 
+    # ---- M3 rules ----  (runs FIRST: a venue reminder to someone who committed
+    # to a day outranks both a cold follow-up and a fresh invite. Every loop
+    # draws on the same per-tick budget and returns outright when it is spent,
+    # so on a busy event morning whichever loop runs first is the one that sends.
+    # A backlog of new invites must never starve the people already attending.)
+    # (a) evening before selected date, from 18:00 IST
+    # (b) selected date == today (lead picked same-day): send from 08:00 IST,
+    #     unless M1 went out today (combined M1 + ack already carried the venue)
+    # m1_sent_at NOT NULL is load-bearing: a lead promoted straight from a Meta
+    # form can arrive with selected_date already filled from the form and no M1
+    # yet. Without this guard the reminder would reach someone we never invited.
+    for lead in db.q("""SELECT * FROM leads WHERE selected_date IS NOT NULL
+                        AND NOT suppressed AND m3_sent_at IS NULL
+                        AND m1_sent_at IS NOT NULL"""):
+        if budget <= 0:
+            return
+        if quiet:
+            break   # M3 reminder is a backlog send -- held during quiet hours
+        d = lead["selected_date"]
+        m1_today = bool(lead["m1_sent_at"] and lead["m1_sent_at"].astimezone(IST).date() == today)
+        send_now = ((d - timedelta(days=1) == today and n.hour >= 18) or
+                    (d == today and n.hour >= 8 and not m1_today))
+        if send_now and _send(lead, "m3", m3_body(lead)):
+            budget -= 1
+            db.x("UPDATE leads SET m3_sent_at=now(), updated_at=now() WHERE id=%s",
+                 (lead["id"],))
+
     # ---- M1 for queued leads ----
     for lead in db.q("""SELECT * FROM leads WHERE wa_state='queued'
                         AND NOT suppressed AND phone IS NOT NULL"""):
@@ -316,6 +343,8 @@ def tick():
                 _send_poll(lead, "m1_poll")
 
     # ---- M2: 24h after M1, no reply, no date ----
+    if not config.M2_ENABLED:
+        return
     for lead in db.q("""SELECT * FROM leads WHERE wa_state='m1_sent' AND NOT suppressed
                         AND selected_date IS NULL AND last_inbound_at IS NULL
                         AND m1_sent_at < now() - interval '24 hours'
@@ -331,25 +360,6 @@ def tick():
             db.x("UPDATE leads SET wa_state='m2_sent', m2_sent_at=now(), updated_at=now() WHERE id=%s",
                  (lead["id"],))
             _send_poll(lead, "m2_poll")
-
-    # ---- M3 rules ----
-    # (a) evening before selected date, from 18:00 IST
-    # (b) selected date == today (lead picked same-day): send from 08:00 IST,
-    #     unless M1 went out today (combined M1 + ack already carried the venue)
-    for lead in db.q("""SELECT * FROM leads WHERE selected_date IS NOT NULL
-                        AND NOT suppressed AND m3_sent_at IS NULL"""):
-        if budget <= 0:
-            return
-        if quiet:
-            break   # M3 reminder is a backlog send -- held during quiet hours
-        d = lead["selected_date"]
-        m1_today = bool(lead["m1_sent_at"] and lead["m1_sent_at"].astimezone(IST).date() == today)
-        send_now = ((d - timedelta(days=1) == today and n.hour >= 18) or
-                    (d == today and n.hour >= 8 and not m1_today))
-        if send_now and _send(lead, "m3", m3_body(lead)):
-            budget -= 1
-            db.x("UPDATE leads SET m3_sent_at=now(), updated_at=now() WHERE id=%s",
-                 (lead["id"],))
 
     # No generic M3 to no-day leads: owner chose not to remind non-responders the
     # night before (no gtb_m3_generic template approved). Leads who never pick a
