@@ -120,6 +120,13 @@ M2_ENABLED = _b(os.environ.get("M2_ENABLED", "true"))
 # disables the secret route entirely (it 403s), so walk-ins are off by default.
 WATI_PATH_TOKEN = os.environ.get("WATI_PATH_TOKEN", "").strip()
 
+# Landing-page WhatsApp button. A visitor messages us first, which opens a 24h
+# WhatsApp service window: we may reply with free text, no approved template and
+# no MARKETING-category gate (the gate that blocks ~44% of our cold sends and
+# every US recipient outright). Off by default -- creating leads from an inbound
+# message is only safe on the authenticated webhook route.
+WALKIN_ENABLED = _b(os.environ.get("WALKIN_ENABLED", "false"))
+
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier

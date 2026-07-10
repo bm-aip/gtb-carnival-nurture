@@ -10,7 +10,7 @@ import config
 
 # Bump on every deploy. /admin/config-check echoes it, so you can prove which
 # source is serving before flipping a switch that messages real people.
-CODE_VERSION = "2026-07-10-webhook-hardening"
+CODE_VERSION = "2026-07-10-walkin-inbound"
 import db
 import selldo
 import meta
@@ -112,7 +112,9 @@ def _wati_inbound(payload, allow_create):
         return jsonify({"ok": True, "dup": True})
     phone, text = wati.parse_inbound(payload)
     if phone and text:
-        sequencer.handle_inbound(phone, text)
+        sequencer.handle_inbound(phone, text,
+                                 sender_name=wati.parse_sender_name(payload),
+                                 allow_create=allow_create)
     return jsonify({"ok": True})
 
 
@@ -293,6 +295,7 @@ def admin_config_check():
         # bool only -- never echo the token itself, this route is behind basic
         # auth but the token is what gates lead creation from the internet.
         "wati_path_token_set": bool(config.WATI_PATH_TOKEN),
+        "walkin_enabled": config.WALKIN_ENABLED,
         "m2_enabled": config.M2_ENABLED,
         "promote_enabled": config.PROMOTE_ENABLED,
         "promote_forms": config.PROMOTE_FORMS,
