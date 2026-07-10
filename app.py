@@ -1,5 +1,6 @@
 import os
 import datetime as _dt
+import secrets
 import threading
 from functools import wraps
 from flask import Flask, request, jsonify, render_template, Response
@@ -9,7 +10,7 @@ import config
 
 # Bump on every deploy. /admin/config-check echoes it, so you can prove which
 # source is serving before flipping a switch that messages real people.
-CODE_VERSION = "2026-07-10-dash-replied-split"
+CODE_VERSION = "2026-07-10-webhook-hardening"
 import db
 import selldo
 import meta
@@ -89,32 +90,64 @@ def wasender_webhook():
     return jsonify({"ok": True})
 
 
-@app.route("/webhook/wati", methods=["POST"])
-def wati_webhook():
-    # Same diagnostic stash + dedup as the wasender route so we can see exactly
-    # what Wati delivers and never process one message twice.
-    try:
-        raw = request.get_data(as_text=True) or ""
-        db.set_setting("last_wati_webhook_raw",
-                       (sequencer.now_ist().isoformat() + " " + raw)[:2000])
-        n = int(db.get_setting("wati_webhook_hits", "0") or "0") + 1
-        db.set_setting("wati_webhook_hits", str(n))
-    except Exception:
-        pass
-    if config.WATI_WEBHOOK_SECRET:
-        if request.headers.get("X-Webhook-Secret") != config.WATI_WEBHOOK_SECRET:
-            return "", 403
-    payload = request.get_json(silent=True) or {}
-    # Dedup on Wati's message id so retried deliveries ack once.
-    _d = payload.get("data", payload)
-    _mid = (_d.get("id") or _d.get("whatsappMessageId")
-            or _d.get("conversationId")) if isinstance(_d, dict) else None
+def _wati_inbound(payload, allow_create):
+    """Shared body for both Wati webhook routes.
+
+    `allow_create` is the whole reason there are two routes. Creating a lead
+    from a webhook means an unauthenticated POST can inject a record and make us
+    send WhatsApp messages on a number that is still on a probationary tier. Only
+    the secret-path route may do that.
+    """
+    # Dedup on Wati's message id so a retried delivery is processed once.
+    # Wati posts "data": null as a REAL key, so payload.get("data", payload)
+    # returns None -- the default never fires and _mid was always None, which
+    # made mark_webhook_new() wave every message through. `or payload` is the
+    # same fallback parse_inbound already uses. Without it, a Wati retry would
+    # create a second lead and send a second welcome to the same person.
+    _d = payload.get("data") or payload
+    # conversationId is deliberately NOT in this chain: it is stable per CONTACT,
+    # not per message, so it would swallow every reply after a person's first.
+    _mid = (_d.get("id") or _d.get("whatsappMessageId")) if isinstance(_d, dict) else None
     if not db.mark_webhook_new(_mid):
         return jsonify({"ok": True, "dup": True})
     phone, text = wati.parse_inbound(payload)
     if phone and text:
         sequencer.handle_inbound(phone, text)
     return jsonify({"ok": True})
+
+
+def _stash_wati(raw):
+    try:
+        db.set_setting("last_wati_webhook_raw",
+                       (sequencer.now_ist().isoformat() + " " + raw)[:2000])
+        n = int(db.get_setting("wati_webhook_hits", "0") or "0") + 1
+        db.set_setting("wati_webhook_hits", str(n))
+    except Exception:
+        pass
+
+
+@app.route("/webhook/wati", methods=["POST"])
+def wati_webhook():
+    # Legacy unauthenticated route. Kept alive so a Wati dashboard still pointing
+    # here keeps working, but it can only UPDATE leads that already exist -- it
+    # may never create one. Point Wati at the secret path to enable walk-ins.
+    _stash_wati(request.get_data(as_text=True) or "")
+    if config.WATI_WEBHOOK_SECRET:
+        if request.headers.get("X-Webhook-Secret") != config.WATI_WEBHOOK_SECRET:
+            return "", 403
+    return _wati_inbound(request.get_json(silent=True) or {}, allow_create=False)
+
+
+@app.route("/webhook/wati/<token>", methods=["POST"])
+def wati_webhook_secret(token):
+    # Authenticated route. Wati lets you set any callback URL, so the shared
+    # secret lives in the path -- no custom header needed (Wati sends none, which
+    # is why WATI_WEBHOOK_SECRET must stay blank or it 403s every real post).
+    # compare_digest so a wrong token cannot be found one character at a time.
+    _stash_wati(request.get_data(as_text=True) or "")
+    if not config.WATI_PATH_TOKEN or not secrets.compare_digest(token, config.WATI_PATH_TOKEN):
+        return "", 403
+    return _wati_inbound(request.get_json(silent=True) or {}, allow_create=True)
 
 
 # ---------- JSON APIs ----------
@@ -257,6 +290,9 @@ def admin_config_check():
     # messages to real people. Sends nothing, reads nothing but config.
     return jsonify({
         "code_version": CODE_VERSION,
+        # bool only -- never echo the token itself, this route is behind basic
+        # auth but the token is what gates lead creation from the internet.
+        "wati_path_token_set": bool(config.WATI_PATH_TOKEN),
         "m2_enabled": config.M2_ENABLED,
         "promote_enabled": config.PROMOTE_ENABLED,
         "promote_forms": config.PROMOTE_FORMS,

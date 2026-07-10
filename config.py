@@ -112,6 +112,14 @@ PROMOTE_ENABLED = _b(os.environ.get("PROMOTE_ENABLED", "false"))
 # competes with venue reminders for the hourly allowance, so it can be held.
 M2_ENABLED = _b(os.environ.get("M2_ENABLED", "true"))
 
+# Shared secret carried in the Wati webhook PATH (/webhook/wati/<token>).
+# Wati sends no custom headers -- that is why WATI_WEBHOOK_SECRET must stay blank
+# or every real post 403s -- but it will POST to any URL you give it. Only the
+# secret path is allowed to CREATE leads from an inbound message; the legacy
+# unauthenticated route can merely update leads that already exist. Blank token
+# disables the secret route entirely (it 403s), so walk-ins are off by default.
+WATI_PATH_TOKEN = os.environ.get("WATI_PATH_TOKEN", "").strip()
+
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
