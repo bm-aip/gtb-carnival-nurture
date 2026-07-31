@@ -171,6 +171,62 @@ WATI_PATH_TOKEN = os.environ.get("WATI_PATH_TOKEN", "").strip()
 # message is only safe on the authenticated webhook route.
 WALKIN_ENABLED = _b(os.environ.get("WALKIN_ENABLED", "false"))
 
+# --- Site visits (owner decision 2026-07-31, REVERSES "capture, never confirm") ---
+#
+# The bot now takes a day and a time and acknowledges it. The earlier rule was that
+# it must never confirm a slot; the owner's reasoning for changing it is that a
+# buyer who picks a day and gets no acknowledgement is left at a dead end, which is
+# a worse experience than the risk it was avoiding.
+#
+# WHAT THE BOT MAY SAY is bounded, and the boundary is the whole point: "booked, and
+# our team will call to confirm the timing and share directions." The bot has no
+# calendar, so an unqualified "confirmed" is a promise the company has not agreed to
+# keep -- and the failure mode is a buyer standing at a gate in Vadanemmeli on a
+# Saturday. This wording gives the buyer a real commitment while leaving the team
+# room to move an hour.
+VISIT_CONFIRMATION = "booked_team_confirms"
+
+# Availability. Tuesday is the sales team's weekly off; Monday mornings they are in
+# their weekly meeting, so Monday is afternoon-only.
+VISIT_DAYS = {
+    "mon": "afternoon",   # first half is the team's weekly meeting
+    "tue": None,          # weekly off -- never offer, and never accept
+    "wed": "full",
+    "thu": "full",
+    "fri": "full",
+    "sat": "full",
+    "sun": "full",
+}
+
+# Two venues, and the ORDER MATTERS.
+#
+# The site at Vadanemmeli is always offered first, because a site visit is the
+# definition of a win (design §2). The Experience Centre is NOT an equal option: it
+# is a distance-objection handler and a stepping stone. Offering it unprompted would
+# quietly convert site visits into mall visits, which is a downgrade the bot must
+# never make on its own.
+#
+# The intended ladder: someone worried about the drive sees the miniature model at
+# the Experience Centre during the week, and books the real site visit for the
+# weekend. The EC visit is a milestone, not the outcome.
+VISIT_VENUES = {
+    "site": {
+        "name": "the site at Vadanemmeli, ECR",
+        "priority": 1,
+        "offer": "always",
+    },
+    "experience_centre": {
+        "name": "the Experience Centre at Express Avenue mall",
+        "priority": 2,
+        # ONLY after the buyer raises distance or travel as a concern.
+        "offer": "on_distance_objection",
+        "note": ("Has a miniature model and a walkthrough of the RON experience. "
+                 "Same day availability rules as the site. Position it as a first "
+                 "look during the week, with the site visit at the weekend -- never "
+                 "as a replacement for seeing the site."),
+    },
+}
+
 # --- Budget gate (design §2) ---
 # The bot compares what a buyer says against these privately. It never quotes them,
 # and no price is in the corpus to quote -- the gate is internal arithmetic.

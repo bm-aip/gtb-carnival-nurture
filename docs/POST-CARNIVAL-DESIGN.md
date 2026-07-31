@@ -44,7 +44,7 @@ So the bot's job description is precise: **do what a presales caller does.** Qua
 | **Purpose** (end-use vs investment) | **Captured, NEVER gates.** Not a filter — **a lens.** It reframes every answer the bot gives afterwards, and tells sales which pitch to open with. |
 | **Timeline** | **Captured, NOT gated.** Bot asks, records it, hands it to sales as context. Sales prioritises. |
 | **Ask order** | **Purpose → Location → Configuration → Budget.** (NOT the same as gate priority — see below.) |
-| Does the bot book the site visit? | **No.** Sales calls and closes for the visit. Bot warms it, doesn't book it. **If the buyer volunteers a commitment — "Saturday morning works" — the bot RECORDS it and passes it on. It never confirms a slot.** See §8. |
+| Does the bot book the site visit? | **YES — reversed 2026-07-31.** It takes a day and time and acknowledges the visit as booked, then says the team will call to confirm timing and share directions. It must not say a bare "confirmed": there is no calendar behind it. Tuesday never offered (team's day off); Monday afternoon only. Experience Centre at Express Avenue offered **only** on a distance objection, never instead of the site. See §8. |
 | Does the bot answer open-ended questions? | **Yes — this is core, not a bonus.** A RAG agent answers from that project's curated corpus. **It answers before it asks** (§7, §9). |
 | Has sales agreed the bar? | **Yes.** Sales agreed the definition. Budget band and off-category now supplied; location and config lines pending (§13). |
 | Handoff destination | **WhatsApp group ping only.** Sell.do write is **parked** (owner, 2026-07-28: *"that is slow the progress"*). Transcript still stored our side — nothing is lost, the CRM push becomes an extra sink later. See §8. |
@@ -306,9 +306,8 @@ INFLOW ─┼── Website / form lead ─────────────�
      │  + TIMELINE, opportunistically               │
      │                                              │
      │  Answers from that project's KB only.        │
-     │  Ranges, never exact. For RON today:         │
-     │  no price at all. Warms the site visit —     │
-     │  does NOT book it.                           │
+     │  Ranges, never exact. For RON today:         │     │  no price at all. BOOKS the visit — takes    │
+     │  day + time, team confirms details.          │
      └──────────────────────────────────────────────┘
             │            │            │            │
             ▼            ▼            ▼            ▼
@@ -391,7 +390,7 @@ Dropping touch 5 removes a genuine duplicate: touch 3 is *already* a master-plan
 
 **The KPI of a template is now REPLY RATE, not visits booked.** Owner, 2026-07-30: the 24-hour window is the crucial asset, so the ask must be low-friction and must not induce pressure. This supersedes the RON plan's stated Primary KPI ("site visits booked — delivered WhatsApp nurture journeys", plan §7), which measured the wrong end of the funnel for our design. A template's only job is to earn **any** inbound. "Who is this?" is a complete success.
 
-**⚠️ Template 6 must be rewritten before approval, not submitted as the plan writes it.** As written it is the highest-pressure ask in the funnel (`Plan site visit`) and it carries a **booking chatbot** — preferred day / time / visitor count / route assistance. That chatbot is forbidden by §8 (*capture, never confirm*). Submitting it as-is means a lead taps, answers four questions, and receives only a promise that a human will call — worse than never having asked. **Touch 6 keeps its day-25 slot and its warmth; it loses the booking flow and the commitment ask.**
+**Template 6 is APPROVED and needs no rewrite** (verified against the live Wati account, 2026-07-31: `ron_nurture_06_visit`). An earlier note here said it must be rewritten because the RON plan attached a booking chatbot to it. That was wrong on two counts: the approved copy *offers* a visit rather than booking one (*"we can arrange a guided visit at a convenient time"*), and §8 has since been reversed — the bot now does book. The buttons are `Need More Details` / `Plan a Site Visit` / `Stop updates`.
 
 **Button design rule, from the same decision.** Buttons must **request information, not commitment** — "Send the map", "What's nearby", "See the layout" — or pose **one either-or question**. The strongest either-or is **purpose** ("a weekend place, or somewhere to live full time?"): purpose is the only one of the four questions that *never rejects anybody* (§2), so a vague or wrong answer costs nothing, it is already first in the locked ask order, and the reply therefore both opens the window and starts the checklist. **Location and budget must never appear on a cold template** — both can end a conversation. The plan's own guardrail against *"Are you interested?"* (plan §8) stands.
 
@@ -479,13 +478,52 @@ Volunteered:  <any commitment they offered, verbatim>
 
 **`Asked about` earns its line.** It tells the salesperson what this buyer actually cares about before they dial — the difference between a cold opener and a warm one.
 
-### Capture, never confirm
+### ~~Capture, never confirm~~ → **The bot books the visit** (REVERSED 2026-07-31)
 
-Owner, 2026-07-28: *"incidentally if the customer commits — we record and pass on — telling the system to do the full booking is not ideal."*
+**Superseded.** The 2026-07-28 rule was *"we record and pass on — telling the system to do the full booking is not ideal."* The owner reversed it on 2026-07-31:
 
-So: if a buyer says *"Saturday morning works,"* the bot **records it verbatim onto the card** and says something neutral and non-committal. It does **not** confirm a slot, does not promise a time, does not create a booking, and does not run the RON plan's booking chatbot.
+> *"the right behaviour for plan a site visit is to schedule the visit — date and time — and then offer to get our team to coordinate for next steps... the user is able to converse fully and get acknowledged that their site visit is booked — it should be able to persuade those who may hesitate."*
 
-**Why this line is drawn hard:** a bot that confirms a visit has made a promise on the company's behalf to a stranger, with no inventory check, no advisor availability, and no one accountable if nobody shows up. Recording an intent costs nothing and loses nothing.
+The reasoning is sound: a buyer who names a day and gets a neutral non-answer is left at a dead end, and that dead end costs more than the risk the old rule avoided.
+
+#### What the bot may say, and the boundary that stays
+
+**"Booked — our team will call to confirm the timing and share directions."**
+
+Not a bare *"confirmed."* The bot has no calendar and no advisor roster, so an unqualified confirmation is a promise the company never agreed to keep, and the failure mode is a buyer standing at a gate in Vadanemmeli on a Saturday holding a WhatsApp message that says it was confirmed. This wording gives them a real commitment and leaves the team room to move an hour. Encoded as `config.VISIT_CONFIRMATION`.
+
+#### Availability (`config.VISIT_DAYS`)
+
+| Day | Available |
+|---|---|
+| Mon | **afternoon only** — team's weekly meeting runs the first half |
+| Tue | **never** — team's weekly off |
+| Wed–Sun | full |
+
+#### Two venues, and the order is load-bearing (`config.VISIT_VENUES`)
+
+| | Venue | When offered |
+|---|---|---|
+| 1 | **The site at Vadanemmeli, ECR** | **always first** |
+| 2 | The Experience Centre at Express Avenue mall | **only after the buyer raises distance** |
+
+The Experience Centre has a miniature model and a walkthrough of the RON experience, and runs the same schedule. It is **not an equal option**. A site visit *is* the definition of a win (§2), so a bot that volunteers the mall unprompted would quietly convert site visits into mall visits — a downgrade it must never make on its own.
+
+The intended ladder, owner's words: *"within the week they can see the Experience Centre — and plan the real site visit in the weekend."* **The EC visit is a milestone, not the outcome**, and the handoff card must distinguish the two or the pipeline will read as healthier than it is.
+
+#### Persuading the hesitant
+
+Same mechanics as the §7 ladder — a reason with every ask, three framings, never the same one twice:
+
+| Hesitation | Response |
+|---|---|
+| *"Let me check and revert"* | Offer two concrete options, not an open question. "This Saturday or next?" is easier to answer than a blank. |
+| *"It's too far"* | Answer the distance honestly first, **then** offer the Experience Centre as a first look this week |
+| *"I'm not in Chennai"* | Video walkthrough — already in the approved `ron_nurture_06_visit` copy, and costs them nothing |
+| *"Just send details"* | Send them. Ask again later. **Never trade the visit for the brochure.** |
+| Goes quiet after picking a day | The in-window nudge — free, no template, no tier cost |
+
+Never *"are you interested?"* (plan guardrail), and never the same framing twice.
 
 ### The transcript is still stored
 
@@ -530,7 +568,7 @@ Qualified leads and out-of-depth escalations are **opposite urgencies** — one 
 | **No unapproved claims** | No offers, payment plans, possession schedules or inventory scarcity — RON commercial rule. Possession dates are exactly the thing a confident model invents. |
 | **No source, no answer** | Confidence floor. Below it → refuse + escalate. Never fall back on the model's own knowledge. |
 | **Suppression interlock** | No lead may be knocked before its Sell.do stage/label has been checked against the config list (§5). Protects sales' existing relationships — a political guardrail as much as an operational one. |
-| **Capture, never confirm** | The bot may record a stated commitment. It may never confirm a slot, promise a time, or create a booking (§8). |
+| **Books, but does not over-promise** | REVERSED 2026-07-31. The bot takes a day and time and acknowledges it as booked, then says the team will call to confirm timing and share directions. It must not say a bare "confirmed" — there is no calendar behind it (§8). Tuesday is never offered; Monday afternoon only. |
 | **Retry ceiling** | Replaces today's loop, which retries a failed send **every 5 minutes, forever**. There is no retry scheduler — a failed send leaves `wa_state` unchanged so the next tick re-picks it (`sequencer.py:252-268`). **The event ending is the ONLY thing that ever stopped it. This is a live landmine.** |
 | **Opt-out** | "STOP" honoured permanently, across every project. **Does not exist today.** |
 | **Fatigue cap** | Hard lifetime limit on messages per person. One counter, shared by every lane (§6). |
