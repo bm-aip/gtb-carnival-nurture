@@ -1,70 +1,60 @@
 # Build Plan — 29 tasks
 
 **Created:** 2026-07-28. Derived from `POST-CARNIVAL-DESIGN.md` §14 (rev 2).
-**Status (2026-07-30):** **Phase 0 complete** (1, 2, 3, 4, 5) · **task 8 complete** · **task 9 in progress**. 6 of 29 done, ~1,900 lines, 14 modules.
+**Status (2026-07-31):** **15 of 29 done.** The conversation loop is complete and tested end to end. ~3,400 lines, 21 modules.
 
-Nothing has been deployed. `SEND_ENABLED` defaults `false`, so the system remains unable to send even once this code ships.
+Nothing is deployed. `SEND_ENABLED` defaults `false` in code and is set `false` in Railway, so merging this cannot message anyone.
 
 ---
 
-## ▶ RESUME HERE — paused 2026-07-31
+## ▶ READY TO MERGE — PR #4
 
-Tasks **1–5, 8, 9 done. 10 built.** 79 chunks ready to load. Nothing deployed; `SEND_ENABLED=false` is now set explicitly in Railway.
+`https://github.com/bm-aip/gtb-carnival-nurture/pull/4` — 7 commits, 37 files.
 
-### Every command needs this prefix
-
-The Railway link lives in `gtb-carnival/`, and the service must be named or the CLI errors on "Multiple services found":
+### What works today
 
 ```
-cd /c/GTBcarnival/gtb-carnival && railway run --service gtb-carnival-nurture <command>
+message arrives -> recorded + opt-out checked   (synchronous, milliseconds)
+                -> queued                        (Postgres, per-phone ordering)
+                -> retrieve from the brand-fenced corpus
+                -> answer first, then ONE ask carrying an unused framing
+                -> reply sent, logged with the chunk ids that produced it
+                -> checklist advanced
+                -> qualified / dead / escalated -> card to the two numbers
 ```
 
-`railway run` pulls variables live from Railway's API, so it works **during the current build outage** — no deploy required.
+Verified against the live corpus and database, not mocks.
 
-### Next: Phase C, already green-lit — create the tables in production
+### Merge checklist
 
-```
-... python -c "import db, kb; db.init_db(); print(kb.init_kb())"
-```
-
-Success: `{'ok': True, 'dim': 1024, 'model': 'voyage-4-large'}`. Additive DDL only — every statement is `IF NOT EXISTS`, nothing is dropped or altered, and there is no sender anywhere in this path.
-
-**The one failure that matters:** `permission denied to create extension "vector"`. That is a Railway permission, not a code fix — stop and get pgvector enabled on the Postgres service. The app boots fine either way, which is why this check is isolated from startup.
-
-### Then
-
-| | Command | Note |
+| | Step | Note |
 |---|---|---|
-| **D** | `... python scripts/ingest_kb.py --brand RON` | loads 79 chunks; first real Voyage spend, fractions of a rupee |
-| **11** | — | attack the brand fence with real rows in the table. Must pass before any bot talks |
-| **E** | branch + PR | **blocked by the Railway build outage**, and it is the last step |
+| 1 | Confirm `SEND_ENABLED` is `false` in Railway | It already is. This is the only thing between the code and real phone numbers |
+| 2 | Merge PR #4 | Railway builds automatically |
+| 3 | Watch the deploy | `db.init_db()` + `kb.init_kb()` run at boot; both are additive and idempotent |
+| 4 | Check `/admin/config-check` | Confirms which build is serving and every limit it is running with |
+| 5 | Check `/api/kb` | Should report the corpus already loaded (it was loaded out-of-band) |
 
-### Do not
+**Do not flip `SEND_ENABLED` in the same sitting as the merge.** Deploy, confirm the app is healthy, then decide separately.
 
-- **Never run `railway variables`** — it prints `DATABASE_URL` and `VOYAGE_API_KEY` into the transcript. Use the dashboard.
-- **Do not create a local `.env`.** Running anything locally needs production database credentials on a laptop; `railway run` injects them into one process and writes nothing to disk.
-- **Do not `git init`.** A repo already exists — see below.
-- **Do not retry the stuck 30 July deployment.** Platform incident; retries add queue churn.
+### Before the first real conversation
 
-### Git reality (I got this wrong three times — corrected)
+**Both handoff recipients must message the bot number once.** WhatsApp only allows free-text to someone who contacted the business number in the last 24 hours — that rule applies to staff too. A card sent to a quiet handset is accepted by us and dropped by WhatsApp, silently from our side. Watch `/api/delivery` on the first card rather than assuming it arrived.
 
-| Location | State |
-|---|---|
-| GitHub `bm-aip/gtb-carnival-nurture` | `main` @ `5b7f9b52` — **Railway builds from this** |
-| `_live_clone/` | real checkout but **stale** at `aa82b0a`, predates Wati, no `wati.py`. Do not build on it |
-| `gtb-carnival/` | all the work; **not a checkout**. Descended from `5b7f9b52` |
+The durable fix is a utility template for cards, or Wati Team Inbox assignment. Both are small; neither is built.
 
-Deploy path: fresh clone of `main` → copy work onto a **branch** → PR → owner merges. `gh` is installed and authenticated as `bm-aip`. Last *successful* deploy was **12 July**, so the live app is still the old inert carnival build — harmless, sends nothing, still records inbound.
+### What is deliberately NOT in this PR
 
-**The critical path is no longer code.** Task 10 (ingest) needs a live database and an embeddings API key; neither exists in the dev environment. The pipeline can be written and its chunking dry-run, but loading the corpus and proving the brand fence (task 11) requires a real deploy.
+- **Knock engine (17)** — cold outbound. Blocked on the suppression list (`docs/SUPPRESSION-LIST.md`, waiting on ticks). Until it exists the bot can only answer, never start a conversation. For a first switch-on that is the right shape.
+- **Intake for the three inflows (14)** — a lead must already exist in the database. A CTWA click from a stranger is logged as unattributed rather than becoming a conversation.
+- **No schema columns dropped.** `leads.selected_date` and the carnival `wa_state` values still hold real attendance data.
+- **`/webhook/wasender`** is still unauthenticated and can mutate lead records. Dead provider, live door — close it when task 14 reworks intake.
 
-**Three ops items, all raised and none actioned:**
+### Known and accepted
 
-1. **No git repo.** The only undo for ~1,900 lines is one manual folder copy at `backup-2026-07-30-phase0/`. `git init` is one command.
-2. **`/webhook/wasender` is unauthenticated and can mutate lead records.** Dead provider, live door. Deliberately outside task 1's scope; close it with task 12.
-3. **No deploy owner named, no embeddings provider chosen.** Both block task 10 regardless of how much code exists.
-
-**When deploying, check `SEND_ENABLED` is absent or `false`.** It is the only thing standing between this code and real phone numbers, and the accidental guard that used to do that job (the carnival date comparisons) is gone.
+- **`kb/RON/pricing-internal.md` is gitignored.** The price sheet is never in git history; the budget band lives in `BUDGET_FLOOR` / `BUDGET_CEILING` because the gate is incomprehensible without it.
+- **Handoff numbers are defaults in `config.py`.** Business contact numbers in a private repo, overridable by `HANDOFF_PHONES` / `ESCALATION_PHONES`. Move them to env-only if that is not wanted.
+- **Flags accumulate across turns** rather than being per-turn — cosmetic on the card, noted rather than fixed.
 
 ---
 
@@ -275,22 +265,22 @@ Full task detail (acceptance criteria, doc references, rationale) is in the sess
 | 9 | ~~Curate the RON FAQ~~ **DONE** — 78 in / 32 out | 2 KB | — | 2BHK size parked by owner (fails safe: sizes excluded, escalate) |
 | 10 | Ingest pipeline + load RON — **BUILT**, dry-run verified; load needs `VOYAGE_API_KEY` + live DB | 2 KB | 8, 9 | — |
 | 11 | **Prove the brand fence** | 2 KB | 10 | |
-| 12 | Split webhook from worker via a queue | 3 Queue | 1 | **owner nod:** changes process model |
-| 13 | Build the worker process | 3 Queue | 12 | |
+| 12 | ~~Split webhook from worker via a queue~~ **DONE** | 3 Queue | 1 | **owner nod:** changes process model |
+| 13 | ~~Build the worker process~~ **DONE** | 3 Queue | 12 | |
 | 14 | Lead intake for all three inflows | 4 Intake | 7 | **owner:** campaign/source specifics |
-| 15 | Verify Sell.do labels exist in the mirror | 4 Intake | — | |
+| 15 | ~~Verify Sell.do labels exist in the mirror~~ **DONE** | 4 Intake | — | |
 | 16 | The suppression gate | 4 Intake | 14, 15 | **owner:** stage + label list |
 | 17 | Knock engine scheduler (day 0/3/10/25) | 5 Knock | 2, 3, 4, 13, 16 | **owner:** 4 approved templates |
 | 18 | Stop-on-reply + scheduler stand-down | 5 Knock | 17 | |
 | 19 | Dormancy + no-auto-restart guard | 5 Knock | 17 | |
-| 20 | Qualifier agent turn loop | 6 Agent | 11, 13 | |
-| 21 | Answer-before-ask turn structure | 6 Agent | 20 | |
+| 20 | ~~Qualifier agent turn loop~~ **DONE** | 6 Agent | 11, 13 | |
+| 21 | ~~Answer-before-ask turn structure~~ **DONE** | 6 Agent | 20 | |
 | 22 | Three gates + purpose lens + timeline | 6 Agent | 20 | **owner:** location line, config list |
-| 23 | The persuasion ladder | 6 Agent | 22 | |
-| 24 | Exit router — 3 terminals + 1 loop-back | 6 Agent | 17, 22 | |
-| 25 | Claims + commitment guardrails | 6 Agent | 20 | |
+| 23 | ~~The persuasion ladder~~ **DONE** | 6 Agent | 22 | |
+| 24 | ~~Exit router — 3 terminals + 1 loop-back~~ **DONE** | 6 Agent | 17, 22 | |
+| 25 | ~~Claims + commitment guardrails~~ **DONE** | 6 Agent | 20 | |
 | 26 | Qualified-lead card + group ping | 7 Handoff | 24 | **owner:** escalation destination |
-| 27 | Transcript storage for audit | 7 Handoff | 20 | |
+| 27 | ~~Transcript storage for audit~~ **DONE** | 7 Handoff | 20 | |
 | 28 | Corpus upload screen for sales | 8 | 10 | |
 | 29 | CAPI flywheel back to Meta | 9 | 6, 26 | only if 6 finds `ctwa_clid` |
 
