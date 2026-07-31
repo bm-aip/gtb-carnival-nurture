@@ -114,6 +114,40 @@ CREATE TABLE IF NOT EXISTS message_delivery (
 CREATE INDEX IF NOT EXISTS idx_delivery_phone ON message_delivery (phone);
 CREATE INDEX IF NOT EXISTS idx_delivery_status ON message_delivery (status, created_at);
 
+-- Tasks 23/24: per-conversation state.
+--
+-- The checklist lives here rather than on `leads` because a returning ghost must
+-- RESUME mid-checklist, never restart -- a buyer who already told us their budget
+-- must never be asked for it twice.
+--
+-- `asked` records which persuasion framing was used for each gate, so the bot can
+-- rephrase rather than repeat. `unreciprocated` counts consecutive turns where the
+-- bot asked and got no answer; at the limit a human is flagged WHILE THE BOT KEEPS
+-- ANSWERING -- flagging is not the same as giving up.
+CREATE TABLE IF NOT EXISTS conversations (
+    id SERIAL PRIMARY KEY,
+    lead_id INT NOT NULL REFERENCES leads(id),
+    brand_id TEXT NOT NULL,
+    checklist JSONB NOT NULL DEFAULT '{}'::jsonb,
+    asked JSONB NOT NULL DEFAULT '{}'::jsonb,
+    unreciprocated INT NOT NULL DEFAULT 0,
+    human_flagged_at TIMESTAMPTZ,
+    outcome TEXT,                      -- qualified | dead | escalated | null
+    outcome_at TIMESTAMPTZ,
+    handoff_sent_at TIMESTAMPTZ,
+    last_turn_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (lead_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conv_outcome ON conversations (outcome);
+
+-- The §10 audit guardrail: the day a buyer says "your bot told me X", you need the
+-- exact chunks and document versions that produced the reply. Stored per outbound
+-- turn rather than reconstructed later, because the corpus is versioned and will
+-- have moved on by the time anyone asks.
+ALTER TABLE message_log ADD COLUMN IF NOT EXISTS sources JSONB;
+
 -- Task 12: the job queue. The webhook writes here and returns; a worker reads.
 --
 -- `dedup_key` UNIQUE is the idempotency guarantee, enforced by the database rather
@@ -289,11 +323,13 @@ def mark_webhook_new(msg_id):
 
 
 def log_msg(lead_id, direction, msg_type, body, ok=True, detail=None,
-            provider_msg_id=None, fail_class=None):
+            provider_msg_id=None, fail_class=None, sources=None):
+    import json as _json
     x("""INSERT INTO message_log (lead_id, direction, msg_type, body, ok, detail,
-                                  provider_msg_id, fail_class)
-         VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
-      (lead_id, direction, msg_type, body, ok, detail, provider_msg_id, fail_class))
+                                  provider_msg_id, fail_class, sources)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+      (lead_id, direction, msg_type, body, ok, detail, provider_msg_id, fail_class,
+       _json.dumps(sources) if sources else None))
 
 
 def record_delivery(ev):

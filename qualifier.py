@@ -86,10 +86,20 @@ DECISION_SCHEMA = {
                                      "objection", "wants_human", "location_doubt"]}},
         "internal_note": {"type": "string",
                           "description": "one line for the salesperson. Never sent."},
+        "gate_asked": {"anyOf": [{"type": "string",
+                                  "enum": ["purpose", "location", "configuration",
+                                           "budget"]},
+                                 {"type": "null"}],
+                       "description": "which gate you asked about in this reply, "
+                                      "if any"},
+        "framing_used": {"anyOf": [{"type": "integer"}, {"type": "null"}],
+                         "description": "the index of the framing you used from "
+                                        "the list provided. Null if you did not ask."},
     },
     "required": ["reply", "action", "sources", "purpose", "location",
                  "configuration", "budget_inr", "timeline", "visit_day",
-                 "visit_time", "visit_venue", "flags", "internal_note"],
+                 "visit_time", "visit_venue", "flags", "internal_note",
+                 "gate_asked", "framing_used"],
     "additionalProperties": False,
 }
 
@@ -198,7 +208,7 @@ def _looks_factual(text):
     return bool(FACTUAL.search(text or ""))
 
 
-def run_turn(lead, message, history=None):
+def run_turn(lead, message, history=None, conv=None):
     """One turn. Returns the decision dict, never raises for model reasons.
 
     `lead` must carry `project` and `id`. The brand comes from that record and
@@ -251,6 +261,38 @@ def run_turn(lead, message, history=None):
     return _enforce(decision, chunks, lead)
 
 
+def _ladder(conv):
+    """What is already known, and which framings are still unspent.
+
+    Passing the REMAINING framings rather than all of them is what stops repeats:
+    the model cannot reuse one it never sees. Running out of framings is itself
+    information — three different ways of asking, three refusals.
+    """
+    if not conv:
+        return "CHECKLIST: nothing known yet. Ask about purpose first."
+    import conversation as convmod
+    known = conv.get("checklist") or {}
+    gate = convmod.next_gate(conv)
+    lines = ["ALREADY KNOWN (never ask for these again):"]
+    lines.append("  " + (", ".join(f"{k}={v}" for k, v in known.items()) or "nothing yet"))
+    if not gate:
+        lines.append("The checklist is COMPLETE. Do not ask another gate question.")
+        return "\n".join(lines)
+    remaining = convmod.unused_framings(conv, gate)
+    all_f = config.FRAMINGS.get(gate, [])
+    lines.append(f"\nNEXT GATE TO ASK: {gate}")
+    if remaining:
+        lines.append("Use ONE of these reasons, verbatim in spirit, and report its "
+                     "index in framing_used:")
+        for f in remaining:
+            lines.append(f"  [{all_f.index(f)}] {f}")
+    else:
+        lines.append("You have already asked this three different ways with no "
+                     "answer. Do NOT ask again. Just answer their question warmly "
+                     "and leave it.")
+    return "\n".join(lines)
+
+
 def _forced_escalation(why, chunks):
     return {
         "reply": "Let me have someone from our team come back to you on this.",
@@ -260,6 +302,7 @@ def _forced_escalation(why, chunks):
         "visit_time": None, "visit_venue": None,
         "flags": ["wants_human"],
         "internal_note": f"auto-escalated: {why}",
+        "gate_asked": None, "framing_used": None,
         "_forced": why,
     }
 

@@ -88,7 +88,7 @@ def daily_budget():
     return max(0, left)
 
 
-def _send(lead, msg_type, body=None, template=None, params=None):
+def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
     """THE one door. Every outbound message in the system leaves through here.
 
     Exactly one of:
@@ -138,7 +138,7 @@ def _send(lead, msg_type, body=None, template=None, params=None):
     # the id is absent the callback still lands, matched on phone instead.
     db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail,
                provider_msg_id=wati.extract_msg_id(detail),
-               fail_class=fail_class)
+               fail_class=fail_class, sources=sources)
 
     if ok:
         # Reset on success. The ceiling itself counts only failures since the last

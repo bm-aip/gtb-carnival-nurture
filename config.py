@@ -227,6 +227,84 @@ VISIT_VENUES = {
     },
 }
 
+# --- Persuasion ladder (design §7, task 23) ---
+#
+# Owner requirement: "the agent should be able to persuade them to answer in a
+# gentle, persuasive manner -- this is important."
+#
+# Three framings per gate, each carrying a reason that benefits THEM. The bot never
+# reuses a framing inside one conversation: asking the same question the same way
+# twice is what makes a bot feel like a form.
+#
+# ⚠️ SALES OWNS THIS WORDING, not engineering (design §7). It lives in config so it
+# is data rather than code; it moves to the `agents.framings` column when the
+# corpus-upload screen exists (task 28).
+FRAMINGS = {
+    "purpose": [
+        "so I can show you the homes that suit how you'd actually use the place",
+        "because a weekend home and a full-time home are very different picks here",
+        "so I don't waste your time on the wrong side of the project",
+    ],
+    "location": [
+        "so I can tell you honestly whether this stretch of ECR works for you",
+        "because the drive matters differently depending on where you're coming from",
+        "so I can be straight with you about whether we're the right fit",
+    ],
+    "configuration": [
+        "so I can tell you what's actually available rather than everything at once",
+        "because the apartments and the villas are quite different experiences",
+        "so I can point you at the two or three worth seeing",
+    ],
+    "budget": [
+        "only so I show you homes that are genuinely in range — nothing above it",
+        "so our team doesn't put you in front of the wrong homes on a site visit",
+        "just a rough band is plenty — it saves you being shown things you'd rule out",
+    ],
+}
+
+# After this many consecutive asks with no answer, flag a human. The bot KEEPS
+# ANSWERING -- this is a flag, not a hand-off. A buyer asking good questions while
+# dodging the checklist is engaged, not obstructive, and cutting them off would be
+# the wrong read.
+UNRECIPROCATED_LIMIT = int(os.environ.get("UNRECIPROCATED_LIMIT", "3"))
+
+# --- Handoff (design §8, task 24) ---
+#
+# ⚠️ THE DESIGN SAYS "WhatsApp group ping". THE OFFICIAL WHATSAPP CLOUD API CANNOT
+# SEND TO A GROUP -- it addresses individual numbers only. So the handoff goes to a
+# designated number, and the Wati Team Inbox is where the conversation itself gets
+# picked up. Flagged for the owner; the card content is unaffected either way.
+# Owner-supplied 2026-07-31: both qualified leads and escalations go to these two
+# numbers. Comma-separated, so adding or removing a recipient is an env change.
+#
+# The design flags qualified and escalated as OPPOSITE urgencies -- "good news, call
+# them" versus "we're stuck, rescue this" -- and warns that mixed into one
+# destination the rescues get missed. The owner has chosen one destination for now;
+# these are two separate variables precisely so they can be split later without a
+# code change.
+_DEFAULT_RECIPIENTS = "6374393030,9789988124"
+
+
+def _phones(raw):
+    """Comma-separated numbers -> normalised E.164-ish digits, deduped, order kept."""
+    import re as _r
+    out = []
+    for part in (raw or "").split(","):
+        d = _r.sub(r"\D", "", part)
+        if not d:
+            continue
+        if len(d) == 10:
+            d = "91" + d          # bare Indian mobile
+        elif d.startswith("0") and len(d) == 11:
+            d = "91" + d[1:]
+        if d not in out:
+            out.append(d)
+    return out
+
+
+HANDOFF_PHONES = _phones(os.environ.get("HANDOFF_PHONES", _DEFAULT_RECIPIENTS))
+ESCALATION_PHONES = _phones(os.environ.get("ESCALATION_PHONES", _DEFAULT_RECIPIENTS))
+
 # --- Budget gate (design §2) ---
 # The bot compares what a buyer says against these privately. It never quotes them,
 # and no price is in the corpus to quote -- the gate is internal arithmetic.

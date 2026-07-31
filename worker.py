@@ -28,8 +28,12 @@ import signal
 import threading
 import time
 
+import conversation
 import db
+import handoff
 import jobs
+import qualifier
+import sequencer
 
 log = logging.getLogger("worker")
 
@@ -46,13 +50,16 @@ def handle(job):
     raise ValueError(f"unknown job kind: {job['kind']}")
 
 
-def _handle_inbound(job):
-    """One customer message.
+HISTORY_TURNS = 20
 
-    The qualifier agent is task 20 and does not exist yet. Until it does this
-    records that the turn was reached and returns cleanly -- deliberately NOT a
-    silent no-op: an unanswered message must be visible in message_log, not
-    inferable from its absence.
+
+def _handle_inbound(job):
+    """One customer message: retrieve, think, reply, route.
+
+    Order matters and is not arbitrary. The reply is sent BEFORE the exit is
+    routed, because a qualified lead should read "a colleague will call you"
+    before the salesperson's phone buzzes -- and because a handoff that fails
+    must not swallow the buyer's answer.
     """
     payload = job["payload"] or {}
     phone = job.get("phone")
@@ -65,11 +72,44 @@ def _handle_inbound(job):
                    detail=f"phone={phone} worker: no lead")
         return
 
-    # TASK 20 GOES HERE: retrieve from the brand-fenced KB, apply the confidence
-    # floor, answer first, then advance the checklist by one, then send via
-    # sequencer._send(). Everything that call needs already exists.
-    db.log_msg(lead["id"], "in", "queued_turn", text,
-               detail="agent not built (task 20); message recorded, no reply sent")
+    if not qualifier.configured():
+        db.log_msg(lead["id"], "in", "queued_turn", text,
+                   detail="ANTHROPIC_API_KEY not set; message recorded, no reply")
+        return
+
+    conv = conversation.get_or_create(lead)
+
+    # Already finished. A lead that was marked dead or handed to a human must not
+    # be re-engaged by the bot -- that decision belongs to a person now.
+    if conv.get("outcome"):
+        db.log_msg(lead["id"], "in", "post_outcome", text,
+                   detail=f"conversation already {conv['outcome']}; needs a human")
+        return
+
+    turns = db.q("""SELECT direction, body FROM message_log
+                    WHERE lead_id=%s AND msg_type IN ('inbound','qualifier_turn')
+                    ORDER BY id DESC LIMIT %s""", (lead["id"], HISTORY_TURNS)) or []
+    history = list(reversed(turns))
+
+    decision = qualifier.run_turn(lead, text, history=history, conv=conv)
+
+    sent = sequencer._send(lead, "qualifier_turn", body=decision["reply"],
+                           sources=decision.get("sources"))
+    if not sent:
+        # The gate refused, or the send failed. Do NOT advance the checklist or
+        # route an exit off a message the buyer never received.
+        log.warning("lead %s: reply not delivered; state unchanged", lead["id"])
+        return
+
+    conv = conversation.record_turn(conv, decision,
+                                    decision.get("gate_asked"),
+                                    decision.get("framing_used"))
+
+    # Three asks, no answers. A person should look -- the bot keeps answering.
+    if conv.get("_newly_flagged"):
+        handoff.notify_human_flagged(lead, conv)
+
+    handoff.route(lead, conv, decision)
 
 
 def run_once():
