@@ -114,6 +114,33 @@ CREATE TABLE IF NOT EXISTS message_delivery (
 CREATE INDEX IF NOT EXISTS idx_delivery_phone ON message_delivery (phone);
 CREATE INDEX IF NOT EXISTS idx_delivery_status ON message_delivery (status, created_at);
 
+-- Task 12: the job queue. The webhook writes here and returns; a worker reads.
+--
+-- `dedup_key` UNIQUE is the idempotency guarantee, enforced by the database rather
+-- than by code, so two webhook deliveries racing each other cannot both enqueue.
+--
+-- Failed jobs are LEFT IN THE TABLE. Deleting them would hide the one failure in
+-- this system that a real person is waiting on: a customer message never answered.
+CREATE TABLE IF NOT EXISTS job_queue (
+    id BIGSERIAL PRIMARY KEY,
+    kind TEXT NOT NULL,
+    dedup_key TEXT UNIQUE,
+    phone TEXT,                        -- ordering key: one in-flight job per person
+    payload JSONB NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',   -- queued|running|done|failed
+    attempts INT NOT NULL DEFAULT 0,
+    max_attempts INT NOT NULL DEFAULT 5,
+    last_error TEXT,
+    run_after TIMESTAMPTZ NOT NULL DEFAULT now(),
+    claimed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_jobs_claimable ON job_queue (status, run_after, id);
+-- Partial index: the claim query's NOT EXISTS only ever looks at running rows.
+CREATE INDEX IF NOT EXISTS idx_jobs_running_phone ON job_queue (phone)
+    WHERE status = 'running';
+
 -- Phase 0 task 2: the opt-out ledger. Keyed on PHONE, never on lead id -- `leads`
 -- is UNIQUE (project, selldo_lead_id), so one human is routinely several rows and
 -- a lead-keyed opt-out would leak between them.

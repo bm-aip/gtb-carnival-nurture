@@ -21,6 +21,8 @@ import fatigue
 import failures
 import kb
 import embed
+import jobs
+import worker
 import wasender
 import wati
 import match
@@ -140,11 +142,34 @@ def _wati_inbound(payload, allow_create):
     if not db.mark_webhook_new(_mid):
         return jsonify({"ok": True, "dup": True})
     phone, text = wati.parse_inbound(payload)
-    if phone and text:
-        sequencer.handle_inbound(phone, text,
-                                 sender_name=wati.parse_sender_name(payload),
-                                 allow_create=allow_create)
-    return jsonify({"ok": True})
+    if not (phone and text):
+        return jsonify({"ok": True})
+
+    # SYNCHRONOUS, and deliberately so (task 12). Two things must happen before this
+    # request returns, because deferring either is unsafe:
+    #
+    #   1. opt-out detection -- a person who types STOP must be uncontactable from
+    #      this instant, not from whenever the queue drains.
+    #   2. recording the inbound -- last_inbound_at is what stop-on-reply and the
+    #      window-state logic read, and an inbound we failed to write down is
+    #      unrecoverable.
+    #
+    # Both are a regex and an insert. Neither needs a language model.
+    sequencer.handle_inbound(phone, text,
+                             sender_name=wati.parse_sender_name(payload),
+                             allow_create=allow_create)
+
+    # ASYNCHRONOUS: the thinking. An LLM turn takes seconds and WhatsApp wants an
+    # immediate 200 -- four slow turns in-process and the webhook stops answering,
+    # which Wati reads as a broken integration and retries into.
+    jobs.enqueue(jobs.KIND_INBOUND,
+                 {"text": text, "sender_name": wati.parse_sender_name(payload),
+                  "allow_create": allow_create},
+                 phone=phone,
+                 # Same id the dedup above used, so a Wati retry that slips past
+                 # processed_webhooks still cannot produce two replies.
+                 dedup_key=f"inbound:{_mid}" if _mid else None)
+    return jsonify({"ok": True, "queued": True})
 
 
 def _stash_wati(raw):
@@ -440,6 +465,16 @@ def admin_config_check():
     })
 
 
+@app.route("/api/queue")
+@auth
+def api_queue():
+    """Queue depth, and any job that gave up.
+
+    `recent_failures` is the important number: each one is a customer message that
+    was never answered, and nothing else in the system will surface that."""
+    return jsonify(jobs.stats())
+
+
 @app.route("/api/kb")
 @auth
 def api_kb():
@@ -538,6 +573,13 @@ kb.init_kb()
 
 if os.environ.get("DISABLE_SCHEDULER") != "1":
     start_scheduler()
+
+# The worker normally runs as its own Railway service (`python worker.py`). While
+# volume is small it can run inside this process instead -- identical loop, so the
+# split later is an environment change rather than a code change. Off by default:
+# running it here means a deploy restarts both at once and both share one container.
+if os.environ.get("WORKER_IN_PROCESS", "false").lower() in ("1", "true", "yes"):
+    worker.start_in_thread()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
