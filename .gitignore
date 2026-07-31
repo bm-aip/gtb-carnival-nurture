@@ -1,3 +1,8 @@
 .env
 __pycache__/
 *.pyc
+
+# Commercial figures. Deliberately NOT in git: history is permanent, and the RON
+# commercial rule is never-publish. The two numbers the budget gate needs live in
+# config as BUDGET_FLOOR / BUDGET_CEILING env vars instead.
+kb/*/pricing-internal.md

@@ -70,11 +70,14 @@ def run_matching():
             if ambiguous:
                 _escalate_if_stale(lead)
                 continue
+        # selected_date is no longer written here (Phase 0 task 1b). It carried a
+        # carnival day pulled off the Meta form; the bot must never record a visit
+        # day as if it were confirmed (POST-CARNIVAL-DESIGN §8 -- capture, never
+        # confirm). The column itself is left in place: dropping it would destroy
+        # the carnival's real attendance data for no benefit.
         db.x("""UPDATE leads SET phone=%s, meta_lead_id=%s, wa_state='queued',
-                                 selected_date=COALESCE(selected_date, %s),
                                  updated_at=now() WHERE id=%s""",
-             (best["phone"], best["meta_lead_id"], best.get("preferred_date"),
-              lead["id"]))
+             (best["phone"], best["meta_lead_id"], lead["id"]))
         db.log_msg(lead["id"], "out", "matched", None, ok=True,
                    detail=f"score={best_s:.2f} meta={best['meta_lead_id']}")
 

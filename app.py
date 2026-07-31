@@ -15,6 +15,14 @@ import db
 import selldo
 import meta
 import sequencer
+import sendgate
+import optout
+import fatigue
+import failures
+import kb
+import embed
+import jobs
+import worker
 import wasender
 import wati
 import match
@@ -55,7 +63,10 @@ def auth(f):
 @app.route("/")
 @auth
 def dashboard():
-    return render_template("dashboard.html", event=config.EVENT_NAME)
+    # No event name to display -- the carnival is over and EVENT_NAME is gone
+    # (Phase 0 task 1b). The dashboard header falls back to a system name until a
+    # per-project operations view replaces it.
+    return render_template("dashboard.html", event="Lead Engine")
 
 
 # ---------- webhook ----------
@@ -108,14 +119,57 @@ def _wati_inbound(payload, allow_create):
     # conversationId is deliberately NOT in this chain: it is stable per CONTACT,
     # not per message, so it would swallow every reply after a person's first.
     _mid = (_d.get("id") or _d.get("whatsappMessageId")) if isinstance(_d, dict) else None
+
+    # --- delivery callbacks (Phase 0 task 5) ---
+    # Checked BEFORE the inbound dedup, because the two need different dedup keys.
+    # sent, delivered and read callbacks all carry the SAME message id, so claiming
+    # the id once would keep only the first and throw the rest away -- which is the
+    # exact failure this task exists to fix. Status events dedup on id+status.
+    ev = wati.parse_status(payload)
+    if ev:
+        # An async failure is the COMMON case for a blocked recipient -- WhatsApp
+        # accepts the message, then fails it. Classifying it here is what lets it
+        # reach the retry ceiling (task 4); without this the most frequent
+        # recipient failure would never be counted.
+        if ev["status"] == "failed":
+            ev["fail_class"] = failures.classify(ev.get("reason") or ev.get("event_type"))
+        key = f"{ev['provider_msg_id']}:{ev['status']}" if ev["provider_msg_id"] else None
+        if key and not db.mark_webhook_new(key):
+            return jsonify({"ok": True, "dup": True})
+        db.record_delivery(ev)
+        return jsonify({"ok": True, "status": ev["status"]})
+
     if not db.mark_webhook_new(_mid):
         return jsonify({"ok": True, "dup": True})
     phone, text = wati.parse_inbound(payload)
-    if phone and text:
-        sequencer.handle_inbound(phone, text,
-                                 sender_name=wati.parse_sender_name(payload),
-                                 allow_create=allow_create)
-    return jsonify({"ok": True})
+    if not (phone and text):
+        return jsonify({"ok": True})
+
+    # SYNCHRONOUS, and deliberately so (task 12). Two things must happen before this
+    # request returns, because deferring either is unsafe:
+    #
+    #   1. opt-out detection -- a person who types STOP must be uncontactable from
+    #      this instant, not from whenever the queue drains.
+    #   2. recording the inbound -- last_inbound_at is what stop-on-reply and the
+    #      window-state logic read, and an inbound we failed to write down is
+    #      unrecoverable.
+    #
+    # Both are a regex and an insert. Neither needs a language model.
+    sequencer.handle_inbound(phone, text,
+                             sender_name=wati.parse_sender_name(payload),
+                             allow_create=allow_create)
+
+    # ASYNCHRONOUS: the thinking. An LLM turn takes seconds and WhatsApp wants an
+    # immediate 200 -- four slow turns in-process and the webhook stops answering,
+    # which Wati reads as a broken integration and retries into.
+    jobs.enqueue(jobs.KIND_INBOUND,
+                 {"text": text, "sender_name": wati.parse_sender_name(payload),
+                  "allow_create": allow_create},
+                 phone=phone,
+                 # Same id the dedup above used, so a Wati retry that slips past
+                 # processed_webhooks still cannot produce two replies.
+                 dedup_key=f"inbound:{_mid}" if _mid else None)
+    return jsonify({"ok": True, "queued": True})
 
 
 def _stash_wati(raw):
@@ -174,8 +228,105 @@ def api_summary():
                "meta_leads_error_RON", "meta_leads_error_ELEMENTS", "rate_capped_at"]}
     return jsonify({"day_counts": counts, "funnel": funnel, "errors": errors,
                     "paused": sequencer.paused(),
-                    "sends_last_hour": wati.sends_last_hour(),
-                    "event_dates": [d.isoformat() for d in config.EVENT_DATES]})
+                    # Master switch state, so "why is nothing sending?" is
+                    # answerable from the dashboard instead of the Railway env.
+                    "sends_enabled": sendgate.sends_enabled(),
+                    "sends_last_hour": wati.sends_last_hour()})
+
+
+@app.route("/api/fatigue")
+@auth
+def api_fatigue():
+    """Per-person message load. `?phone=` for one person, otherwise the heaviest.
+
+    `lifetime` is reported but never enforced -- the owner chose a resettable
+    counter over a hard lifetime ceiling, so this column exists to make a person
+    who has accumulated twenty messages across four resets visible rather than
+    invisible.
+    """
+    phone = request.args.get("phone")
+    if phone:
+        return jsonify(fatigue.snapshot(meta.normalize_phone(phone),
+                                        request.args.get("project")))
+    heaviest = db.q("""SELECT l.phone, l.project, count(*) AS proactive_sends,
+                              max(ml.ts) AS last_send
+                       FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+                       WHERE ml.direction='out' AND ml.ok
+                         AND ml.msg_type LIKE 'knock%'
+                       GROUP BY l.phone, l.project
+                       ORDER BY count(*) DESC LIMIT 50""")
+    resets = db.q("""SELECT phone, project, reason, knocks_before, created_at
+                     FROM journey_resets ORDER BY id DESC LIMIT 100""")
+    return jsonify({"limits": {"journey_max": config.KNOCK_MAX_PER_JOURNEY,
+                               "window_max": config.FATIGUE_MAX_PER_WINDOW,
+                               "window_days": config.FATIGUE_WINDOW_DAYS},
+                    "heaviest": heaviest, "recent_resets": resets})
+
+
+@app.route("/api/optouts")
+@auth
+def api_optouts():
+    rows = db.q("""SELECT phone, scope, project, matched, source, note, created_at
+                   FROM optouts ORDER BY id DESC LIMIT 500""")
+    counts = db.q("SELECT scope, count(*) AS n FROM optouts GROUP BY scope") or []
+    return jsonify({"counts": {r["scope"]: r["n"] for r in counts},
+                    "recent": rows})
+
+
+@app.route("/admin/optout", methods=["POST"])
+@auth
+def admin_optout():
+    """Record an opt-out by hand, or import one from a previous campaign.
+
+    Add-only. There is deliberately NO route that removes an opt-out: lifting one
+    is a manual database action by a human who has thought about it. An endpoint
+    that un-blocks people is the one mistake in this system that cannot be
+    apologised for after the fact.
+    """
+    j = request.get_json() or {}
+    phone = meta.normalize_phone(j.get("phone", ""))
+    if not phone:
+        return jsonify({"ok": False, "detail": "phone required"}), 400
+    scope = (j.get("scope") or "global").lower()
+    if scope not in (optout.GLOBAL, optout.PROJECT):
+        return jsonify({"ok": False, "detail": "scope must be global or project"}), 400
+    project = j.get("project")
+    if scope == optout.PROJECT and not project:
+        return jsonify({"ok": False, "detail": "project required for project scope"}), 400
+    created = optout.record(phone, scope, project=project,
+                            matched=j.get("matched"),
+                            source=j.get("source") or "human",
+                            note=j.get("note"))
+    affected = optout.apply_to_leads(phone, scope, project=project)
+    return jsonify({"ok": True, "new": created, "leads_suppressed": affected})
+
+
+@app.route("/api/delivery")
+@auth
+def api_delivery():
+    """What actually happened to our messages (Phase 0 task 5).
+
+    The carnival's "44% blocked" figure came off Wati's dashboard because this
+    system kept no record of its own. Tasks 3 and 4 set a fatigue cap and a retry
+    ceiling, and both thresholds should come from this endpoint's numbers rather
+    than from a guess.
+    """
+    hours = min(int(request.args.get("hours", 24)), 24 * 90)
+    recent = db.q("""SELECT phone, status, reason, event_type, event_ts, created_at
+                     FROM message_delivery
+                     ORDER BY id DESC LIMIT 200""")
+    unknown = db.q("""SELECT count(*) AS n FROM message_delivery
+                      WHERE status='unknown'""", one=True)
+    return jsonify({"rollup": db.delivery_rollup(hours),
+                    # Whose fault the failures were. A spike in `system` is an
+                    # alarm about US -- expired token, unapproved template -- and it
+                    # is the one class that never shows up as a blocked lead.
+                    "failures": failures.rollup(days=max(1, hours // 24)),
+                    # Unclassified events are a to-do list, not noise: each one is
+                    # a Wati event shape the parser does not know yet, kept with
+                    # its raw payload so the mapping can be corrected.
+                    "unknown_events": (unknown or {}).get("n", 0),
+                    "recent": recent})
 
 
 @app.route("/api/leads")
@@ -303,7 +454,46 @@ def admin_config_check():
         "max_sends_per_hour": config.MAX_SENDS_PER_HOUR,
         "send_batch_per_tick": config.SEND_BATCH_PER_TICK,
         "daily_send_cap": config.DAILY_SEND_CAP,
+        "send_enabled": sendgate.sends_enabled(),
+        "retry_max_recipient": config.RETRY_MAX_RECIPIENT,
+        "retry_max_transient": config.RETRY_MAX_TRANSIENT,
+        "knock_max_per_journey": config.KNOCK_MAX_PER_JOURNEY,
+        "fatigue_max_per_window": config.FATIGUE_MAX_PER_WINDOW,
+        "fatigue_window_days": config.FATIGUE_WINDOW_DAYS,
+        "embed_model": config.EMBED_MODEL,
+        "embed_dim": config.EMBED_DIM,
     })
+
+
+@app.route("/api/queue")
+@auth
+def api_queue():
+    """Queue depth, and any job that gave up.
+
+    `recent_failures` is the important number: each one is a customer message that
+    was never answered, and nothing else in the system will surface that."""
+    return jsonify(jobs.stats())
+
+
+@app.route("/api/kb")
+@auth
+def api_kb():
+    """Is the knowledge base actually available, and what is in it?
+
+    Answers the question "why is the bot escalating everything" without anyone
+    reading deploy logs -- the commonest cause will be a database user that cannot
+    CREATE EXTENSION, which is a vendor action rather than a code fix.
+    """
+    return jsonify(kb.stats())
+
+
+@app.route("/admin/embed-check")
+@auth
+def admin_embed_check():
+    """Confirms the embedding key works, the model name is real, and its dimension
+    matches config -- without touching the corpus. A wrong model name is otherwise
+    discovered halfway through an ingest."""
+    return jsonify(embed.probe())
 
 
 @app.route("/admin/wati-check")
@@ -319,6 +509,13 @@ def admin_wati_check():
 def admin_test_send():
     j = request.get_json() or {}
     phone = meta.normalize_phone(j.get("phone", ""))
+    # This route was the one way to reach a real person without passing the send
+    # gate. It now goes through the same door as everything else -- an admin
+    # convenience is not a reason for a message to skip opt-out and fatigue
+    # checks, and "it was only a test send" is not a defence to the recipient.
+    allowed, reason = sendgate.check(phone, "test", project=j.get("project"))
+    if not allowed:
+        return jsonify({"ok": False, "detail": f"blocked:{reason}"}), 409
     # Free-text test send: only DELIVERS if `phone` messaged this number within
     # the last 24h (WhatsApp session rule). Outside that window WhatsApp rejects
     # it, but the API response in `detail` still confirms token/URL wiring.
@@ -365,8 +562,24 @@ def start_scheduler():
 
 
 db.init_db()
+
+# Knowledge-base schema runs SEPARATELY and never raises. `CREATE EXTENSION vector`
+# needs a privilege the database user may not have, and the `vector` column type
+# does not exist until the extension does -- so folding this into db.init_db() would
+# mean a Railway instance without pgvector fails to boot the WEB APP, and the
+# webhook stops answering because of a knowledge-base problem. Outcome is recorded
+# in settings and readable at /api/kb.
+kb.init_kb()
+
 if os.environ.get("DISABLE_SCHEDULER") != "1":
     start_scheduler()
+
+# The worker normally runs as its own Railway service (`python worker.py`). While
+# volume is small it can run inside this process instead -- identical loop, so the
+# split later is an environment change rather than a code change. Off by default:
+# running it here means a deploy restarts both at once and both share one container.
+if os.environ.get("WORKER_IN_PROCESS", "false").lower() in ("1", "true", "yes"):
+    worker.start_in_thread()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))

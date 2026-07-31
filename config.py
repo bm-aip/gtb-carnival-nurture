@@ -1,5 +1,4 @@
 import os
-from datetime import date
 
 def _b(v): return str(v).lower() in ("1", "true", "yes", "on")
 
@@ -43,26 +42,71 @@ WATI_BASE = os.environ.get("WATI_BASE", "").rstrip("/")
 WATI_TOKEN = os.environ.get("WATI_TOKEN", "").replace("Bearer ", "").strip()
 WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
 
-# Template names as approved in Wati. Defaults match the copy handed to the
-# owner; override per-env if the approved names differ -- no code change needed.
-WATI_TEMPLATES = {
-    # Defaults = the correctly-variable-tagged templates owner confirmed in Wati
-    # (the *_final / *_1 versions). Override via env only if a different template
-    # gets approved instead.
-    "m1_ron":      os.environ.get("WATI_TPL_M1_RON", "gtb_m1_ron_final"),
-    "m1_elements": os.environ.get("WATI_TPL_M1_ELEMENTS", "gtb_m1_elements_1"),
-    "m2":          os.environ.get("WATI_TPL_M2", "gtb_m2_followup_final"),
-    "m3":          os.environ.get("WATI_TPL_M3", "gtb_m3_reminder"),
-    "m3_generic":  os.environ.get("WATI_TPL_M3_GENERIC", "gtb_m3_generic"),
-    "ack":         os.environ.get("WATI_TPL_ACK", "gtb_ack"),
+# --- Knock templates ---
+# The six carnival templates (gtb_m1_ron_final, gtb_m2_followup_final,
+# gtb_m3_reminder, ...) are REMOVED, Phase 0 task 1b. All six were carnival copy
+# -- an event that ended on 12 July -- so none could be reused for a nurture
+# knock. They are also unrecoverable as copy: WhatsApp templates are approved
+# per exact body text, so new copy needs new approval regardless.
+#
+# The replacement set is the amended 4-knock sequence (POST-CARNIVAL-DESIGN §6,
+# amended 2026-07-30): T1 lifestyle (day 0) · T2 location (day 3) · T3
+# low-density (day 10) · T6 visit invitation (day 25, rewritten to drop the
+# booking flow). Populated by task 17 once Meta approves them; env-overridable
+# so an approval-name change is not a code change.
+# Verified against the live Wati account 2026-07-31: all four are APPROVED.
+# Defaults are the real approved names, so the knock engine needs no env config to
+# work; override only if a template is replaced.
+KNOCK_TEMPLATES = {
+    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", "ron_nurture_01_lifestyle"),
+    "t2_location":    os.environ.get("WATI_TPL_T2", "ron_nurture_02_location"),
+    "t3_low_density": os.environ.get("WATI_TPL_T3", "ron_nurture_03_low_density"),
+    "t6_visit":       os.environ.get("WATI_TPL_T6", "ron_nurture_06_visit"),
 }
 
-EVENT_NAME = os.environ.get("EVENT_NAME", "GTB Carnival")
-EVENT_VENUE = os.environ.get("EVENT_VENUE", "GTB Lounge, EA Mall, Chennai")
-EVENT_MAPS_LINK = os.environ.get("EVENT_MAPS_LINK", "")
-EVENT_TIMING = os.environ.get("EVENT_TIMING", "All day")
-EVENT_DATES = [date.fromisoformat(d) for d in
-               os.environ.get("EVENT_DATES", "2026-07-10,2026-07-11,2026-07-12").split(",")]
+# Ghost re-opener (task 18/19). Someone who talked and then went quiet cannot be
+# sent the COLD sequence -- those templates introduce the project from scratch to a
+# person who already told us their budget, which reads as broken at exactly the
+# moment they are most likely to leave.
+#
+# ⚠️ PENDING approval as of 2026-07-31, and submitted as MARKETING rather than
+# UTILITY. Marketing carries the category gate that blocked ~44% of the carnival's
+# cold sends, so re-opener delivery will be worse than it needs to be. Worth
+# resubmitting as utility later -- it continues a conversation the customer started.
+REOPENER_TEMPLATE = os.environ.get("WATI_TPL_T7", "t7_reopener")
+
+# The `topic` variable is filled from a CLOSED LIST, never from the agent's own
+# words. An approved template plus a freely-generated variable is still a message we
+# are accountable for, and it is the one place a stray price or claim cannot be
+# retracted. Values are short, neutral, and contain no figure, date or commitment.
+#
+# "your enquiry" is the default and will be the commonest value: most ghosts go
+# quiet BEFORE saying anything specific.
+REOPENER_TOPICS = {
+    "apartments":   "the apartments",
+    "compact_2bhk": "the compact 2BHK apartments",
+    "2bhk":         "the 2BHK apartments",
+    "3bhk":         "the 3BHK apartments",
+    "villas":       "the villas",
+    "location":     "the location on ECR",
+    "sizes":        "the layouts and sizes",
+    "amenities":    "the amenities",
+    "lagoon":       "the lagoon and beach experience",
+    "default":      "your enquiry",
+}
+
+# --- Carnival event constants: REMOVED, Phase 0 task 1b (2026-07-30) ---
+# EVENT_NAME / EVENT_VENUE / EVENT_MAPS_LINK / EVENT_TIMING / EVENT_DATES are
+# gone. EVENT_DATES was the load-bearing constant of the whole old lifecycle:
+# reply parsing indexed into it BY POSITION (a reply of "1" meant carnival day
+# one) and three send guards compared against EVENT_DATES[-1]. Those guards were
+# what kept the system inert after 12 July -- SEND_ENABLED (below) now does that
+# job deliberately, which is why task 1a had to land before this deletion.
+#
+# `parser.py` is orphaned by this change: nothing imports it any more. Left on
+# disk rather than deleted so the old day-picker logic stays readable; safe to
+# remove whenever you like. Same for `scripts/smoke_test.py`, which exercises
+# carnival flows that no longer exist.
 
 import re as _re
 
@@ -127,6 +171,237 @@ WATI_PATH_TOKEN = os.environ.get("WATI_PATH_TOKEN", "").strip()
 # message is only safe on the authenticated webhook route.
 WALKIN_ENABLED = _b(os.environ.get("WALKIN_ENABLED", "false"))
 
+# --- Site visits (owner decision 2026-07-31, REVERSES "capture, never confirm") ---
+#
+# The bot now takes a day and a time and acknowledges it. The earlier rule was that
+# it must never confirm a slot; the owner's reasoning for changing it is that a
+# buyer who picks a day and gets no acknowledgement is left at a dead end, which is
+# a worse experience than the risk it was avoiding.
+#
+# WHAT THE BOT MAY SAY is bounded, and the boundary is the whole point: "booked, and
+# our team will call to confirm the timing and share directions." The bot has no
+# calendar, so an unqualified "confirmed" is a promise the company has not agreed to
+# keep -- and the failure mode is a buyer standing at a gate in Vadanemmeli on a
+# Saturday. This wording gives the buyer a real commitment while leaving the team
+# room to move an hour.
+VISIT_CONFIRMATION = "booked_team_confirms"
+
+# Availability. Tuesday is the sales team's weekly off; Monday mornings they are in
+# their weekly meeting, so Monday is afternoon-only.
+VISIT_DAYS = {
+    "mon": "afternoon",   # first half is the team's weekly meeting
+    "tue": None,          # weekly off -- never offer, and never accept
+    "wed": "full",
+    "thu": "full",
+    "fri": "full",
+    "sat": "full",
+    "sun": "full",
+}
+
+# Two venues, and the ORDER MATTERS.
+#
+# The site at Vadanemmeli is always offered first, because a site visit is the
+# definition of a win (design §2). The Experience Centre is NOT an equal option: it
+# is a distance-objection handler and a stepping stone. Offering it unprompted would
+# quietly convert site visits into mall visits, which is a downgrade the bot must
+# never make on its own.
+#
+# The intended ladder: someone worried about the drive sees the miniature model at
+# the Experience Centre during the week, and books the real site visit for the
+# weekend. The EC visit is a milestone, not the outcome.
+VISIT_VENUES = {
+    "site": {
+        "name": "the site at Vadanemmeli, ECR",
+        "priority": 1,
+        "offer": "always",
+    },
+    "experience_centre": {
+        "name": "the Experience Centre at Express Avenue mall",
+        "priority": 2,
+        # ONLY after the buyer raises distance or travel as a concern.
+        "offer": "on_distance_objection",
+        "note": ("Has a miniature model and a walkthrough of the RON experience. "
+                 "Same day availability rules as the site. Position it as a first "
+                 "look during the week, with the site visit at the weekend -- never "
+                 "as a replacement for seeing the site."),
+    },
+}
+
+# --- Persuasion ladder (design §7, task 23) ---
+#
+# Owner requirement: "the agent should be able to persuade them to answer in a
+# gentle, persuasive manner -- this is important."
+#
+# Three framings per gate, each carrying a reason that benefits THEM. The bot never
+# reuses a framing inside one conversation: asking the same question the same way
+# twice is what makes a bot feel like a form.
+#
+# ⚠️ SALES OWNS THIS WORDING, not engineering (design §7). It lives in config so it
+# is data rather than code; it moves to the `agents.framings` column when the
+# corpus-upload screen exists (task 28).
+FRAMINGS = {
+    "purpose": [
+        "so I can show you the homes that suit how you'd actually use the place",
+        "because a weekend home and a full-time home are very different picks here",
+        "so I don't waste your time on the wrong side of the project",
+    ],
+    "location": [
+        "so I can tell you honestly whether this stretch of ECR works for you",
+        "because the drive matters differently depending on where you're coming from",
+        "so I can be straight with you about whether we're the right fit",
+    ],
+    "configuration": [
+        "so I can tell you what's actually available rather than everything at once",
+        "because the apartments and the villas are quite different experiences",
+        "so I can point you at the two or three worth seeing",
+    ],
+    "budget": [
+        "only so I show you homes that are genuinely in range — nothing above it",
+        "so our team doesn't put you in front of the wrong homes on a site visit",
+        "just a rough band is plenty — it saves you being shown things you'd rule out",
+    ],
+}
+
+# After this many consecutive asks with no answer, flag a human. The bot KEEPS
+# ANSWERING -- this is a flag, not a hand-off. A buyer asking good questions while
+# dodging the checklist is engaged, not obstructive, and cutting them off would be
+# the wrong read.
+UNRECIPROCATED_LIMIT = int(os.environ.get("UNRECIPROCATED_LIMIT", "3"))
+
+# --- Handoff (design §8, task 24) ---
+#
+# ⚠️ THE DESIGN SAYS "WhatsApp group ping". THE OFFICIAL WHATSAPP CLOUD API CANNOT
+# SEND TO A GROUP -- it addresses individual numbers only. So the handoff goes to a
+# designated number, and the Wati Team Inbox is where the conversation itself gets
+# picked up. Flagged for the owner; the card content is unaffected either way.
+# Owner-supplied 2026-07-31: both qualified leads and escalations go to these two
+# numbers. Comma-separated, so adding or removing a recipient is an env change.
+#
+# The design flags qualified and escalated as OPPOSITE urgencies -- "good news, call
+# them" versus "we're stuck, rescue this" -- and warns that mixed into one
+# destination the rescues get missed. The owner has chosen one destination for now;
+# these are two separate variables precisely so they can be split later without a
+# code change.
+_DEFAULT_RECIPIENTS = "6374393030,9789988124"
+
+
+def _phones(raw):
+    """Comma-separated numbers -> normalised E.164-ish digits, deduped, order kept."""
+    import re as _r
+    out = []
+    for part in (raw or "").split(","):
+        d = _r.sub(r"\D", "", part)
+        if not d:
+            continue
+        if len(d) == 10:
+            d = "91" + d          # bare Indian mobile
+        elif d.startswith("0") and len(d) == 11:
+            d = "91" + d[1:]
+        if d not in out:
+            out.append(d)
+    return out
+
+
+HANDOFF_PHONES = _phones(os.environ.get("HANDOFF_PHONES", _DEFAULT_RECIPIENTS))
+ESCALATION_PHONES = _phones(os.environ.get("ESCALATION_PHONES", _DEFAULT_RECIPIENTS))
+
+# --- Budget gate (design §2) ---
+# The bot compares what a buyer says against these privately. It never quotes them,
+# and no price is in the corpus to quote -- the gate is internal arithmetic.
+#
+# Rupees, not crores, so there is no unit ambiguity at a comparison site.
+#
+# ⚠️ The floor was ₹1.5cr until 2026-07-31, when the owner's price sheet showed the
+# real entry price is ₹1.28cr. Budget is a HARD gate: a wrong floor sends qualified
+# buyers to Dead and suppresses them permanently, and produces no error and no
+# complaint -- you simply never hear from the people it discarded. Re-check this
+# whenever pricing moves.
+#
+# Only the FLOOR rejects. The ceiling is a signal for sales, not a filter: somebody
+# with more money than the top unit is a good problem, not an unqualified lead.
+BUDGET_FLOOR = int(os.environ.get("BUDGET_FLOOR", "12800000"))      # ₹1.28 cr
+BUDGET_CEILING = int(os.environ.get("BUDGET_CEILING", "55000000"))  # ₹5.5 cr
+
+# --- Knowledge base / RAG (task 8) ---
+# pgvector on the existing Railway Postgres -- no second datastore. The brand fence
+# is then a WHERE clause on the same database that already knows which project a
+# lead belongs to, rather than a distributed-consistency problem (design §11).
+#
+# EMBED_DIM must match the embedding model. It is baked into the column type
+# because HNSW indexing requires a fixed dimension, so changing model is a
+# RE-INDEX (drop chunks, re-embed), never an in-place edit. The model name is
+# stored on every chunk so a mismatch is detectable instead of silently wrong.
+#
+# Provider: VOYAGE (owner has a key from another project, 2026-07-31).
+# Chosen over Supabase's built-in gte-small for one specific reason: gte-small is
+# English-only (384 dims) and this audience writes Tanglish on WhatsApp -- "2bhk
+# irukka", "price enna", "ECR la epdi". Matching those to the right FAQ row IS the
+# retrieval step, so an English-only model would raise the escalation rate for no
+# saving; the corpus is ~100 chunks, so embedding cost is a rounding error either way.
+#
+# voyage-4-large, 1024 dims native. NOTE: the 3-series names (voyage-3-large) are
+# superseded -- do not reintroduce them.
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "voyage-4-large")
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
+# Provider caps a request at 1000 texts; stay well under so a retry is cheap.
+EMBED_BATCH = int(os.environ.get("EMBED_BATCH", "100"))
+
+# Retrieval over-fetch. With an HNSW index plus a `WHERE brand_id` filter, Postgres
+# can filter AFTER the index scan and return fewer than k rows for the brand. Ask
+# for more than we need, then trim. Corpora here are tens of documents, so the cost
+# is nil and the alternative is a silently short answer.
+RETRIEVE_K = int(os.environ.get("RETRIEVE_K", "6"))
+RETRIEVE_OVERFETCH = int(os.environ.get("RETRIEVE_OVERFETCH", "40"))
+
+# --- Retry ceiling (Phase 0, task 4) ---
+# Two ceilings, because not every failure is the recipient's fault.
+#
+# RETRY_MAX_RECIPIENT -- failures attributable to THIS PERSON (their number is not
+#     on WhatsApp, they have blocked us). Low, because each one is real evidence.
+# RETRY_MAX_TRANSIENT -- timeouts, 5xx, rate limits, and anything unrecognised.
+#     Higher, because these say nothing about the lead.
+#
+# Failures classed as SYSTEM (template not approved, bad token, 24h window shut)
+# count toward NEITHER. That preserves the original reasoning at sequencer.py's
+# old retry comment: while templates were pending approval every send failed for
+# reasons unrelated to the lead, and a strike rule would have killed good leads.
+RETRY_MAX_RECIPIENT = int(os.environ.get("RETRY_MAX_RECIPIENT", "3"))
+RETRY_MAX_TRANSIENT = int(os.environ.get("RETRY_MAX_TRANSIENT", "6"))
+RETRY_WINDOW_DAYS = int(os.environ.get("RETRY_WINDOW_DAYS", "30"))
+
+# --- Fatigue cap (Phase 0, task 3) ---
+# Owner decision 2026-07-30: a new reason RESETS the knock counter. Because "a new
+# reason" is loose and hard to police, that generosity is made safe by a second
+# ceiling that NOTHING can reset.
+#
+#   KNOCK_MAX_PER_JOURNEY -- resettable. The 4-knock sequence (day 0/3/10/25).
+#   FATIGUE_MAX_PER_WINDOW -- NOT resettable, ever. A rolling ceiling, so even an
+#       immediate reset cannot produce a burst. Matches the RON nurture plan's own
+#       guardrail: never more than two nurture messages in the same week.
+#
+# Both are counted from send history rather than held as stored numbers, so a
+# count cannot be forged -- only a journey's start marker moves, and that is
+# logged with a reason in journey_resets.
+KNOCK_MAX_PER_JOURNEY = int(os.environ.get("KNOCK_MAX_PER_JOURNEY", "4"))
+FATIGUE_WINDOW_DAYS = int(os.environ.get("FATIGUE_WINDOW_DAYS", "7"))
+FATIGUE_MAX_PER_WINDOW = int(os.environ.get("FATIGUE_MAX_PER_WINDOW", "2"))
+
+# --- Master send switch (Phase 0, task 1a) ---
+# Default FALSE. Nothing sends until this is deliberately turned on in the env.
+#
+# This exists because the system's current inertness is ACCIDENTAL: every send
+# loop skips because today is past the last carnival day (sequencer.py:185,
+# :337, :363). Removing that dead carnival wiring -- which task 1b does -- would
+# otherwise re-arm the sender as a side effect. The explicit switch has to be in
+# place before the accidental one is taken out.
+#
+# Distinct from GLOBAL_PAUSE: pause is an operator brake pulled during an
+# incident and expected to be toggled; this is a build-state assertion, flipped
+# once, when the new engine is ready to talk to real people.
+SEND_ENABLED = _b(os.environ.get("SEND_ENABLED", "false"))
+
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
@@ -135,11 +410,10 @@ MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 DAILY_SEND_CAP = int(os.environ.get("DAILY_SEND_CAP", "250"))
 GLOBAL_PAUSE_ENV = _b(os.environ.get("GLOBAL_PAUSE", "false"))
 
-# Anti-bulk-blast pacing (Balanced profile). Random pause between each bulk
-# outbound send; batch cap keeps a single tick bounded and spreads sends across
-# ticks. Acks (1:1 replies) are never jittered.
-SEND_JITTER_MIN_SEC = float(os.environ.get("SEND_JITTER_MIN_SEC", "5"))
-SEND_JITTER_MAX_SEC = float(os.environ.get("SEND_JITTER_MAX_SEC", "20"))
+# Batch cap per scheduler tick. Keeps one tick bounded and spreads a backlog across
+# ticks so /admin/poll-now returns promptly. Send JITTER was removed 2026-07-31: it
+# guarded against Wasender's ban-on-burst behaviour, which does not apply to the
+# official Cloud API.
 SEND_BATCH_PER_TICK = int(os.environ.get("SEND_BATCH_PER_TICK", "10"))
 
 DASH_USER = os.environ.get("DASH_USER", "admin")

@@ -1,12 +1,39 @@
-"""Sequencer: runs every SEQUENCER_TICK_MIN minutes (IST-aware)."""
-import hashlib
-import random
-import time
-from datetime import datetime, date, timedelta, timezone
+"""Sequencer: runs every SEQUENCER_TICK_MIN minutes (IST-aware).
+
+STATE AFTER PHASE 0 TASK 1b (2026-07-30): the carnival lifecycle is gone and the
+replacement engine is not built yet. What remains is deliberately a skeleton:
+
+  * the ONE send door (`_send`) with the safety gate in front of it
+  * the rolling-24h tier arithmetic and quiet hours, which are number-level
+    protections that survive the redesign unchanged
+  * inbound recording -- every inbound message is still matched to a lead and
+    written to `message_log`, so nothing arriving today is lost
+  * `tick()` as a no-op scaffold
+
+What was removed and where it goes:
+
+  | Removed                                   | Rebuilt by |
+  |-------------------------------------------|------------|
+  | M1/M2/M3 send loops, event-day guards     | task 17 (knock engine, day 0/3/10/25) |
+  | Carnival copy banks + body builders       | task 17 (approved templates, not code) |
+  | Day-picker reply parsing + ack            | nothing -- replies are never predefined; the qualifier reads them (task 20) |
+  | `welcome_body` / walk-in lead creation    | tasks 7 + 14 (intake stamps project from the ad or list) |
+  | `_detect_project` (brand from message text) | nothing -- rev 2 forbids it outright, see below |
+
+`_detect_project` is not coming back. It read the brand out of the customer's own
+message text, and the customer controls that string. Rev 2 requires `project` to
+be stamped from the ad or the source list at ingestion and never inferred from
+what someone types -- that stamp is the brand fence the whole KB ring-fence rests
+on. It was only ever reachable with WALKIN_ENABLED=true, which has always
+defaulted false, so removing it changes no live behaviour.
+"""
+from datetime import datetime, timedelta, timezone
 import config
 import db
 import wati
-import parser as reply_parser
+import sendgate
+import optout
+import failures
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -15,477 +42,181 @@ def now_ist():
     return datetime.now(IST)
 
 
-def _fmt(d: date):
-    return d.strftime("%A %d %B")  # Friday 10 July
-
-
 BRAND = {"RON": "Republic Of Nature", "ELEMENTS": "Elements Senior Living"}
-
-# Tappable poll (rendered by Wasender) + the reliable text fallback ("1/2/3").
-# Poll option text matches parser weekday tokens (Fri/Sat/Sun), so a tap round-
-# trips exactly like a typed "1/2/3".
-DAY_LINES = ("1\ufe0f\u20e3 Fri 10 July\n"
-             "2\ufe0f\u20e3 Sat 11 July\n"
-             "3\ufe0f\u20e3 Sun 12 July")
-REPLY_HINT = "_Just reply 1, 2 or 3._"
-DAY_POLL_Q = "Which day will you visit?"
-DAY_POLL_OPTS = ["Fri 10 July", "Sat 11 July", "Sun 12 July"]
-
-# ---------------------------------------------------------------------------
-# Copy variation (anti-bulk-blast). Only the "soft" wrapper sentences swap;
-# every FACT (dates, venue, savings line, reply instruction, entry-pass line)
-# is fixed in the assembly below and never varies. Which option a given lead
-# gets is deterministic on their lead id, so one person always sees one
-# consistent version while different people scatter across wordings.
-# Phrase banks approved by owner 7 July 2026.
-# ---------------------------------------------------------------------------
-V = {
-    "ron_greet":   ["Hi {name}!", "Hello {name}!", "Hi {name}, hope you're doing well \u2014"],
-    "ron_thanks":  ["Thank you for your interest in Republic Of Nature.",
-                    "Thanks so much for your interest in Republic Of Nature.",
-                    "Great to see your interest in Republic Of Nature."],
-    "ron_invite":  ["You're invited to the {event}",
-                    "We'd love to welcome you to the {event}",
-                    "Come be our guest at the {event}"],
-    # Greeting + org identity combined (avoids a double "greetings").
-    "el_greet":    ["Hello {name}, greetings from Elements Senior Living.",
-                    "Dear {name}, warm greetings from Elements Senior Living.",
-                    "Hello {name}, a warm hello from Elements Senior Living."],
-    "el_invite":   ["We'd be delighted to meet you at the {event}",
-                    "We'd be glad to welcome you to the {event}",
-                    "It would be our pleasure to host you at the {event}"],
-    "confirm_close": ["we look forward to seeing you!", "we can't wait to welcome you!"],
-    "greet":       ["Hi {name},", "Hello {name},", "Hi {name} \u2014"],
-    "m2_checkin":  ["checking in from {brand}", "following up from {brand}",
-                    "reaching out again from {brand}"],
-    "m2_want":     ["we'd love to have you at the {event} this weekend",
-                    "we'd be glad to see you at the {event} this weekend"],
-    "m3_remind":   ["reminder from {brand}", "a quick reminder from {brand}"],
-    "m3_lookfwd":  ["we look forward to seeing you", "we're looking forward to seeing you"],
-    "close":       ["See you there!", "Looking forward to it!", "See you soon!"],
-    "gen_invite":  ["we'd love to meet you", "we'd be glad to see you", "do drop by"],
-    "gen_close":   ["See you there!", "Looking forward to it!"],
-    "ack_open":    ["Noted", "Perfect", "Wonderful"],
-}
-
-
-def _pick(lead, slot):
-    """Deterministic per-lead choice from bank V[slot]. Stable across process
-    restarts (hashlib, not the salted built-in hash) so a re-sent message keeps
-    the same wording. Returns the raw template (caller does {name}/{brand}/... )."""
-    opts = V[slot]
-    if len(opts) == 1:
-        return opts[0]
-    seed = f"{lead.get('id', '')}:{slot}".encode()
-    idx = int(hashlib.md5(seed).hexdigest(), 16) % len(opts)
-    return opts[idx]
-
-
-def m1_body(lead, combined=False):
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    venue = config.EVENT_VENUE
-    ev = config.EVENT_NAME
-    if lead["project"] == "RON":
-        greet = _pick(lead, "ron_greet").format(name=name)
-        thanks = _pick(lead, "ron_thanks")
-        invite = _pick(lead, "ron_invite").format(event=ev)
-        intro = (f"{greet}\n\n{thanks}\n\n{invite}.\n"
-                 f"\U0001F389 Carnival savings up to \u20b987L* \u2014 no registration fees, no pre-EMI.\n"
-                 f"\U0001F4CD {venue}\n\U0001F5D3\ufe0f 10, 11 & 12 July")
-    else:
-        greet = _pick(lead, "el_greet").format(name=name)
-        invite = _pick(lead, "el_invite").format(event=ev)
-        intro = (f"{greet}\n\nThank you for your interest in Madhuram, Vandalur.\n\n"
-                 f"{invite}.\n\U0001F4CD {venue}\n\U0001F5D3\ufe0f 10, 11 & 12 July")
-    if lead.get("selected_date"):
-        # Form already captured their preferred day: confirm, don't re-ask
-        close = _pick(lead, "confirm_close")
-        body = intro + (f"\n\nYou've chosen {_fmt(lead['selected_date'])} \u2014 {close}\n\n"
-                        f"If you'd like to change the day:\n{DAY_LINES}")
-    else:
-        body = intro + f"\n\nWhich day will you visit?\n{DAY_LINES}\n\n{REPLY_HINT}"
-    if combined:
-        body += f"\n\n\U0001F4CD Location: {config.EVENT_MAPS_LINK}\nOpen all day."
-    return body
-
-
-def m2_body(lead):
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    brand = BRAND[lead["project"]]
-    greet = _pick(lead, "greet").format(name=name)
-    checkin = _pick(lead, "m2_checkin").format(brand=brand)
-    want = _pick(lead, "m2_want").format(event=config.EVENT_NAME)
-    return (f"{greet}\n\n{checkin} \u2014 {want}.\n\U0001F4CD {config.EVENT_VENUE}\n\n"
-            f"Which day suits you?\n{DAY_LINES}\n\n{REPLY_HINT}")
-
-
-def m3_body(lead):
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    brand = BRAND[lead["project"]]
-    d = lead["selected_date"]
-    when = "today" if d == now_ist().date() else f"tomorrow, {_fmt(d)}"
-    greet = _pick(lead, "greet").format(name=name)
-    remind = _pick(lead, "m3_remind").format(brand=brand)
-    lookfwd = _pick(lead, "m3_lookfwd")
-    close = _pick(lead, "close")
-    return (f"{greet}\n\n{remind}: {lookfwd} {when} at {config.EVENT_VENUE}.\nOpen all day.\n\n"
-            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
-            f"Show this message at the entrance as your entry pass.\n{close}")
-
-
-def m3_generic_body(lead):
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    brand = BRAND[lead["project"]]
-    greet = _pick(lead, "greet").format(name=name)
-    invite = _pick(lead, "gen_invite")
-    close = _pick(lead, "gen_close")
-    return (f"{greet}\n\nThe {config.EVENT_NAME} by {brand} runs this "
-            f"Friday to Sunday (10\u201312 July) at {config.EVENT_VENUE}, all day.\n\n"
-            f"Walk in on any day \u2014 {invite}.\n\n"
-            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
-            f"Show this message at the entrance as your entry pass.\n{close}")
-
-
-def ack_body(lead):
-    opener = _pick(lead, "ack_open")
-    close = _pick(lead, "close")
-    return (f"{opener} \u2014 see you on {_fmt(lead['selected_date'])} at {config.EVENT_VENUE}.\n\n"
-            f"\U0001F4CD Location: {config.EVENT_MAPS_LINK}\n\n"
-            f"Show this message at the entrance as your entry pass.\n{close}")
 
 
 def paused():
-    return (db.get_setting("global_pause", "false") == "true") or config.GLOBAL_PAUSE_ENV
+    """Kept as the dashboard's read (app.py). The authoritative implementation
+    lives in sendgate so there is one definition of "are we allowed to send",
+    not two that can drift apart."""
+    return sendgate.paused()
 
 
-# Quiet hours: 19:30 -> 08:00 IST. During this window we hold BACKLOG proactive
-# sends (old leads sitting in the queue, plus all M2/M3 follow-ups) so nobody
-# gets a cold marketing blast late at night. Two exemptions:
-#   - Fresh M1: a lead that just arrived via the Meta poll (created within the
-#     last hour) still gets its first message immediately -- they acted seconds
-#     ago, so an instant reply reads as a system response, not a night blast.
-#   - Acks: 1:1 replies to a lead's own tap, sent from handle_inbound (not here).
+# Quiet hours: 19:30 -> 08:00 IST. Held for the knock engine to consult (task
+# 17): a cold nurture knock must never land late at night. Kept out of
+# sendgate.check() on purpose -- quiet hours are a property of the KIND of
+# message, not of the person, and a live reply inside an open 24h window is
+# rightly exempt. sendgate holds the person-level rules only.
 QUIET_START = (19, 30)   # IST hour, minute
 QUIET_END = (8, 0)
-FRESH_SECONDS = 3600     # a lead created within this window counts as "fresh"
 
 
-def _quiet_now(n):
+def quiet_now(n=None):
+    n = n or now_ist()
     t = (n.hour, n.minute)
     return t >= QUIET_START or t < QUIET_END
 
 
-def _is_fresh(lead, n):
-    ca = lead.get("created_at")
-    if not ca:
-        return False
-    return (n - ca.astimezone(IST)).total_seconds() <= FRESH_SECONDS
-
-
-def today_in_event_window():
-    """Is the carnival still on? Guards the walk-in welcome: someone who messages
-    the number the week after should not be invited to an event that has ended.
-    tick() applies the same rule to M1/M2 via `today > last_event_day`."""
-    return now_ist().date() <= config.EVENT_DATES[-1]
-
-
 def _daily_sends():
-    """Count PROACTIVE outbound sends (m1/m2/m3) in the last rolling 24h. This
-    is what Meta's messaging tier limits -- each is a business-initiated
-    conversation. Acks are excluded: they reply inside a conversation the lead
-    already opened, so they don't consume the tier. Only ok=TRUE sends count, so
-    failed attempts never eat the daily allowance."""
+    """Count PROACTIVE outbound sends in the last rolling 24h. This is what
+    Meta's messaging tier limits -- each is a business-initiated conversation.
+    Session replies inside a window the customer opened are excluded: they do not
+    consume the tier. Only ok=TRUE rows count, so neither failed attempts nor
+    gate-blocked sends ever eat the daily allowance."""
     r = db.q("""SELECT count(*) AS n FROM message_log
-                WHERE direction='out' AND ok AND msg_type IN ('m1','m2','m3')
+                WHERE direction='out' AND ok AND msg_type LIKE 'knock%'
                 AND ts > now() - interval '24 hours'""", one=True)
     return r["n"] if r else 0
 
 
-def _template_for(lead, msg_type):
-    """Map a sequencer message type to (template_name, params) for Wati.
-
-    Returns None for types that go as free session text (acks -- always inside
-    the 24h window opened by the customer's own reply, so no template needed).
-    Proactive cold sends (m1/m2/m3/m3_generic) MUST be templates -- WhatsApp
-    forbids cold free text. Param order matches the approved template's
-    {{1}},{{2}},{{3}} slots; change a template's variables -> update here."""
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    proj = lead["project"]
-    brand = BRAND[proj]
-    T = config.WATI_TEMPLATES
-    if msg_type == "m1":
-        key = T["m1_ron"] if proj == "RON" else T["m1_elements"]
-        return key, [name]                          # {{1}} name
-    if msg_type == "m2":
-        return T["m2"], [name, brand]               # {{1}} name, {{2}} brand
-    if msg_type == "m3":
-        d = lead["selected_date"]
-        when = "today" if d == now_ist().date() else f"tomorrow, {_fmt(d)}"
-        return T["m3"], [name, brand, when]         # {{1}} name {{2}} brand {{3}} when
-    if msg_type == "m3_generic":
-        return T["m3_generic"], [name, brand]       # {{1}} name, {{2}} brand
-    return None                                     # ack -> session text
+def daily_budget():
+    """How many proactive sends are left against the number's tier allowance.
+    Used by the knock engine's scheduler (task 17)."""
+    left = config.DAILY_SEND_CAP - _daily_sends()
+    if left <= 0:
+        db.set_setting("daily_capped_at", now_ist().isoformat())
+    return max(0, left)
 
 
-def _send(lead, msg_type, body, jitter=True):
-    if paused():
+def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
+    """THE one door. Every outbound message in the system leaves through here.
+
+    Exactly one of:
+      * `template` + `params` -> approved WhatsApp template. Required for any
+        cold/proactive send; WhatsApp forbids cold free text.
+      * `body`                -> free session text. Only delivers inside the 24h
+        window the customer opened by messaging us.
+
+    The template NAME is now passed in by the caller rather than looked up from a
+    hardcoded map. The old code resolved `msg_type` against six carnival template
+    names in config, which coupled the send path to one campaign's copy; the
+    knock engine and the qualifier need different sets, and a lookup table would
+    have to grow a branch per campaign forever.
+
+    The four Phase 0 safety rules live inside sendgate.check(), not here, so this
+    call site does not change again as tasks 2-4 land.
+    """
+    allowed, reason = sendgate.check(lead.get("phone"), msg_type,
+                                     project=lead.get("project"))
+    if not allowed:
+        # Logged, not silently dropped: a blocked send is a fact worth counting.
+        # ok=False keeps it out of the rate/tier arithmetic, which sums ok=TRUE.
+        db.log_msg(lead["id"], "out", msg_type, body, ok=False, detail=f"blocked:{reason}")
         return False
     if not wati.rate_ok():
         db.set_setting("rate_capped_at", now_ist().isoformat())
         return False
-    # Human-like pause before bulk outbound so back-to-back sends don't read as
-    # a machine burst. Acks (1:1 replies) pass jitter=False and go immediately.
-    if jitter and config.SEND_JITTER_MAX_SEC > 0:
-        lo = min(config.SEND_JITTER_MIN_SEC, config.SEND_JITTER_MAX_SEC)
-        time.sleep(random.uniform(lo, config.SEND_JITTER_MAX_SEC))
-    # Proactive stages (m1/m2/m3/m3_generic) send as approved templates; acks
-    # (no template mapping) go as free session text inside the reply window.
-    # `body` is still logged so the dashboard shows readable copy per send.
-    tpl = _template_for(lead, msg_type)
-    if tpl:
-        template_name, params = tpl
-        ok, detail = wati.send_template(lead["phone"], template_name, params)
+
+    # No send jitter. It was defensive cover for Wasender -- an unofficial
+    # automation bridge, where a burst of identical outbounds reads as a bot and
+    # gets the number banned. On the official WhatsApp Cloud API via Wati, bursts
+    # are not a ban signal: the messaging tier is the real constraint and it is
+    # enforced explicitly by the provider, which DAILY_SEND_CAP and
+    # MAX_SENDS_PER_HOUR already respect. Sleeping bought nothing and delayed
+    # every send. (Owner, 2026-07-31.)
+    if template:
+        ok, detail = wati.send_template(lead["phone"], template, params)
     else:
         ok, detail = wati.send_text(lead["phone"], body)
-    db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail)
-    if not ok:
-        # Suppress ONLY on a clearly per-lead permanent error (number not on
-        # WhatsApp). We deliberately do NOT suppress on the attempt count: while
-        # templates are still PENDING every send fails for a reason that has
-        # nothing to do with the lead, and a 3-strike rule would wrongly kill
-        # off good leads. Such failures just keep their state and retry once the
-        # template is approved. `detail` is matched loosely across Wati/WhatsApp
-        # phrasings for an invalid/nonexistent recipient.
-        attempts = (lead.get("send_attempts") or 0) + 1
-        d = (detail or "").lower()
-        permanent = any(s in d for s in
-                        ("does not exist", "not a valid whatsapp",
-                         "invalid whatsapp number", "not a whatsapp"))
-        db.x("UPDATE leads SET send_attempts=%s, updated_at=now() WHERE id=%s",
-             (attempts, lead["id"]))
-        if permanent:
-            db.x("UPDATE leads SET wa_state='invalid', suppressed=TRUE, updated_at=now() WHERE id=%s",
+    # Classify the failure before logging it, so the retry ceiling (task 4) can
+    # count only the failures that are actually about this recipient. Successes
+    # carry no class.
+    fail_class = None if ok else failures.classify(detail)
+
+    # Store the provider's message id alongside the send so a delivery callback
+    # (task 5) can be joined back to the message that caused it. Best-effort: if
+    # the id is absent the callback still lands, matched on phone instead.
+    db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail,
+               provider_msg_id=wati.extract_msg_id(detail),
+               fail_class=fail_class, sources=sources)
+
+    if ok:
+        # Reset on success. The ceiling itself counts only failures since the last
+        # successful send, so this is bookkeeping for the dashboard rather than the
+        # mechanism -- but leaving a stale attempt count on a working number reads
+        # as a problem that no longer exists.
+        if lead.get("send_attempts"):
+            db.x("UPDATE leads SET send_attempts=0, updated_at=now() WHERE id=%s",
                  (lead["id"],))
-    return ok
+        return True
 
+    db.x("UPDATE leads SET send_attempts=%s, updated_at=now() WHERE id=%s",
+         ((lead.get("send_attempts") or 0) + 1, lead["id"]))
 
-def _send_poll(lead, msg_type, jitter=True):
-    """No-op under Wati. On official WhatsApp the day-picker is quick-reply
-    buttons baked INTO the approved M1/M2 templates, so they render with the
-    template send in _send -- there is no separate poll message. Kept as a stub
-    so tick()'s call sites stay unchanged; a tapped button returns through the
-    webhook as its label text ('Fri 10 July') and the reply parser handles it
-    exactly like a typed '1/2/3'."""
-    return True
+    # Suppress on the FIRST hard recipient failure rather than after three. A
+    # number that is not on WhatsApp will never become one, so spending two more
+    # attempts to confirm it only wastes sends and buries real failures in noise.
+    # Everything else -- transient and system failures -- is left to the ceiling in
+    # sendgate, which is what stops our own unapproved template from killing off a
+    # good lead.
+    if failures.is_hard_recipient_failure(detail):
+        db.x("""UPDATE leads SET wa_state='invalid', suppressed=TRUE, updated_at=now()
+                WHERE id=%s""", (lead["id"],))
+    return False
 
 
 def tick():
-    n = now_ist()
-    today = n.date()
-    last_event_day = config.EVENT_DATES[-1]
-    day_before_first = config.EVENT_DATES[0] - timedelta(days=1)   # July 9
+    """Scheduled pass. Currently a no-op by design.
 
-    # Quiet hours (19:30-08:00 IST): hold backlog + all M2/M3, but let fresh M1
-    # (just-arrived leads) through. Acks fire from the webhook, unaffected.
-    quiet = _quiet_now(n)
+    The carnival send loops that used to live here are deleted (task 1b) and the
+    knock-engine scheduler that replaces them is task 17, which is blocked on
+    Phase 0 tasks 2, 3, 4 and on the suppression gate (task 16). Nothing may be
+    scheduled to send before the interlocks that bound it exist.
 
-    # Bounded send budget per tick: keeps one tick short (jitter can make each
-    # send take seconds) and spreads a backlog across ticks -> more human, and
-    # /admin/poll-now returns without hanging. Remaining leads picked next tick.
-    # Also clamp to the rolling-24h tier allowance (DAILY_SEND_CAP - already
-    # sent) so a big backlog never overruns the WhatsApp number's daily limit:
-    # once the day's 250 are gone, budget is 0 and everything holds until the
-    # 24h window rolls forward. Acks are excluded from the count, so replies
-    # still flow after the cap is hit.
-    day_left = config.DAILY_SEND_CAP - _daily_sends()
-    if day_left <= 0:
-        db.set_setting("daily_capped_at", now_ist().isoformat())
-    budget = max(0, min(config.SEND_BATCH_PER_TICK, day_left))
-
-    # ---- M3 rules ----  (runs FIRST: a venue reminder to someone who committed
-    # to a day outranks both a cold follow-up and a fresh invite. Every loop
-    # draws on the same per-tick budget and returns outright when it is spent,
-    # so on a busy event morning whichever loop runs first is the one that sends.
-    # A backlog of new invites must never starve the people already attending.)
-    # (a) evening before selected date, from 18:00 IST
-    # (b) selected date == today (lead picked same-day): send from 08:00 IST,
-    #     unless M1 went out today (combined M1 + ack already carried the venue)
-    # m1_sent_at NOT NULL is load-bearing: a lead promoted straight from a Meta
-    # form can arrive with selected_date already filled from the form and no M1
-    # yet. Without this guard the reminder would reach someone we never invited.
-    for lead in db.q("""SELECT * FROM leads WHERE selected_date IS NOT NULL
-                        AND NOT suppressed AND m3_sent_at IS NULL
-                        AND m1_sent_at IS NOT NULL"""):
-        if budget <= 0:
-            return
-        if quiet:
-            break   # M3 reminder is a backlog send -- held during quiet hours
-        d = lead["selected_date"]
-        m1_today = bool(lead["m1_sent_at"] and lead["m1_sent_at"].astimezone(IST).date() == today)
-        send_now = ((d - timedelta(days=1) == today and n.hour >= 18) or
-                    (d == today and n.hour >= 8 and not m1_today))
-        if send_now and _send(lead, "m3", m3_body(lead)):
-            budget -= 1
-            db.x("UPDATE leads SET m3_sent_at=now(), updated_at=now() WHERE id=%s",
-                 (lead["id"],))
-
-    # ---- M1 for queued leads ----
-    for lead in db.q("""SELECT * FROM leads WHERE wa_state='queued'
-                        AND NOT suppressed AND phone IS NOT NULL"""):
-        if budget <= 0:
-            return
-        if today > last_event_day:
-            continue
-        # In quiet hours only fresh (just-arrived) leads send; backlog waits for
-        # 08:00. Outside quiet hours everyone sends.
-        if quiet and not _is_fresh(lead, n):
-            continue
-        combined = (today >= day_before_first)  # late qualifier: fold venue into M1
-        if _send(lead, "m1", m1_body(lead, combined=combined)):
-            budget -= 1
-            new_state = "date_selected" if lead.get("selected_date") else "m1_sent"
-            db.x("UPDATE leads SET wa_state=%s, m1_sent_at=now(), updated_at=now() WHERE id=%s",
-                 (new_state, lead["id"]))
-            if not lead.get("selected_date"):   # date-ask -> offer tappable poll
-                _send_poll(lead, "m1_poll")
-
-    # ---- M2: 24h after M1, no reply, no date ----
-    if not config.M2_ENABLED:
-        return
-    for lead in db.q("""SELECT * FROM leads WHERE wa_state='m1_sent' AND NOT suppressed
-                        AND selected_date IS NULL AND last_inbound_at IS NULL
-                        AND m1_sent_at < now() - interval '24 hours'
-                        AND m2_sent_at IS NULL"""):
-        if budget <= 0:
-            return
-        if quiet:
-            break   # M2 is a backlog follow-up -- never sent during quiet hours
-        if today > last_event_day:
-            continue
-        if _send(lead, "m2", m2_body(lead)):
-            budget -= 1
-            db.x("UPDATE leads SET wa_state='m2_sent', m2_sent_at=now(), updated_at=now() WHERE id=%s",
-                 (lead["id"],))
-            _send_poll(lead, "m2_poll")
-
-    # No generic M3 to no-day leads: owner chose not to remind non-responders the
-    # night before (no gtb_m3_generic template approved). Leads who never pick a
-    # day simply get no further message.
-
-
-def _detect_project(text):
-    """Which brand did this walk-in come for?
-
-    The landing-page button opens WhatsApp with a pre-filled sentence naming the
-    brand. That sentence IS the routing signal -- there is nothing else to go on,
-    since a walk-in has no Sell.do row and no Meta form. The visitor can delete
-    it before sending, so returning None is an expected outcome, not an error:
-    the caller then hands them to a human rather than guessing a brand and
-    addressing them by the wrong project's name.
+    Left as a live scheduled call rather than unhooked from APScheduler so the
+    process model, the lock in app.py and the /admin/poll-now path stay exercised
+    -- when task 17 fills this in, the plumbing around it is already known good.
     """
-    t = (text or "").lower()
-    if "republic of nature" in t or "republic" in t:
-        return "RON"
-    if "elements senior living" in t or "elements" in t:
-        return "ELEMENTS"
-    return None
-
-
-def welcome_body(lead):
-    """First reply to someone who messaged US first.
-
-    Sent as free session text, never a template: their message opened a 24h
-    WhatsApp service window, so this costs no template, consumes none of the
-    250/day business-initiated tier, and is exempt from the MARKETING gate that
-    Meta uses to block our cold sends. Mirrors m1_body's facts (dates, venue,
-    reply instruction) so a walk-in and a Meta lead see the same event.
-    """
-    name = (lead.get("name") or "").split(" ")[0] or "there"
-    brand = BRAND[lead["project"]]
-    loc = f"\n\U0001F4CD {config.EVENT_MAPS_LINK}" if config.EVENT_MAPS_LINK else ""
-    return (f"Hi {name}! Thanks for reaching out about the {config.EVENT_NAME} "
-            f"from {brand}.\n\n"
-            f"We're at {config.EVENT_VENUE} — {config.EVENT_TIMING}.{loc}\n\n"
-            f"{DAY_POLL_Q}\n{_remaining_day_lines()}\n\n{REPLY_HINT}")
-
-
-# Static DAY_LINES always lists all three days. A walk-in messaging on Saturday
-# must not be offered Friday. The ORIGINAL option number is kept (Saturday stays
-# "2") because parse_date_reply maps a bare 1/2/3 to EVENT_DATES by index --
-# renumbering the visible list would silently send Saturday's pickers to Friday.
-_DIGITS = ("1️⃣", "2️⃣", "3️⃣")
-
-
-def _remaining_day_lines():
-    today = now_ist().date()
-    lines = [f"{_DIGITS[i]} {DAY_POLL_OPTS[i]}"
-             for i, d in enumerate(config.EVENT_DATES) if d >= today]
-    return "\n".join(lines) if lines else "(the carnival has ended)"
+    db.set_setting("last_tick_at", now_ist().isoformat())
 
 
 def handle_inbound(phone, text, sender_name=None, allow_create=False):
-    """Called by webhook. Matches lead by phone, parses date, acks.
+    """Called by the webhook. Records an inbound message against its lead.
 
-    `allow_create` is passed only by the authenticated webhook route. An inbound
-    message that creates a lead makes us send WhatsApp messages on a number that
-    is still on a probationary tier, so the unauthenticated route may only ever
-    update a lead that already exists -- exactly as before this feature.
+    RECORD-ONLY at this stage, deliberately. The bot does not reply: replies are
+    the qualifier's job (task 20) and it does not exist yet, and a knock engine
+    that must stand down on reply (task 18) does not exist either. Recording now
+    still matters -- an inbound that is not written down is unrecoverable, and
+    `last_inbound_at` is what the stop-on-reply and window-state logic will read.
+
+    Lead CREATION from an inbound message is removed. It previously guessed the
+    brand from the customer's own message text, which rev 2 forbids; project must
+    be stamped from the ad (`ctwa_clid`) or the source list at ingestion (tasks 7
+    and 14). Until then an unrecognised number is logged for a human, not turned
+    into a marketing target.
+
+    `allow_create` is retained in the signature because app.py's authenticated
+    webhook route passes it. It is currently inert; task 14 gives it meaning
+    again, on the correct basis.
     """
     lead = db.q("""SELECT * FROM leads WHERE phone=%s
                    ORDER BY updated_at DESC LIMIT 1""", (phone,), one=True)
+
+    # OPT-OUT RUNS FIRST, and runs even when we cannot identify the sender.
+    # A person who says "stop" from a number we have no lead for is still a person
+    # who said stop -- recording it means a later import or form fill can never
+    # turn them into a target. This ordering is the whole point: the check happens
+    # before any agent, any reply logic and any lead lookup can matter.
+    scope, matched = optout.handle_inbound_text(
+        phone, text, project=(lead or {}).get("project"))
+
     if not lead:
-        if not (allow_create and config.WALKIN_ENABLED):
-            db.log_msg(None, "in", "unattributed", text,
-                       detail=f"phone={phone} walkin_disabled")
-            return
-        proj = _detect_project(text)
-        if not proj:
-            # No brand tag -> we do not know who they are or which project they
-            # want. Creating a lead here would make a wrong number into a
-            # marketing target. Log it; a human answers from the Team Inbox.
-            db.log_msg(None, "in", "unattributed", text,
-                       detail=f"phone={phone} no_brand_tag needs_human")
-            return
-        db.x("""INSERT INTO leads (project, selldo_lead_id, name, phone,
-                                   selldo_status, wa_state)
-                VALUES (%s,%s,%s,%s,'whatsapp_inbound','queued')
-                ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
-             (proj, "wa:" + phone, sender_name, phone))
-        lead = db.q("SELECT * FROM leads WHERE project=%s AND selldo_lead_id=%s",
-                    (proj, "wa:" + phone), one=True)
-        if not lead:
-            return
+        db.log_msg(None, "in", "unattributed", text,
+                   detail=f"phone={phone} no_lead needs_human"
+                          + (f" optout={scope}:{matched}" if scope else ""))
+        return
 
-    db.x("UPDATE leads SET last_inbound_at=now(), last_inbound_text=%s, updated_at=now() WHERE id=%s",
-         (text, lead["id"]))
-    db.log_msg(lead["id"], "in", "inbound", text)
-
-    d = reply_parser.parse_date_reply(text)
-    # A day that has already passed is not a choice. Someone replying "1" on
-    # Saturday (or tapping an old message's Friday button) would otherwise be
-    # confirmed for Friday and sent an entry pass for a day that is over.
-    if d and d < now_ist().date():
-        d = None
-
-    # Never been messaged? Reply inside their open window. Covers the walk-in we
-    # just created AND a Meta lead still sitting in 'queued' whose template M1
-    # had not gone out yet -- for them this is strictly better: free, instant,
-    # and immune to the marketing gate. Stamping m1_sent_at is load-bearing: the
-    # M3 reminder query filters on `m1_sent_at IS NOT NULL`, so without it a
-    # walk-in who picks a day would never be reminded of it.
-    if not lead.get("m1_sent_at") and today_in_event_window():
-        if d:
-            # They named a day in their very first message. The ack below already
-            # carries venue + entry pass, so a welcome would just repeat it.
-            db.x("UPDATE leads SET m1_sent_at=now(), updated_at=now() WHERE id=%s",
-                 (lead["id"],))
-        elif _send(lead, "welcome", welcome_body(lead), jitter=False):
-            db.x("""UPDATE leads SET wa_state='m1_sent', m1_sent_at=now(), updated_at=now()
-                    WHERE id=%s""", (lead["id"],))
-        lead = db.q("SELECT * FROM leads WHERE id=%s", (lead["id"],), one=True)
-
-    if d:
-        db.x("""UPDATE leads SET selected_date=%s, wa_state='date_selected', updated_at=now()
-                WHERE id=%s""", (d, lead["id"]))
-        lead = db.q("SELECT * FROM leads WHERE id=%s", (lead["id"],), one=True)
-        _send(lead, "ack", ack_body(lead), jitter=False)
+    db.x("""UPDATE leads SET last_inbound_at=now(), last_inbound_text=%s,
+                             updated_at=now() WHERE id=%s""", (text, lead["id"]))
+    db.log_msg(lead["id"], "in", "inbound", text,
+               detail=(f"optout={scope}:{matched}" if scope else None))

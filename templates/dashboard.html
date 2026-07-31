@@ -153,7 +153,11 @@ async function loadSummary(){
   });
   const tot=Object.values(byDate).reduce((a,b)=>a+b,0);
   const rep=Object.values(byRep).reduce((a,b)=>a+b,0);
-  $("#dayCards").innerHTML=s.event_dates.map(d=>{
+  // event_dates is gone from /api/summary (Phase 0 task 1b -- the carnival is
+  // over). The per-day attendance cards below only ever made sense for a
+  // three-day event, so with no dates supplied they render as nothing rather
+  // than throwing and taking the whole dashboard down with them.
+  $("#dayCards").innerHTML=(s.event_dates||[]).map(d=>{
     const p=byProj[d]||{}, n=byDate[d]||0, rd=byRep[d]||0;
     return `<div class="card"><div class="k">${fmtD(d)}</div>
       <div class="v">${n}</div>

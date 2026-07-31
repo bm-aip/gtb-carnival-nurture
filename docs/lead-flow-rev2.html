@@ -1,0 +1,1044 @@
+<title>Republic of Nature — Lead Qualification Flow</title>
+<style>
+  :root {
+    --paper: #F4F5F7;
+    --card: #FFFFFF;
+    --card-2: #EDEFF4;
+    --ink: #171B26;
+    --ink-2: #4B5370;
+    --ink-3: #6E7590;
+    --rule: #D5D9E3;
+    --spine: #34405E;
+    --spine-soft: #34405E22;
+    --good: #1B6B4C;
+    --stop: #8C3A34;
+    --warn: #A85B1F;
+    --park: #5B6472;
+    --shadow: 0 1px 2px #171B2610, 0 8px 24px #171B260A;
+
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0E1017;
+      --card: #171B26;
+      --card-2: #1E2331;
+      --ink: #E8EAF0;
+      --ink-2: #A2A9C0;
+      --ink-3: #7C8399;
+      --rule: #2A3040;
+      --spine: #8E9BC7;
+      --spine-soft: #8E9BC733;
+      --good: #4FB388;
+      --stop: #D9736A;
+      --warn: #E0A05A;
+      --park: #8B93A6;
+      --shadow: 0 1px 2px #00000040, 0 8px 24px #00000030;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --paper: #0E1017;
+    --card: #171B26;
+    --card-2: #1E2331;
+    --ink: #E8EAF0;
+    --ink-2: #A2A9C0;
+    --ink-3: #7C8399;
+    --rule: #2A3040;
+    --spine: #8E9BC7;
+    --spine-soft: #8E9BC733;
+    --good: #4FB388;
+    --stop: #D9736A;
+    --warn: #E0A05A;
+    --park: #8B93A6;
+    --shadow: 0 1px 2px #00000040, 0 8px 24px #00000030;
+  }
+
+  :root[data-theme="light"] {
+    --paper: #F4F5F7;
+    --card: #FFFFFF;
+    --card-2: #EDEFF4;
+    --ink: #171B26;
+    --ink-2: #4B5370;
+    --ink-3: #6E7590;
+    --rule: #D5D9E3;
+    --spine: #34405E;
+    --spine-soft: #34405E22;
+    --good: #1B6B4C;
+    --stop: #8C3A34;
+    --warn: #A85B1F;
+    --park: #5B6472;
+    --shadow: 0 1px 2px #171B2610, 0 8px 24px #171B260A;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 56px 24px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 40px;
+  }
+
+  /* ---------- masthead ---------- */
+
+  .masthead { display: flex; flex-direction: column; gap: 14px; }
+
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: clamp(30px, 5vw, 46px);
+    line-height: 1.04;
+    letter-spacing: -0.025em;
+    font-weight: 700;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    margin: 0;
+    max-width: 62ch;
+    font-size: 17px;
+    color: var(--ink-2);
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+    padding-top: 6px;
+  }
+
+  .pill {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    color: var(--ink-2);
+    background: var(--card);
+    white-space: nowrap;
+  }
+
+  .pill--alert {
+    border-color: var(--warn);
+    color: var(--warn);
+    background: transparent;
+  }
+
+  /* ---------- legend ---------- */
+
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .legend > div {
+    background: var(--card);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .legend .k {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  .legend .v { font-size: 13px; color: var(--ink-2); }
+
+  .k--good { color: var(--good); }
+  .k--stop { color: var(--stop); }
+  .k--warn { color: var(--warn); }
+  .k--park { color: var(--park); }
+
+  /* ---------- flow spine ---------- */
+
+  .flow { display: flex; flex-direction: column; }
+
+  .stage {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--spine);
+    box-shadow: var(--shadow);
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .stage-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .num {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    color: var(--spine);
+    padding-top: 2px;
+  }
+
+  .stage h2 {
+    margin: 0;
+    font-size: 19px;
+    letter-spacing: -0.012em;
+    font-weight: 650;
+  }
+
+  .stage p { margin: 0; color: var(--ink-2); font-size: 14.5px; max-width: 68ch; }
+
+  .stage strong { color: var(--ink); font-weight: 650; }
+
+  /* connector between stages */
+
+  .stub {
+    height: 34px;
+    position: relative;
+    flex: none;
+  }
+
+  .stub::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    top: 0;
+    bottom: 7px;
+    width: 2px;
+    background: var(--spine);
+  }
+
+  .stub::after {
+    content: "";
+    position: absolute;
+    left: 30px;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--spine);
+  }
+
+  .stub .lbl {
+    position: absolute;
+    left: 50px;
+    top: 50%;
+    transform: translateY(-50%);
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---------- inflows ---------- */
+
+  .inflows {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: 12px;
+  }
+
+  .inflow {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-top: 3px solid var(--spine);
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    box-shadow: var(--shadow);
+  }
+
+  .inflow .name { font-weight: 650; font-size: 15.5px; }
+  .inflow .desc { font-size: 13px; color: var(--ink-2); }
+
+  .window {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    margin-top: 4px;
+    padding-top: 8px;
+    border-top: 1px solid var(--rule);
+    color: var(--ink-3);
+  }
+
+  .window b { color: var(--ink); font-weight: 600; }
+
+  /* ---------- checks inside a gate ---------- */
+
+  .checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding-top: 2px;
+  }
+
+  .check {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    background: var(--card-2);
+    border: 1px solid var(--rule);
+    padding: 5px 9px;
+    border-radius: 2px;
+    color: var(--ink-2);
+  }
+
+  .verdict {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--stop);
+    border-top: 1px dashed var(--rule);
+    padding-top: 10px;
+    margin-top: 2px;
+  }
+
+  /* ---------- lane fork ---------- */
+
+  .fork {
+    height: 30px;
+    position: relative;
+  }
+
+  .fork::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    right: 34px;
+    top: 14px;
+    height: 2px;
+    background: var(--spine);
+  }
+
+  .fork::after {
+    content: "";
+    position: absolute;
+    left: 34px;
+    top: 0;
+    height: 16px;
+    width: 2px;
+    background: var(--spine);
+  }
+
+  .lanes {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+
+  .lane { display: flex; flex-direction: column; }
+
+  .lane-stub { height: 22px; position: relative; }
+
+  .lane-stub::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    top: 0;
+    bottom: 7px;
+    width: 2px;
+    background: var(--spine);
+  }
+
+  .lane-stub::after {
+    content: "";
+    position: absolute;
+    left: 30px;
+    bottom: 0;
+    width: 0; height: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 7px solid var(--spine);
+  }
+
+  .lane-card {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--spine);
+    box-shadow: var(--shadow);
+    padding: 18px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    height: 100%;
+  }
+
+  .lane-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--spine);
+  }
+
+  .lane-card h3 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+  }
+
+  .lane-card p { margin: 0; font-size: 14px; color: var(--ink-2); }
+
+  .cadence {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .day {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    border: 1px solid var(--spine);
+    color: var(--spine);
+    padding: 4px 9px;
+    border-radius: 2px;
+  }
+
+  .day--end {
+    border-style: dashed;
+    border-color: var(--park);
+    color: var(--park);
+  }
+
+  .merge {
+    height: 34px;
+    position: relative;
+  }
+
+  .merge::before {
+    content: "";
+    position: absolute;
+    left: 34px;
+    right: 34px;
+    bottom: 16px;
+    height: 2px;
+    background: var(--spine);
+  }
+
+  .merge::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: 0;
+    transform: translateX(-50%);
+    width: 2px;
+    height: 16px;
+    background: var(--spine);
+  }
+
+  /* ---------- qualifier ---------- */
+
+  .qualifier {
+    background: var(--card);
+    border: 1px solid var(--spine);
+    box-shadow: var(--shadow);
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .asks {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .ask {
+    background: var(--card-2);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .ask .ord {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    color: var(--ink-3);
+  }
+
+  .ask .what { font-weight: 650; font-size: 15px; }
+
+  .ask .how {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+  }
+
+  .how--hard { color: var(--stop); }
+  .how--soft { color: var(--warn); }
+  .how--lens { color: var(--park); }
+
+  .rules { display: flex; flex-direction: column; gap: 7px; }
+
+  .rule-line {
+    display: flex;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--ink-2);
+    align-items: baseline;
+  }
+
+  .rule-line::before {
+    content: "";
+    flex: none;
+    width: 14px;
+    height: 1px;
+    background: var(--spine);
+    transform: translateY(-4px);
+  }
+
+  .rule-line b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- terminals ---------- */
+
+  .outcomes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+    gap: 12px;
+  }
+
+  .outcome {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    box-shadow: var(--shadow);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .outcome .stripe { height: 4px; flex: none; }
+  .outcome .body { padding: 16px 18px; display: flex; flex-direction: column; gap: 7px; }
+
+  .outcome .kind {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  .outcome .title { font-weight: 700; font-size: 16px; letter-spacing: -0.01em; }
+  .outcome .note { font-size: 13px; color: var(--ink-2); }
+
+  .o--good .stripe { background: var(--good); }
+  .o--good .title { color: var(--good); }
+  .o--stop .stripe { background: var(--stop); }
+  .o--stop .title { color: var(--stop); }
+  .o--warn .stripe { background: var(--warn); }
+  .o--warn .title { color: var(--warn); }
+  .o--park .stripe { background: var(--park); }
+  .o--park .title { color: var(--park); }
+
+  /* ---------- loop-back band ---------- */
+
+  .loopback {
+    border: 1px dashed var(--park);
+    background: transparent;
+    padding: 16px 20px;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+  }
+
+  .loopback .arrow {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--park);
+    letter-spacing: -0.05em;
+    padding-top: 1px;
+    flex: none;
+  }
+
+  .loopback .txt { font-size: 14px; color: var(--ink-2); }
+  .loopback .txt b { color: var(--ink); font-weight: 650; }
+
+  /* ---------- handoff tail ---------- */
+
+  .tail {
+    background: var(--card);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--good);
+    box-shadow: var(--shadow);
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .tail h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -0.012em; }
+  .tail p { margin: 0; font-size: 14.5px; color: var(--ink-2); max-width: 68ch; }
+  .tail strong { color: var(--ink); }
+
+  .card-fields {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .field {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--good);
+    color: var(--good);
+    padding: 4px 9px;
+    border-radius: 2px;
+  }
+
+  /* ---------- open questions ---------- */
+
+  .open {
+    border-top: 1px solid var(--rule);
+    padding-top: 28px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .open h2 {
+    margin: 0;
+    font-size: 15px;
+    font-family: var(--mono);
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--warn);
+  }
+
+  .open-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+
+  .open-grid > div {
+    background: var(--card);
+    padding: 14px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .open-grid .q { font-weight: 650; font-size: 14.5px; }
+  .open-grid .b { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+
+  footer {
+    font-size: 13px;
+    color: var(--ink-3);
+    border-top: 1px solid var(--rule);
+    padding-top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  footer code {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--ink-2);
+  }
+
+  @media (max-width: 640px) {
+    .lanes { grid-template-columns: 1fr; gap: 12px; }
+    .merge::before { left: 34px; right: 34px; }
+    .wrap { padding: 36px 16px 64px; gap: 32px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Republic of Nature · Vadanemmeli ECR · Rev 2</div>
+    <h1>How a lead moves through the qualification machine</h1>
+    <p class="standfirst">
+      Three ways a lead arrives. One qualifier that does not care which. Three ways it ends,
+      and one way it goes round again. Every gate on this page is a door that can stay shut.
+    </p>
+    <div class="meta">
+      <span class="pill">Design rev 2 · 28 Jul 2026</span>
+      <span class="pill">Chart rebuilt 30 Jul 2026 · template set amended</span>
+      <span class="pill">Weekend-home / resort positioning</span>
+      <span class="pill pill--alert">Phase 0 built · 5 of 29 tasks</span>
+    </div>
+  </header>
+
+  <section class="legend" aria-label="How to read this chart">
+    <div>
+      <span class="k k--good">Qualified</span>
+      <span class="v">Terminal. Sales gets the card.</span>
+    </div>
+    <div>
+      <span class="k k--stop">Dead</span>
+      <span class="v">Terminal. Suppressed permanently.</span>
+    </div>
+    <div>
+      <span class="k k--warn">Escalated</span>
+      <span class="v">Terminal for the bot. A human owns it.</span>
+    </div>
+    <div>
+      <span class="k k--park">Dormant</span>
+      <span class="v">End of the loop. Human-only re-entry.</span>
+    </div>
+  </section>
+
+  <main class="flow">
+
+    <!-- 1 · inflows -->
+    <div class="stage">
+      <div class="stage-head">
+        <span class="num">STAGE 01</span>
+        <h2>Three front doors</h2>
+      </div>
+      <p>
+        The dividing line is <strong>not the campaign</strong> — it is whether a 24-hour WhatsApp
+        window is open. That single fact decides whether we may write freely or must send
+        pre-approved copy.
+      </p>
+      <div class="inflows">
+        <div class="inflow">
+          <span class="name">Click-to-WhatsApp ad</span>
+          <span class="desc">They message us first, straight off the ad.</span>
+          <span class="window">Window <b>open</b> · free text allowed</span>
+        </div>
+        <div class="inflow">
+          <span class="name">Website or form lead</span>
+          <span class="desc">They left details. We have to reach out.</span>
+          <span class="window">Window <b>shut</b> · template only</span>
+        </div>
+        <div class="inflow">
+          <span class="name">Old-lead reactivation</span>
+          <span class="desc">Someone from an earlier list. Cold.</span>
+          <span class="window">Window <b>shut</b> · template only · cold</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stub"></div>
+
+    <!-- 2 · intake -->
+    <div class="stage">
+      <div class="stage-head">
+        <span class="num">STAGE 02</span>
+        <h2>Intake — stamp who this lead belongs to</h2>
+      </div>
+      <p>
+        The project is taken from <strong>the ad or the list the lead came from — never from what
+        the person types.</strong> That stamp is what later keeps one project's answers out of
+        another project's conversations.
+      </p>
+      <div class="checks">
+        <span class="check">project</span>
+        <span class="check">source</span>
+        <span class="check">campaign</span>
+        <span class="check">window_state</span>
+        <span class="check">checklist = 0</span>
+      </div>
+    </div>
+
+    <div class="stub"><span class="lbl">once per lead</span></div>
+
+    <!-- 3 · suppression gate -->
+    <div class="stage">
+      <div class="stage-head">
+        <span class="num">STAGE 03</span>
+        <h2>Suppression gate — may we contact this person at all?</h2>
+      </div>
+      <p>
+        An old lead is not a blank contact. Before a single message is scheduled we read their
+        stage and labels in the CRM and compare against a list <strong>the sales team
+        controls</strong> — changing it is a data edit, not a software release.
+      </p>
+      <div class="checks">
+        <span class="check">already owned by a salesperson</span>
+        <span class="check">already rejected</span>
+        <span class="check">already bought</span>
+        <span class="check">ever said stop</span>
+        <span class="check">invalid number</span>
+      </div>
+      <div class="verdict">Any match ⇒ never knocked, ever</div>
+    </div>
+
+    <div class="stub"><span class="lbl">checked on every single message</span></div>
+
+    <!-- 4 · send gate -->
+    <div class="stage">
+      <div class="stage-head">
+        <span class="num">STAGE 04</span>
+        <h2>The send gate — one bouncer at one door</h2>
+      </div>
+      <p>
+        Every outbound message in the whole system leaves through one place, and passes four
+        checks about <strong>the person, not the record</strong> — the same human can sit in our
+        database three times, and one ledger covers all three. What comes back from WhatsApp
+        (delivered, read, failed) is recorded against them.
+      </p>
+      <div class="checks">
+        <span class="check">opted out — permanent, all projects, incl. "stop updates" taps</span>
+        <span class="check">message fatigue</span>
+        <span class="check">retry ceiling</span>
+        <span class="check">quiet hours &amp; pause</span>
+        <span class="check">delivery reported back</span>
+      </div>
+    </div>
+
+    <div class="fork"></div>
+
+    <!-- 5 · two lanes -->
+    <div class="lanes">
+      <div class="lane">
+        <div class="lane-stub"></div>
+        <div class="lane-card">
+          <span class="lane-tag">Lane A · live</span>
+          <h3>They are already talking to us</h3>
+          <p>
+            The window is open, so the bot replies in its own words immediately. Nothing to
+            schedule, nothing to approve. Straight into qualification.
+          </p>
+        </div>
+      </div>
+      <div class="lane">
+        <div class="lane-stub"></div>
+        <div class="lane-card">
+          <span class="lane-tag">Lane B · knock</span>
+          <h3>We have to knock and wait</h3>
+          <p>
+            Four knocks, then silence means silence. <strong>A knock has one job: earn a
+            reply.</strong> Not a booking, not interest — any reply at all, because the reply is
+            what opens the 24-hour window and lets the bot talk. "Who is this?" is a complete
+            success.
+          </p>
+          <div class="cadence">
+            <span class="day">day 0 · lifestyle</span>
+            <span class="day">day 3 · location</span>
+            <span class="day">day 10 · low density</span>
+            <span class="day">day 25 · visit invitation</span>
+            <span class="day day--end">day 31 → dormant</span>
+          </div>
+          <p>
+            Every ask is deliberately <strong>low-friction and free of pressure</strong>. Buttons
+            request information — send the map, what's nearby — or pose one either-or question.
+            <strong>Never a location or budget question on a cold knock</strong>: both can end a
+            conversation before it starts.
+          </p>
+          <p>
+            One engine serves both cold old leads and people who went quiet mid-conversation —
+            they are the same condition, so they share one fatigue counter. Two engines would
+            double-message anyone in both.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="merge"></div>
+
+    <!-- 6 · qualifier -->
+    <div class="qualifier">
+      <div class="stage-head">
+        <span class="num">STAGE 05</span>
+        <h2>The qualifier — answers first, then asks</h2>
+      </div>
+      <p style="margin:0;color:var(--ink-2);font-size:14.5px;max-width:68ch">
+        Source-agnostic: it does not know or care which door the lead came through. It picks up
+        at the saved checklist position and <strong>never restarts the conversation.</strong>
+        The checklist is a background objective, not a form — a buyer's question always gets
+        answered before the next ask.
+      </p>
+
+      <div class="asks">
+        <div class="ask">
+          <span class="ord">ASKED 1ST</span>
+          <span class="what">Purpose</span>
+          <span class="how how--lens">Never rejects · flags fit</span>
+        </div>
+        <div class="ask">
+          <span class="ord">ASKED 2ND</span>
+          <span class="what">Location</span>
+          <span class="how how--soft">Wide gate</span>
+        </div>
+        <div class="ask">
+          <span class="ord">ASKED 3RD</span>
+          <span class="what">Configuration</span>
+          <span class="how how--soft">Soft gate</span>
+        </div>
+        <div class="ask">
+          <span class="ord">ASKED LAST</span>
+          <span class="what">Budget</span>
+          <span class="how how--hard">Hard gate · earned</span>
+        </div>
+      </div>
+
+      <div class="rules">
+        <div class="rule-line"><span><b>Budget is asked last, not first.</b> It is earned by having been useful, not demanded up front. For a weekend-home product it is also the only hard filter left.</span></div>
+        <div class="rule-line"><span><b>Location is a wide gate.</b> Anywhere in or around Chennai passes, OMR included. It fails only on a different city, or on someone who finally rules out ECR — and <b>the bot must answer that doubt before it may reject on it.</b> "ECR is too far" is a question, not a decision.</span></div>
+        <div class="rule-line"><span><b>Timeline is captured, never used to reject.</b> Same for purpose — a slow buyer is still a buyer. But a buyer who wants this as a daily-commute family home rides on the card <b>flagged</b>, so the salesperson resets expectations on the call rather than at the site.</span></div>
+        <div class="rule-line"><span><b>Answers come only from this project's knowledge base.</b> Ranges, never exact figures. For Republic of Nature today, no price at all — every price question goes to a human.</span></div>
+        <div class="rule-line"><span><b>Three different ways to ask each question, never a repeat.</b> After three answers given with nothing back, a human is flagged — and the bot keeps answering meanwhile.</span></div>
+        <div class="rule-line"><span><b>The bot books the site visit.</b> It takes a day and a time and tells them it is booked — then that the team will call to confirm timing and share directions. Not a bare "confirmed": there is no calendar behind it, and a buyer standing at a gate on a Saturday is worse than never having booked. Tuesday is the team's day off; Monday afternoons only.</span></div>
+        <div class="rule-line"><span><b>The site comes first, always.</b> The Experience Centre at Express Avenue is offered <b>only</b> to someone worried about the distance — a first look during the week, with the real visit at the weekend. Volunteering it unprompted would quietly turn site visits into mall visits.</span></div>
+        <div class="rule-line"><span><b>Never implies a natural private beach.</b> The approved wording is a planned man-made beach and lagoon experience within the community.</span></div>
+      </div>
+    </div>
+
+    <div class="stub"><span class="lbl">stage 06 · four ways out</span></div>
+
+    <!-- outcomes -->
+    <div class="outcomes">
+      <div class="outcome o--good">
+        <div class="stripe"></div>
+        <div class="body">
+          <span class="kind">Terminal</span>
+          <span class="title">Qualified</span>
+          <span class="note">Budget and location clear, configuration fine or flagged. Sales gets a ping.</span>
+        </div>
+      </div>
+      <div class="outcome o--park">
+        <div class="stripe"></div>
+        <div class="body">
+          <span class="kind">Loop-back — not an exit</span>
+          <span class="title">Goes silent</span>
+          <span class="note">Window shuts mid-checklist. Returns to the knock lane where it left off.</span>
+        </div>
+      </div>
+      <div class="outcome o--stop">
+        <div class="stripe"></div>
+        <div class="body">
+          <span class="kind">Terminal</span>
+          <span class="title">Dead</span>
+          <span class="note">Fails budget, or wants to buy in another city, or wants something we do not sell. Suppressed permanently — never touched again by anything.</span>
+        </div>
+      </div>
+      <div class="outcome o--warn">
+        <div class="stripe"></div>
+        <div class="body">
+          <span class="kind">Terminal for the bot</span>
+          <span class="title">Out of depth</span>
+          <span class="note">An objection, price pushback, a hard question with no good answer. The bot stops talking rather than improvising. These are disproportionately the real buyers.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stub"></div>
+
+    <div class="loopback">
+      <span class="arrow">└──►</span>
+      <span class="txt">
+        <b>Silence returns to the knock lane mid-checklist, not to the beginning.</b>
+        Four knocks are all anyone ever gets. After day 31 of silence the lead goes
+        <b>dormant</b>: the record is kept, and only a human may wake it, only for a genuinely
+        new reason. <b>The bot may never restart a journey by itself.</b> That is the line
+        between following up and harassing someone, and it is enforced in code rather than left
+        to judgement.
+      </span>
+    </div>
+
+    <div class="stub"></div>
+
+    <div class="tail">
+      <h2>The handoff — and what sales actually receives</h2>
+      <p>
+        A qualified lead becomes <strong>one message into the sales WhatsApp group</strong>, not
+        a page someone has to go and look at. The full conversation is stored on our side for
+        audit and for a later CRM push.
+      </p>
+      <div class="card-fields">
+        <span class="field">purpose</span>
+        <span class="field">location</span>
+        <span class="field">configuration</span>
+        <span class="field">budget</span>
+        <span class="field">timeline</span>
+        <span class="field">source</span>
+        <span class="field">what they asked about</span>
+        <span class="field">any day they volunteered</span>
+      </div>
+      <p>
+        Then a salesperson calls and closes for the site visit. <strong>A site visit happening is
+        the win</strong> — the bot's entire job is to make that call worth making.
+      </p>
+    </div>
+
+  </main>
+
+  <section class="open">
+    <h2>Still open — decisions this chart cannot make</h2>
+    <div class="open-grid">
+      <div>
+        <span class="q">How many messages is too many?</span>
+        <span class="b">Blocks the send gate</span>
+      </div>
+      <div>
+        <span class="q">Does "not interested" mean never again, or not this time?</span>
+        <span class="b">Blocks opt-out</span>
+      </div>
+      <div>
+        <span class="q">Which hospitals, and how far? Weekend buyers still have emergencies.</span>
+        <span class="b">Lower priority now</span>
+      </div>
+      <div>
+        <span class="q">Which configurations can the bot sell today, and what do we call a C2BHK out loud?</span>
+        <span class="b">Blocks the config gate</span>
+      </div>
+      <div>
+        <span class="q">May the bot ever state a handover date?</span>
+        <span class="b">Blocks knowledge-base curation</span>
+      </div>
+      <div>
+        <span class="q">Do escalations land in the same group as qualified leads, or their own?</span>
+        <span class="b">Blocks the handoff</span>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Drawn from <code>docs/POST-CARNIVAL-DESIGN.md</code> §4–§8 (rev 2) and <code>docs/PHASE-0-ARCHITECTURE.md</code>.</span>
+    <span>Supersedes <code>docs/lead-flow.html</code>, which draws rev 1's single inflow and four exits.</span>
+  </footer>
+
+</div>
