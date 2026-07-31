@@ -118,3 +118,36 @@ by hour and season. "How long to reach?" escalates.
 and they **escalate to a human by design**. That is correct behaviour, not a gap —
 but it is human workload, and price plus handover plus apartment sizes will be a
 large share of the questions asked.
+
+
+---
+
+## 7. The ghost re-opener and its `topic` variable
+
+Added 2026-07-31. `t7_reopener` (PENDING in Wati):
+
+> Hi {{name}} — we were talking about {{topic}}. Shall I pick up where we left off?
+
+**Why a separate template at all.** The four cold knocks introduce the project from
+scratch. Sending one to a person who already told us their budget and that they want
+a 3BHK reads as broken, at exactly the moment they are most likely to leave for good.
+
+**`topic` comes from a closed list, never from the agent's own words.** An approved
+template plus a freely-generated variable is still a message we are accountable for,
+and it is the one place a stray price or claim cannot be retracted. The permitted
+values live in `config.REOPENER_TOPICS`:
+
+`the apartments` · `the compact 2BHK apartments` · `the 2BHK apartments` ·
+`the 3BHK apartments` · `the villas` · `the location on ECR` ·
+`the layouts and sizes` · `the amenities` · `the lagoon and beach experience` ·
+**`your enquiry`** (default)
+
+Three rules for that list:
+
+1. **No price, size figure or date.** The corpus deliberately holds no price to draw on.
+2. **Never "your site visit".** The bot does not book visits, and naming one implies a
+   commitment that does not exist.
+3. **Under four words.** Long variables read badly and get templates rejected.
+
+`your enquiry` will be the most-used value by some margin — most ghosts go quiet
+*before* saying anything specific, often right after "who is this?".

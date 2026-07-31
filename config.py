@@ -54,11 +54,45 @@ WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
 # low-density (day 10) · T6 visit invitation (day 25, rewritten to drop the
 # booking flow). Populated by task 17 once Meta approves them; env-overridable
 # so an approval-name change is not a code change.
+# Verified against the live Wati account 2026-07-31: all four are APPROVED.
+# Defaults are the real approved names, so the knock engine needs no env config to
+# work; override only if a template is replaced.
 KNOCK_TEMPLATES = {
-    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", ""),
-    "t2_location":    os.environ.get("WATI_TPL_T2", ""),
-    "t3_low_density": os.environ.get("WATI_TPL_T3", ""),
-    "t6_visit":       os.environ.get("WATI_TPL_T6", ""),
+    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", "ron_nurture_01_lifestyle"),
+    "t2_location":    os.environ.get("WATI_TPL_T2", "ron_nurture_02_location"),
+    "t3_low_density": os.environ.get("WATI_TPL_T3", "ron_nurture_03_low_density"),
+    "t6_visit":       os.environ.get("WATI_TPL_T6", "ron_nurture_06_visit"),
+}
+
+# Ghost re-opener (task 18/19). Someone who talked and then went quiet cannot be
+# sent the COLD sequence -- those templates introduce the project from scratch to a
+# person who already told us their budget, which reads as broken at exactly the
+# moment they are most likely to leave.
+#
+# ⚠️ PENDING approval as of 2026-07-31, and submitted as MARKETING rather than
+# UTILITY. Marketing carries the category gate that blocked ~44% of the carnival's
+# cold sends, so re-opener delivery will be worse than it needs to be. Worth
+# resubmitting as utility later -- it continues a conversation the customer started.
+REOPENER_TEMPLATE = os.environ.get("WATI_TPL_T7", "t7_reopener")
+
+# The `topic` variable is filled from a CLOSED LIST, never from the agent's own
+# words. An approved template plus a freely-generated variable is still a message we
+# are accountable for, and it is the one place a stray price or claim cannot be
+# retracted. Values are short, neutral, and contain no figure, date or commitment.
+#
+# "your enquiry" is the default and will be the commonest value: most ghosts go
+# quiet BEFORE saying anything specific.
+REOPENER_TOPICS = {
+    "apartments":   "the apartments",
+    "compact_2bhk": "the compact 2BHK apartments",
+    "2bhk":         "the 2BHK apartments",
+    "3bhk":         "the 3BHK apartments",
+    "villas":       "the villas",
+    "location":     "the location on ECR",
+    "sizes":        "the layouts and sizes",
+    "amenities":    "the amenities",
+    "lagoon":       "the lagoon and beach experience",
+    "default":      "your enquiry",
 }
 
 # --- Carnival event constants: REMOVED, Phase 0 task 1b (2026-07-30) ---
