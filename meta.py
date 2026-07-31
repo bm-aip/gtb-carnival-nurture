@@ -130,9 +130,14 @@ def poll_meta_leads():
                         continue
                     time.sleep(0.4)
                     for lead in fetch_form_leads(form["id"], ptoken, since):
-                        import parser as reply_parser
-                        pd = reply_parser.parse_date_reply(
-                            (lead.get("preferred_raw") or "").replace("_", " "))
+                        # preferred_date is no longer derived. It used to parse
+                        # the form's free-text answer into one of the three
+                        # carnival days (Phase 0 task 1b removed that parser).
+                        # A nurture lead has no event day to prefer; if a future
+                        # form asks for a visit day it is captured, never
+                        # confirmed (POST-CARNIVAL-DESIGN §8), so it does not
+                        # belong in an automated date column.
+                        pd = None
                         db.x("""INSERT INTO meta_leads
                                 (meta_lead_id, project, page_id, form_id, form_name,
                                  name, phone, created_time, preferred_date)

@@ -14,7 +14,9 @@ The day-picker buttons ride WITH the template (quick-reply buttons defined at
 approval time), so there is no separate poll send -- sending the template
 renders its buttons.
 """
+import json
 import re
+from datetime import datetime, timezone
 import requests
 import config
 import db
@@ -69,7 +71,10 @@ def send_template(phone, template_name, params=None, broadcast=None):
             params={"whatsappNumber": phone},
             json=payload, timeout=30)
         ok = r.status_code in (200, 201) and _result_ok(r)
-        return ok, r.text[:300]
+        # 1000, not 300: the provider message id lives in this body and
+        # extract_msg_id() needs it intact to join delivery callbacks back to the
+        # send. At 300 chars Wati's echo of the message could truncate first.
+        return ok, r.text[:1000]
     except Exception as e:
         return False, str(e)
 
@@ -84,7 +89,10 @@ def send_text(phone, body):
             headers=_auth_headers(),
             params={"messageText": body}, timeout=30)
         ok = r.status_code in (200, 201) and _result_ok(r)
-        return ok, r.text[:300]
+        # 1000, not 300: the provider message id lives in this body and
+        # extract_msg_id() needs it intact to join delivery callbacks back to the
+        # send. At 300 chars Wati's echo of the message could truncate first.
+        return ok, r.text[:1000]
     except Exception as e:
         return False, str(e)
 
@@ -139,6 +147,162 @@ def sends_last_hour():
 
 def rate_ok():
     return sends_last_hour() < config.MAX_SENDS_PER_HOUR
+
+
+# --- Phase 0 task 5: delivery status callbacks ---------------------------------
+#
+# Wati posts a callback for every state change of an outbound message, and the
+# event names are not stable across Wati's own versions -- observed and documented
+# forms include sentMessageDELIVERED, sentMessageREAD, templateMessageSent,
+# sessionMessageSent, message_status and a bare `status` field. Matching an exact
+# list would silently drop anything renamed.
+#
+# So we match on KEYWORDS and, critically, keep what we cannot classify as
+# status='unknown' with its full payload attached. The entire reason this task
+# exists is that the old code threw unrecognised events away; a parser that
+# quietly drops the events it does not recognise repeats that mistake in a more
+# sophisticated way.
+#
+# Order matters: failure is checked before delivery because a failure event can
+# also carry the word "sent".
+_STATUS_KEYWORDS = (
+    ("failed",    ("fail", "undeliver", "reject", "error", "invalid", "block")),
+    ("read",      ("read", "seen")),
+    ("delivered", ("deliver",)),
+    ("sent",      ("sent", "accept", "submit")),
+)
+
+_INBOUND_EVENTS = ("message", "text", "interactive", "button")
+
+
+def _canonical_status(*fields):
+    """First keyword hit across the supplied strings, or None."""
+    blob = " ".join(str(f).lower() for f in fields if f)
+    if not blob:
+        return None
+    for status, words in _STATUS_KEYWORDS:
+        if any(w in blob for w in words):
+            return status
+    return None
+
+
+def is_status_event(payload):
+    """True when this callback is about one of OUR outbound messages.
+
+    A real customer message is identified the same way parse_inbound does it --
+    eventType in the inbound set and owner not set -- and is never treated as a
+    status, so the two paths cannot both claim the same payload.
+    """
+    m = (payload.get("data") or payload) if isinstance(payload, dict) else {}
+    if not isinstance(m, dict):
+        return False
+    etype = str(m.get("eventType") or m.get("type") or "")
+    if etype in _INBOUND_EVENTS and not (m.get("owner") or m.get("fromMe")):
+        return False
+    return bool(_canonical_status(etype, m.get("status"), m.get("statusString"))
+                or m.get("owner") is True or m.get("fromMe") is True)
+
+
+def parse_status(payload):
+    """Extract one delivery event, or None if this is not about an outbound send.
+
+    Never raises and never returns None merely because the shape was unfamiliar:
+    an unrecognised-but-outbound event comes back as status='unknown' carrying its
+    raw payload, so the first real callbacks tell us the true schema instead of
+    vanishing.
+    """
+    try:
+        if not is_status_event(payload):
+            return None
+        m = (payload.get("data") or payload) if isinstance(payload, dict) else {}
+        if not isinstance(m, dict):
+            return None
+
+        etype = m.get("eventType") or m.get("type")
+        status = _canonical_status(etype, m.get("status"), m.get("statusString"))
+
+        phone = (m.get("waId") or m.get("whatsappNumber") or m.get("to")
+                 or m.get("phone") or m.get("from") or "")
+        phone = re.sub(r"\D", "", str(phone)) or None
+
+        mid = (m.get("whatsappMessageId") or m.get("messageId")
+               or m.get("id") or m.get("localMessageId"))
+
+        reason = (m.get("failureReason") or m.get("errorMessage")
+                  or m.get("reason") or m.get("error"))
+        if isinstance(reason, dict):
+            reason = reason.get("message") or reason.get("title") or str(reason)
+
+        ts = (m.get("timestamp") or m.get("eventTime") or m.get("created")
+              or m.get("createdAt"))
+
+        return {
+            "phone": phone,
+            "provider_msg_id": str(mid) if mid else None,
+            "status": status or "unknown",
+            "reason": str(reason)[:500] if reason else None,
+            "event_type": str(etype)[:80] if etype else None,
+            "event_ts": _parse_ts(ts),
+            # Raw kept ONLY for events we could not classify -- storing every
+            # payload would balloon the table for no diagnostic gain.
+            "raw": None if status else json.dumps(payload)[:4000],
+        }
+    except Exception:
+        # A callback we cannot even parse is still evidence that something
+        # happened. Losing it is worse than storing it shapeless.
+        try:
+            return {"phone": None, "provider_msg_id": None, "status": "unknown",
+                    "reason": "parse_error", "event_type": None, "event_ts": None,
+                    "raw": json.dumps(payload)[:4000]}
+        except Exception:
+            return None
+
+
+def _parse_ts(v):
+    """Wati sends timestamps as epoch seconds, epoch millis or an ISO string
+    depending on the event. Unparseable -> None; the row's created_at still
+    records when we heard about it."""
+    if v is None:
+        return None
+    try:
+        if isinstance(v, (int, float)) or str(v).isdigit():
+            n = float(v)
+            if n > 1e11:      # milliseconds
+                n /= 1000.0
+            return datetime.fromtimestamp(n, tz=timezone.utc)
+        return datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def extract_msg_id(detail):
+    """Pull the provider message id out of a send response body.
+
+    Stored against the send in message_log so a later delivery callback can be
+    joined back to the message that caused it. Best-effort by design: without an
+    id the callback still lands, matched on phone instead.
+    """
+    if not detail:
+        return None
+    try:
+        j = json.loads(detail)
+    except Exception:
+        return None
+    if not isinstance(j, dict):
+        return None
+    for key in ("whatsappMessageId", "messageId", "id", "localMessageId"):
+        v = j.get(key)
+        if isinstance(v, (str, int)) and str(v).strip():
+            return str(v)
+    # Wati nests the echo of the sent message one level down on some endpoints.
+    for outer in ("message", "data", "result"):
+        inner = j.get(outer)
+        if isinstance(inner, dict):
+            for key in ("whatsappMessageId", "messageId", "id"):
+                v = inner.get(key)
+                if isinstance(v, (str, int)) and str(v).strip():
+                    return str(v)
+    return None
 
 
 def parse_inbound(payload):

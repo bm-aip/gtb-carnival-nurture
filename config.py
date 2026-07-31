@@ -1,5 +1,4 @@
 import os
-from datetime import date
 
 def _b(v): return str(v).lower() in ("1", "true", "yes", "on")
 
@@ -43,26 +42,37 @@ WATI_BASE = os.environ.get("WATI_BASE", "").rstrip("/")
 WATI_TOKEN = os.environ.get("WATI_TOKEN", "").replace("Bearer ", "").strip()
 WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
 
-# Template names as approved in Wati. Defaults match the copy handed to the
-# owner; override per-env if the approved names differ -- no code change needed.
-WATI_TEMPLATES = {
-    # Defaults = the correctly-variable-tagged templates owner confirmed in Wati
-    # (the *_final / *_1 versions). Override via env only if a different template
-    # gets approved instead.
-    "m1_ron":      os.environ.get("WATI_TPL_M1_RON", "gtb_m1_ron_final"),
-    "m1_elements": os.environ.get("WATI_TPL_M1_ELEMENTS", "gtb_m1_elements_1"),
-    "m2":          os.environ.get("WATI_TPL_M2", "gtb_m2_followup_final"),
-    "m3":          os.environ.get("WATI_TPL_M3", "gtb_m3_reminder"),
-    "m3_generic":  os.environ.get("WATI_TPL_M3_GENERIC", "gtb_m3_generic"),
-    "ack":         os.environ.get("WATI_TPL_ACK", "gtb_ack"),
+# --- Knock templates ---
+# The six carnival templates (gtb_m1_ron_final, gtb_m2_followup_final,
+# gtb_m3_reminder, ...) are REMOVED, Phase 0 task 1b. All six were carnival copy
+# -- an event that ended on 12 July -- so none could be reused for a nurture
+# knock. They are also unrecoverable as copy: WhatsApp templates are approved
+# per exact body text, so new copy needs new approval regardless.
+#
+# The replacement set is the amended 4-knock sequence (POST-CARNIVAL-DESIGN §6,
+# amended 2026-07-30): T1 lifestyle (day 0) · T2 location (day 3) · T3
+# low-density (day 10) · T6 visit invitation (day 25, rewritten to drop the
+# booking flow). Populated by task 17 once Meta approves them; env-overridable
+# so an approval-name change is not a code change.
+KNOCK_TEMPLATES = {
+    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", ""),
+    "t2_location":    os.environ.get("WATI_TPL_T2", ""),
+    "t3_low_density": os.environ.get("WATI_TPL_T3", ""),
+    "t6_visit":       os.environ.get("WATI_TPL_T6", ""),
 }
 
-EVENT_NAME = os.environ.get("EVENT_NAME", "GTB Carnival")
-EVENT_VENUE = os.environ.get("EVENT_VENUE", "GTB Lounge, EA Mall, Chennai")
-EVENT_MAPS_LINK = os.environ.get("EVENT_MAPS_LINK", "")
-EVENT_TIMING = os.environ.get("EVENT_TIMING", "All day")
-EVENT_DATES = [date.fromisoformat(d) for d in
-               os.environ.get("EVENT_DATES", "2026-07-10,2026-07-11,2026-07-12").split(",")]
+# --- Carnival event constants: REMOVED, Phase 0 task 1b (2026-07-30) ---
+# EVENT_NAME / EVENT_VENUE / EVENT_MAPS_LINK / EVENT_TIMING / EVENT_DATES are
+# gone. EVENT_DATES was the load-bearing constant of the whole old lifecycle:
+# reply parsing indexed into it BY POSITION (a reply of "1" meant carnival day
+# one) and three send guards compared against EVENT_DATES[-1]. Those guards were
+# what kept the system inert after 12 July -- SEND_ENABLED (below) now does that
+# job deliberately, which is why task 1a had to land before this deletion.
+#
+# `parser.py` is orphaned by this change: nothing imports it any more. Left on
+# disk rather than deleted so the old day-picker logic stays readable; safe to
+# remove whenever you like. Same for `scripts/smoke_test.py`, which exercises
+# carnival flows that no longer exist.
 
 import re as _re
 
@@ -127,6 +137,103 @@ WATI_PATH_TOKEN = os.environ.get("WATI_PATH_TOKEN", "").strip()
 # message is only safe on the authenticated webhook route.
 WALKIN_ENABLED = _b(os.environ.get("WALKIN_ENABLED", "false"))
 
+# --- Budget gate (design §2) ---
+# The bot compares what a buyer says against these privately. It never quotes them,
+# and no price is in the corpus to quote -- the gate is internal arithmetic.
+#
+# Rupees, not crores, so there is no unit ambiguity at a comparison site.
+#
+# ⚠️ The floor was ₹1.5cr until 2026-07-31, when the owner's price sheet showed the
+# real entry price is ₹1.28cr. Budget is a HARD gate: a wrong floor sends qualified
+# buyers to Dead and suppresses them permanently, and produces no error and no
+# complaint -- you simply never hear from the people it discarded. Re-check this
+# whenever pricing moves.
+#
+# Only the FLOOR rejects. The ceiling is a signal for sales, not a filter: somebody
+# with more money than the top unit is a good problem, not an unqualified lead.
+BUDGET_FLOOR = int(os.environ.get("BUDGET_FLOOR", "12800000"))      # ₹1.28 cr
+BUDGET_CEILING = int(os.environ.get("BUDGET_CEILING", "55000000"))  # ₹5.5 cr
+
+# --- Knowledge base / RAG (task 8) ---
+# pgvector on the existing Railway Postgres -- no second datastore. The brand fence
+# is then a WHERE clause on the same database that already knows which project a
+# lead belongs to, rather than a distributed-consistency problem (design §11).
+#
+# EMBED_DIM must match the embedding model. It is baked into the column type
+# because HNSW indexing requires a fixed dimension, so changing model is a
+# RE-INDEX (drop chunks, re-embed), never an in-place edit. The model name is
+# stored on every chunk so a mismatch is detectable instead of silently wrong.
+#
+# Provider: VOYAGE (owner has a key from another project, 2026-07-31).
+# Chosen over Supabase's built-in gte-small for one specific reason: gte-small is
+# English-only (384 dims) and this audience writes Tanglish on WhatsApp -- "2bhk
+# irukka", "price enna", "ECR la epdi". Matching those to the right FAQ row IS the
+# retrieval step, so an English-only model would raise the escalation rate for no
+# saving; the corpus is ~100 chunks, so embedding cost is a rounding error either way.
+#
+# voyage-4-large, 1024 dims native. NOTE: the 3-series names (voyage-3-large) are
+# superseded -- do not reintroduce them.
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "voyage-4-large")
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY", "")
+VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
+# Provider caps a request at 1000 texts; stay well under so a retry is cheap.
+EMBED_BATCH = int(os.environ.get("EMBED_BATCH", "100"))
+
+# Retrieval over-fetch. With an HNSW index plus a `WHERE brand_id` filter, Postgres
+# can filter AFTER the index scan and return fewer than k rows for the brand. Ask
+# for more than we need, then trim. Corpora here are tens of documents, so the cost
+# is nil and the alternative is a silently short answer.
+RETRIEVE_K = int(os.environ.get("RETRIEVE_K", "6"))
+RETRIEVE_OVERFETCH = int(os.environ.get("RETRIEVE_OVERFETCH", "40"))
+
+# --- Retry ceiling (Phase 0, task 4) ---
+# Two ceilings, because not every failure is the recipient's fault.
+#
+# RETRY_MAX_RECIPIENT -- failures attributable to THIS PERSON (their number is not
+#     on WhatsApp, they have blocked us). Low, because each one is real evidence.
+# RETRY_MAX_TRANSIENT -- timeouts, 5xx, rate limits, and anything unrecognised.
+#     Higher, because these say nothing about the lead.
+#
+# Failures classed as SYSTEM (template not approved, bad token, 24h window shut)
+# count toward NEITHER. That preserves the original reasoning at sequencer.py's
+# old retry comment: while templates were pending approval every send failed for
+# reasons unrelated to the lead, and a strike rule would have killed good leads.
+RETRY_MAX_RECIPIENT = int(os.environ.get("RETRY_MAX_RECIPIENT", "3"))
+RETRY_MAX_TRANSIENT = int(os.environ.get("RETRY_MAX_TRANSIENT", "6"))
+RETRY_WINDOW_DAYS = int(os.environ.get("RETRY_WINDOW_DAYS", "30"))
+
+# --- Fatigue cap (Phase 0, task 3) ---
+# Owner decision 2026-07-30: a new reason RESETS the knock counter. Because "a new
+# reason" is loose and hard to police, that generosity is made safe by a second
+# ceiling that NOTHING can reset.
+#
+#   KNOCK_MAX_PER_JOURNEY -- resettable. The 4-knock sequence (day 0/3/10/25).
+#   FATIGUE_MAX_PER_WINDOW -- NOT resettable, ever. A rolling ceiling, so even an
+#       immediate reset cannot produce a burst. Matches the RON nurture plan's own
+#       guardrail: never more than two nurture messages in the same week.
+#
+# Both are counted from send history rather than held as stored numbers, so a
+# count cannot be forged -- only a journey's start marker moves, and that is
+# logged with a reason in journey_resets.
+KNOCK_MAX_PER_JOURNEY = int(os.environ.get("KNOCK_MAX_PER_JOURNEY", "4"))
+FATIGUE_WINDOW_DAYS = int(os.environ.get("FATIGUE_WINDOW_DAYS", "7"))
+FATIGUE_MAX_PER_WINDOW = int(os.environ.get("FATIGUE_MAX_PER_WINDOW", "2"))
+
+# --- Master send switch (Phase 0, task 1a) ---
+# Default FALSE. Nothing sends until this is deliberately turned on in the env.
+#
+# This exists because the system's current inertness is ACCIDENTAL: every send
+# loop skips because today is past the last carnival day (sequencer.py:185,
+# :337, :363). Removing that dead carnival wiring -- which task 1b does -- would
+# otherwise re-arm the sender as a side effect. The explicit switch has to be in
+# place before the accidental one is taken out.
+#
+# Distinct from GLOBAL_PAUSE: pause is an operator brake pulled during an
+# incident and expected to be toggled; this is a build-state assertion, flipped
+# once, when the new engine is ready to talk to real people.
+SEND_ENABLED = _b(os.environ.get("SEND_ENABLED", "false"))
+
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
@@ -135,11 +242,10 @@ MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 DAILY_SEND_CAP = int(os.environ.get("DAILY_SEND_CAP", "250"))
 GLOBAL_PAUSE_ENV = _b(os.environ.get("GLOBAL_PAUSE", "false"))
 
-# Anti-bulk-blast pacing (Balanced profile). Random pause between each bulk
-# outbound send; batch cap keeps a single tick bounded and spreads sends across
-# ticks. Acks (1:1 replies) are never jittered.
-SEND_JITTER_MIN_SEC = float(os.environ.get("SEND_JITTER_MIN_SEC", "5"))
-SEND_JITTER_MAX_SEC = float(os.environ.get("SEND_JITTER_MAX_SEC", "20"))
+# Batch cap per scheduler tick. Keeps one tick bounded and spreads a backlog across
+# ticks so /admin/poll-now returns promptly. Send JITTER was removed 2026-07-31: it
+# guarded against Wasender's ban-on-burst behaviour, which does not apply to the
+# official Cloud API.
 SEND_BATCH_PER_TICK = int(os.environ.get("SEND_BATCH_PER_TICK", "10"))
 
 DASH_USER = os.environ.get("DASH_USER", "admin")

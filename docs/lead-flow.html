@@ -1,0 +1,587 @@
+<title>The Qualification Machine — Flow</title>
+<style>
+  :root {
+    --paper:      #eef1f4;
+    --card:       #ffffff;
+    --ink:        #131a22;
+    --ink-soft:   #4d5a68;
+    --ink-faint:  #8896a4;
+    --rule:       #cfd7de;
+    --rule-soft:  #e0e6eb;
+
+    --signal:     #b8690f;  /* the bar — the pivot */
+    --signal-bg:  #fbf0e0;
+    --flow:       #1f6b66;  /* automated path */
+    --flow-bg:    #e2eeed;
+    --win:        #3d6b39;  /* qualified */
+    --win-bg:     #e5eee4;
+    --wait:       #4a5f8a;  /* not now */
+    --wait-bg:    #e4e8f1;
+    --dead:       #8e4a41;  /* suppressed */
+    --dead-bg:    #f2e4e2;
+
+    --sans: ui-sans-serif, "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --mono: ui-monospace, "Cascadia Mono", "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
+
+    --shadow: 0 1px 2px rgba(19,26,34,.05), 0 4px 12px rgba(19,26,34,.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0e1319; --card: #161e26; --ink: #e4eaef; --ink-soft: #9aa8b6;
+      --ink-faint: #64717e; --rule: #2c3742; --rule-soft: #222b34;
+      --signal: #e8a253; --signal-bg: #2e2417;
+      --flow: #58b3ac; --flow-bg: #14282a;
+      --win: #7fb377; --win-bg: #182618;
+      --wait: #93a8d4; --wait-bg: #1a2032;
+      --dead: #d08a80; --dead-bg: #2b1c1a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0e1319; --card: #161e26; --ink: #e4eaef; --ink-soft: #9aa8b6;
+    --ink-faint: #64717e; --rule: #2c3742; --rule-soft: #222b34;
+    --signal: #e8a253; --signal-bg: #2e2417;
+    --flow: #58b3ac; --flow-bg: #14282a;
+    --win: #7fb377; --win-bg: #182618;
+    --wait: #93a8d4; --wait-bg: #1a2032;
+    --dead: #d08a80; --dead-bg: #2b1c1a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.25);
+  }
+  :root[data-theme="light"] {
+    --paper: #eef1f4; --card: #ffffff; --ink: #131a22; --ink-soft: #4d5a68;
+    --ink-faint: #8896a4; --rule: #cfd7de; --rule-soft: #e0e6eb;
+    --signal: #b8690f; --signal-bg: #fbf0e0;
+    --flow: #1f6b66; --flow-bg: #e2eeed;
+    --win: #3d6b39; --win-bg: #e5eee4;
+    --wait: #4a5f8a; --wait-bg: #e4e8f1;
+    --dead: #8e4a41; --dead-bg: #f2e4e2;
+    --shadow: 0 1px 2px rgba(19,26,34,.05), 0 4px 12px rgba(19,26,34,.05);
+  }
+
+  body {
+    background: var(--paper); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 3.5rem 1.5rem 5rem; }
+
+  /* masthead */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 1.25rem; margin-bottom: 2.5rem; }
+  .eyebrow {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--ink-faint); margin-bottom: .75rem;
+  }
+  h1 {
+    font-size: clamp(1.9rem, 4.5vw, 2.75rem); font-weight: 650;
+    letter-spacing: -.022em; line-height: 1.1; text-wrap: balance; margin-bottom: .6rem;
+  }
+  .standfirst { color: var(--ink-soft); max-width: 64ch; font-size: 1.02rem; }
+  .standfirst strong { color: var(--ink); font-weight: 600; }
+
+  .board { display: grid; grid-template-columns: minmax(0,1fr) 250px; gap: 2.5rem; align-items: start; }
+  @media (max-width: 940px) { .board { grid-template-columns: minmax(0,1fr); } }
+  .spine { display: flex; flex-direction: column; min-width: 0; }
+
+  .band-label {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .13em;
+    text-transform: uppercase; color: var(--ink-faint);
+    display: flex; align-items: center; gap: .6rem; margin-bottom: .7rem;
+  }
+  .band-label::after { content: ""; flex: 1; height: 1px; background: var(--rule-soft); }
+
+  /* front doors */
+  .doors { display: grid; grid-template-columns: 1.35fr 1fr; gap: 1rem; }
+  @media (max-width: 720px) { .doors { grid-template-columns: 1fr; } }
+
+  .door {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 3px; padding: 1rem 1.1rem; box-shadow: var(--shadow);
+  }
+  .door.primary { border-left: 3px solid var(--flow); }
+  .door.secondary { border-left: 3px solid var(--rule); opacity: .82; }
+  .door-tag {
+    font-family: var(--mono); font-size: .64rem; letter-spacing: .11em;
+    text-transform: uppercase; color: var(--ink-faint);
+    display: inline-block; margin-bottom: .5rem;
+    border: 1px solid var(--rule); border-radius: 2px; padding: .08rem .35rem;
+  }
+  .door.primary .door-tag { color: var(--flow); border-color: var(--flow); }
+  .door h3 {
+    font-family: var(--mono); font-size: .8rem; font-weight: 650;
+    letter-spacing: .04em; text-transform: uppercase; margin-bottom: .45rem;
+  }
+  .door.primary h3 { color: var(--flow); }
+  .door p { font-size: .87rem; color: var(--ink-soft); margin: 0; }
+  .door p + p { margin-top: .4rem; }
+  .door strong { color: var(--ink); font-weight: 600; }
+  .door ul { list-style: none; margin-top: .55rem; display: flex; flex-direction: column; gap: .22rem; }
+  .door li {
+    font-family: var(--mono); font-size: .73rem; color: var(--ink-soft);
+    padding-left: .9rem; position: relative;
+  }
+  .door li::before {
+    content: "+"; position: absolute; left: 0; color: var(--flow); font-weight: 700;
+  }
+  .door.secondary li::before { content: "·"; color: var(--ink-faint); }
+
+  .link { align-self: center; width: 1px; height: 30px; background: var(--rule); position: relative; flex: none; }
+  .link::after {
+    content: ""; position: absolute; bottom: 0; left: 50%;
+    width: 5px; height: 5px;
+    border-right: 1px solid var(--rule); border-bottom: 1px solid var(--rule);
+    transform: translate(-50%, 1px) rotate(45deg);
+  }
+  .gap { height: 2.2rem; }
+  .gap-sm { height: 1.2rem; }
+
+  /* the agent */
+  .agent {
+    border: 1px solid var(--signal); background: var(--signal-bg);
+    border-radius: 3px; padding: 1.4rem 1.35rem;
+  }
+  .agent-head { text-align: center; margin-bottom: 1.1rem; }
+  .agent-head .t {
+    font-family: var(--mono); font-size: clamp(.95rem, 2.4vw, 1.12rem); font-weight: 700;
+    letter-spacing: .05em; text-transform: uppercase; color: var(--signal); margin-bottom: .3rem;
+  }
+  .agent-head p { font-size: .88rem; color: var(--ink-soft); max-width: 60ch; margin: 0 auto; }
+  .agent-head strong { color: var(--ink); font-weight: 600; }
+
+  .slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: .7rem; }
+  .slots.four { grid-template-columns: repeat(4, 1fr); }
+  @media (max-width: 820px) { .slots.four { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 620px) { .slots, .slots.four { grid-template-columns: 1fr; } }
+  .slot {
+    background: var(--card); border: 1px solid var(--rule);
+    border-radius: 2px; padding: .75rem .8rem; text-align: center;
+    display: flex; flex-direction: column; align-items: center; gap: .18rem;
+    position: relative;
+  }
+  .slot .n {
+    font-family: var(--mono); font-size: .62rem; font-weight: 700;
+    color: var(--ink-faint); letter-spacing: .1em;
+  }
+  .slot b {
+    display: block; font-family: var(--mono); font-size: .78rem; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--signal);
+  }
+  .slot .gate {
+    font-family: var(--mono); font-size: .58rem; font-weight: 700;
+    letter-spacing: .09em; text-transform: uppercase;
+    padding: .1rem .35rem; border-radius: 2px; margin-bottom: .25rem;
+  }
+  .slot .g-hard  { background: var(--dead-bg);   color: var(--dead);   border: 1px solid var(--dead); }
+  .slot .g-soft  { background: var(--signal-bg); color: var(--signal); border: 1px solid var(--signal); }
+  .slot .g-never { background: var(--wait-bg);   color: var(--wait);   border: 1px solid var(--wait); }
+  .slot > span:last-child { font-size: .76rem; color: var(--ink-soft); }
+  .slot strong { color: var(--ink); font-weight: 600; }
+  .captured + .captured { margin-top: .5rem; }
+
+  .captured {
+    margin-top: .7rem; padding: .75rem .9rem;
+    background: var(--card); border: 1px dashed var(--rule);
+    border-radius: 2px;
+  }
+  .captured b {
+    display: block; font-family: var(--mono); font-size: .66rem; letter-spacing: .1em;
+    text-transform: uppercase; color: var(--ink-faint); margin-bottom: .3rem;
+  }
+  .captured p { font-size: .82rem; color: var(--ink-soft); margin: 0; }
+  .captured strong { color: var(--ink); font-weight: 600; }
+
+  .agent-foot {
+    margin-top: 1rem; padding-top: .85rem; border-top: 1px solid var(--rule);
+    font-size: .84rem; color: var(--ink-soft); text-align: center;
+  }
+  .agent-foot strong { color: var(--ink); font-weight: 600; }
+
+  /* exits */
+  .exits { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; }
+  @media (max-width: 940px) { .exits { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 560px) { .exits { grid-template-columns: 1fr; } }
+
+  .exit {
+    background: var(--card); border: 1px solid var(--rule);
+    border-top: 3px solid var(--rule); border-radius: 3px;
+    padding: .9rem 1rem; box-shadow: var(--shadow);
+    display: flex; flex-direction: column; gap: .4rem;
+  }
+  .exit h4 {
+    font-family: var(--mono); font-size: .76rem; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase;
+  }
+  .exit .who {
+    font-size: .78rem; color: var(--ink-faint);
+    padding-bottom: .4rem; border-bottom: 1px solid var(--rule-soft);
+  }
+  .exit p { font-size: .82rem; color: var(--ink-soft); margin: 0; }
+  .exit strong { color: var(--ink); font-weight: 600; }
+  .exit-win  { border-top-color: var(--win);  background: var(--win-bg); }
+  .exit-win h4 { color: var(--win); }
+  .exit-wait { border-top-color: var(--wait); background: var(--wait-bg); }
+  .exit-wait h4 { color: var(--wait); }
+  .exit-dead { border-top-color: var(--dead); background: var(--dead-bg); }
+  .exit-dead h4 { color: var(--dead); }
+  .exit-esc  { border-top-color: var(--signal); }
+  .exit-esc h4 { color: var(--signal); }
+
+  /* insets */
+  .inset {
+    margin-top: 2.6rem; border: 1px solid var(--rule); border-top: 3px solid var(--flow);
+    background: var(--card); border-radius: 3px; padding: 1.5rem 1.4rem; box-shadow: var(--shadow);
+  }
+  .inset h2 { font-size: 1.05rem; font-weight: 650; letter-spacing: -.01em; margin-bottom: .3rem; }
+  .inset > p { color: var(--ink-soft); font-size: .88rem; max-width: 66ch; margin-bottom: 1.2rem; }
+  .inset > p strong { color: var(--ink); font-weight: 600; }
+
+  .turn-scroll { overflow-x: auto; padding-bottom: .4rem; }
+  .turn { display: flex; min-width: 660px; }
+  .turn-step {
+    flex: 1; padding: .7rem .8rem;
+    border: 1px solid var(--rule-soft); border-right: none;
+    font-size: .78rem; color: var(--ink-soft); background: var(--card);
+  }
+  .turn-step:last-child { border-right: 1px solid var(--rule-soft); }
+  .turn-step b {
+    display: block; font-family: var(--mono); font-size: .66rem; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink); margin-bottom: .25rem;
+  }
+  .turn-step.fence { background: var(--flow-bg); border-color: var(--flow); border-right: 1px solid var(--flow); }
+  .turn-step.fence + .turn-step { border-left: none; }
+  .turn-step.fence b { color: var(--flow); }
+
+  .note {
+    margin-top: 1.1rem; padding-top: 1rem; border-top: 1px solid var(--rule-soft);
+    font-size: .85rem; color: var(--ink-soft);
+  }
+  .note strong { color: var(--ink); font-weight: 600; }
+  code {
+    font-family: var(--mono); font-size: .84em;
+    background: var(--flow-bg); color: var(--flow);
+    padding: .08em .3em; border-radius: 2px;
+  }
+
+  .flywheel { border-top-color: var(--win); }
+  .flywheel h2 { color: var(--ink); }
+  .fw-loop {
+    display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+    font-family: var(--mono); font-size: .76rem; color: var(--ink-soft);
+    margin-bottom: 1rem;
+  }
+  .fw-loop span {
+    border: 1px solid var(--rule); border-radius: 2px;
+    padding: .3rem .55rem; background: var(--card);
+  }
+  .fw-loop span.hit { border-color: var(--win); color: var(--win); font-weight: 600; }
+  .fw-loop em { color: var(--ink-faint); font-style: normal; }
+
+  .warn {
+    margin-top: 1rem; padding: .8rem .9rem;
+    border: 1px solid var(--dead); background: var(--dead-bg);
+    border-radius: 3px; font-size: .84rem; color: var(--ink-soft);
+  }
+  .warn b {
+    display: block; font-family: var(--mono); font-size: .68rem; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--dead); margin-bottom: .3rem;
+  }
+  .warn strong { color: var(--ink); font-weight: 600; }
+
+  /* rail */
+  .rail { position: sticky; top: 2rem; }
+  @media (max-width: 940px) { .rail { position: static; margin-top: 3rem; } }
+  .rail h2 {
+    font-family: var(--mono); font-size: .7rem; letter-spacing: .13em; text-transform: uppercase;
+    color: var(--ink-faint); padding-bottom: .6rem; border-bottom: 1px solid var(--rule); margin-bottom: 1rem;
+  }
+  .rail > p { font-size: .82rem; color: var(--ink-soft); margin-bottom: 1.1rem; }
+  .guards { display: flex; flex-direction: column; gap: .85rem; }
+  .guard { border-left: 2px solid var(--rule); padding-left: .7rem; }
+  .guard b { display: block; font-size: .8rem; font-weight: 650; color: var(--ink); margin-bottom: .1rem; }
+  .guard span { font-size: .78rem; color: var(--ink-soft); }
+  .guard.hot { border-left-color: var(--signal); }
+
+  .foot {
+    margin-top: 3rem; padding-top: 1.25rem; border-top: 1px solid var(--rule);
+    font-size: .87rem; color: var(--ink-soft); max-width: 72ch;
+  }
+  .foot h3 { font-size: .95rem; font-weight: 650; color: var(--ink); margin-bottom: .5rem; }
+  .foot strong { color: var(--ink); font-weight: 600; }
+  .foot ul { list-style: none; margin-top: .6rem; display: flex; flex-direction: column; gap: .35rem; }
+  .foot li { padding-left: 1rem; position: relative; }
+  .foot li::before { content: "?"; position: absolute; left: 0; color: var(--signal); font-family: var(--mono); font-weight: 700; }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">Post-carnival architecture · agreed 13 July 2026 · not yet built</div>
+    <h1>The qualification machine</h1>
+    <p class="standfirst">
+      This bot <strong>replaces the presales team.</strong> Its job is to do what a presales caller does —
+      qualify, filter, and hand sales only the leads worth their time. Sales set the bar. Sales own the
+      knowledge. The bot enforces both, at scale, on WhatsApp, for free.
+    </p>
+  </header>
+
+  <div class="board">
+    <div class="spine">
+
+      <!-- FRONT DOORS -->
+      <div class="band-label">Two front doors</div>
+      <div class="doors">
+        <div class="door primary">
+          <span class="door-tag">Primary · starting here</span>
+          <h3>Click-to-WhatsApp ad</h3>
+          <p><strong>They message us first.</strong> That one fact deletes the hardest problem we had — the 24-hour free-text window opens on arrival, at no cost.</p>
+          <ul>
+            <li>No template, no Meta gate — <em>on first contact</em></li>
+            <li>Ad ID → brand, stamped exactly, on contact</li>
+            <li>Click ID captured → the flywheel below</li>
+            <li>Bot starts qualifying immediately</li>
+          </ul>
+          <p style="margin-top:.6rem; font-size:.82rem;"><strong>Careful:</strong> CTWA doesn't delete the template tax — it moves it. Go silent and the window shuts, and the second knock costs a template again. <em>Meta's gate is waiting on the ghost path.</em></p>
+        </div>
+        <div class="door secondary">
+          <span class="door-tag">Later campaigns</span>
+          <h3>Lead form</h3>
+          <p>The old path. Needs an opener message to earn a reply first, and pays Meta's template tax to send it.</p>
+          <ul>
+            <li>One question, sent as a utility message</li>
+            <li>No reply → three spaced tries, then quiet</li>
+            <li>Reply → same agent as above</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="gap"></div>
+
+      <!-- THE AGENT -->
+      <div class="band-label">The bot does presales</div>
+      <div class="agent">
+        <div class="agent-head">
+          <div class="t">Ask in this order. It is the inverse of what matters.</div>
+          <p>Sales agreed this bar, so sales can't disown it. <strong>"What's your budget?" is a brutal opening line to a stranger who just tapped an Instagram ad</strong> — presales people don't lead with it, they earn it. So the bot opens with the questions that cost them nothing, and spends the trust it earns on the one that decides everything.</p>
+        </div>
+
+        <div class="slots four">
+          <div class="slot">
+            <span class="n">1</span>
+            <b>Purpose</b>
+            <span class="gate g-never">never gates</span>
+            <span>Home, or investment? One word to answer — and it <strong>reframes everything after it.</strong></span>
+          </div>
+          <div class="slot">
+            <span class="n">2</span>
+            <b>Location</b>
+            <span class="gate g-hard">hard gate</span>
+            <span>Where they want to <em>buy</em>. Hunting on OMR? Not a fit, whatever the budget.</span>
+          </div>
+          <div class="slot">
+            <span class="n">3</span>
+            <b>Config</b>
+            <span class="gate g-soft">soft gate</span>
+            <span>2BHK vs 3BHK doesn't reject — <strong>sales has tools.</strong> Only a plot or a shop does.</span>
+          </div>
+          <div class="slot">
+            <span class="n">4</span>
+            <b>Budget</b>
+            <span class="gate g-hard">hard gate</span>
+            <span>The sharpest filter — <strong>asked last, because it's earned.</strong></span>
+          </div>
+        </div>
+
+        <div class="captured">
+          <b>Purpose is a lens, not a filter</b>
+          <p>An <strong>end-user</strong> wants schools, commute, possession, EMI, which floor gets the light. An <strong>investor</strong> wants yield, appreciation, resale, exit — <strong>he does not care about the playground.</strong> Both are real buyers; neither gets rejected. But the bot has to know which before it opens its mouth. Same knowledge base, different half of it.</p>
+        </div>
+
+        <div class="captured">
+          <b>Timeline — asked, but never a gate</b>
+          <p>Every buyer says "soon", so it's the one slot people misreport. Gate on it and you reject honest buyers who happen to be six months out. The bot records it and hands it to sales as <strong>intelligence, not a verdict</strong> — "ready in 3 months" and "ready in 14" both reach a salesperson, who decides who to call first.</p>
+        </div>
+
+        <div class="agent-foot">
+          The bot answers their questions from that brand's brochures and FAQs — <strong>in ranges, never exact figures</strong> — to earn the right to ask its own. It <strong>warms</strong> the site visit. It does <strong>not book</strong> it. Sales closes that.
+        </div>
+      </div>
+
+      <div class="link"></div>
+      <div class="gap-sm"></div>
+
+      <!-- EXITS -->
+      <div class="band-label">Four ways out</div>
+      <div class="exits">
+
+        <div class="exit exit-win">
+          <h4>Qualified</h4>
+          <div class="who">Budget + location clear · config OK or flagged</div>
+          <p><strong>Written to Sell.do</strong> — the durable record, where sales already live. Purpose, timeline and any config gap ride along as context.</p>
+          <p><strong>Pinged to the WhatsApp group</strong> — the interrupt that gets someone moving today.</p>
+          <p>Sales calls. Sales closes for the site visit. <strong>They only ever touch leads that are already real.</strong></p>
+        </div>
+
+        <div class="exit exit-wait">
+          <h4>Ghost</h4>
+          <div class="who">Started, then went silent · <strong>the biggest bucket</strong></div>
+          <p>Clicked the ad, said hi, answered a question or two, vanished. The window shuts 24 hours later.</p>
+          <p>Not qualified. <strong>Not dead either</strong> — they clicked a property ad and started a conversation.</p>
+          <p>We knock again: <strong>one template, then two more spaced tries.</strong> If they come back, the bot <strong>picks up where it left off</strong> — it doesn't start over.</p>
+          <p><strong>Because budget is asked last, most ghosts vanish before it</strong> — so we already know their purpose, location and config. Which writes the re-open message for us: <em>"You were looking at a 3BHK in Vandalur — shall I send you the price range?"</em> That's the budget question in disguise, and it's shaped exactly like the utility template Meta doesn't block.</p>
+        </div>
+
+        <div class="exit exit-esc">
+          <h4>Out of depth</h4>
+          <div class="who">Objection · price pushback · hard question</div>
+          <p>The bot <strong>stops talking</strong> and hands over, flagged. It does not improvise.</p>
+          <p><strong>These are not the leftovers — these are the buyers.</strong> The ones who push back are the ones who care. This queue cannot be left unwatched.</p>
+        </div>
+
+        <div class="exit exit-dead">
+          <h4>Dead</h4>
+          <div class="who">Only budget or location can send you here</div>
+          <p><strong>Budget too low</strong> · <strong>hunting in the wrong micro-market</strong> · wants something we flatly don't sell (a plot, a shop) · no intent · typed STOP · junk.</p>
+          <p>Suppressed <strong>permanently</strong>. Never messaged again, by anything, ever.</p>
+          <p>Includes the buyer who'd fit the <em>other</em> brand. By decision we don't cross-sell — leads stay in their lane.</p>
+        </div>
+
+      </div>
+
+      <!-- INSET: THE FENCE -->
+      <section class="inset">
+        <h2>Inside one bot turn — where the ring-fence lives</h2>
+        <p>
+          Two brands, one system. <strong>A RON agent must never reach an Elements document</strong> — a
+          leaked cross-brand price is the kind of mistake a buyer screenshots. So the fence is a database
+          filter, not an instruction to the model. Models drift; <code>WHERE</code> clauses don't.
+        </p>
+
+        <div class="turn-scroll">
+          <div class="turn">
+            <div class="turn-step">
+              <b>1 · They ask</b>
+              "What's the price of the 3BHK?"
+            </div>
+            <div class="turn-step fence">
+              <b>2 · Lock the brand</b>
+              Brand comes from the <em>lead record</em> — stamped from the ad they clicked. <code>WHERE brand_id = lead.brand</code>. <strong>Never from what they typed.</strong> No phrasing jumps the fence.
+            </div>
+            <div class="turn-step">
+              <b>3 · Search that brand only</b>
+              The closest passages from that brand's brochures, floor plans and FAQ. Sales keep these current.
+            </div>
+            <div class="turn-step">
+              <b>4 · Is it sure?</b>
+              Nothing solid comes back → it <strong>may not</strong> answer from its own general knowledge. That's where invented possession dates come from. It escalates instead.
+            </div>
+            <div class="turn-step">
+              <b>5 · Answer, then advance</b>
+              Answers from the documents, in a range never an exact figure — then pushes the checklist forward.
+            </div>
+            <div class="turn-step">
+              <b>6 · Log everything</b>
+              The reply is stored with the exact documents and versions that produced it.
+            </div>
+          </div>
+        </div>
+
+        <p class="note">
+          <strong>Why step 6 matters more than it looks:</strong> one day a buyer will say
+          <em>"your bot told me ₹X."</em> You'll pull that conversation and the exact document version
+          that was live that day, and know in seconds whether they're right. In property, that isn't
+          housekeeping — that's your defence.
+        </p>
+      </section>
+
+      <!-- INSET: FLYWHEEL -->
+      <section class="inset flywheel">
+        <h2>The flywheel — your ad spend teaches itself</h2>
+        <p>
+          Click-to-WhatsApp hands us a <strong>click ID</strong> that traces the conversation back to the
+          exact ad that produced it. Which means we can tell Meta <strong>"this one qualified"</strong> —
+          not "this one clicked."
+        </p>
+
+        <div class="fw-loop">
+          <span>Meta shows the ad</span> <em>→</em>
+          <span>they message us</span> <em>→</em>
+          <span>bot qualifies them</span> <em>→</em>
+          <span class="hit">we tell Meta: QUALIFIED</span> <em>→</em>
+          <span class="hit">Meta hunts more like him</span> <em>↺</em>
+        </div>
+
+        <p style="margin-bottom:0">
+          Meta stops optimising for cheap clicks and starts hunting people who actually qualify.
+          <strong>Same budget, better leads, every week, with nobody touching a dial.</strong>
+        </p>
+
+        <div class="warn">
+          <b>Must verify before building</b>
+          Meta puts the click ID in <em>its</em> webhook. <strong>Wati sits in between, and whether Wati
+          forwards that field to us is undocumented anywhere.</strong> One CTWA click, catch the payload,
+          read it with our own eyes. If we don't capture the click ID at the moment of arrival,
+          <strong>it is gone forever</strong> — and so is the flywheel.
+        </div>
+      </section>
+
+    </div>
+
+    <!-- RAIL -->
+    <aside class="rail">
+      <h2>Always on</h2>
+      <p>Not steps in the flow — they apply at every point in it. And every one is enforced by the system, not by asking the bot nicely.</p>
+
+      <div class="guards">
+        <div class="guard hot">
+          <b>The brand fence</b>
+          <span>A database filter, not an instruction. Cross-brand leakage is impossible, not unlikely.</span>
+        </div>
+        <div class="guard hot">
+          <b>Price = range only</b>
+          <span>Enforced by <em>what we load</em>. Ranges go in; exact cost sheets stay out. <strong>What isn't in the knowledge base cannot be said.</strong></span>
+        </div>
+        <div class="guard">
+          <b>No source, no answer</b>
+          <span>The bot repeats what it found. It cannot fall back on what it "knows".</span>
+        </div>
+        <div class="guard">
+          <b>Never commits</b>
+          <span>No discounts, no promises, no site-visit slot. It doesn't book — it hands over.</span>
+        </div>
+        <div class="guard">
+          <b>Retry ceiling</b>
+          <span>Replaces today's loop, which retries a failed send every 5 minutes <em>forever</em> — the event ending is the only thing that ever stopped it.</span>
+        </div>
+        <div class="guard">
+          <b>Opt-out</b>
+          <span>"STOP" honoured permanently, across both brands.</span>
+        </div>
+        <div class="guard">
+          <b>Fatigue cap</b>
+          <span>A hard lifetime limit on how many times one person can be messaged.</span>
+        </div>
+        <div class="guard">
+          <b>Full audit</b>
+          <span>Every answer stored with the documents that produced it.</span>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+
+  <div class="foot">
+    <h3>What's still missing before a line of code gets written</h3>
+    <p>
+      Sales have agreed a bar. <strong>We don't yet have their numbers</strong> — and those three numbers
+      <em>are</em> the bot. Everything else is plumbing around them.
+    </p>
+    <ul>
+      <li><strong>Budget</strong> <em>(hard gate)</em> — what's the floor, per brand? Hard cutoff, or a band?</li>
+      <li><strong>Location</strong> <em>(hard gate)</em> — which micro-markets count as a fit? Elements is at Vandalur — does Tambaram qualify? Where exactly do we draw the line?</li>
+      <li><strong>Configuration</strong> <em>(soft gate)</em> — two things: what's sellable right now (this also goes into the knowledge base), and what counts as <em>wildly off</em>? What do we flatly not sell — plots? commercial? rentals? Only that second list rejects anyone.</li>
+      <li><strong>Escalations</strong> — the same WhatsApp group, or its own? Whoever watches it is watching your best leads.</li>
+      <li><strong>Sell.do</strong> — today we only <em>read</em> from it. Writing a qualified lead <em>in</em> needs API access we don't have. That's a request to someone outside the team, and those take days. Start it now.</li>
+    </ul>
+  </div>
+
+</div>
