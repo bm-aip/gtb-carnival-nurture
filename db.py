@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS meta_leads (
 ALTER TABLE meta_leads ADD COLUMN IF NOT EXISTS preferred_date DATE;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS selldo_response_at TIMESTAMPTZ;
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
+-- Which campaign this lead came from. The bot's allow-list is checked against it,
+-- so a lead with no campaign is never messaged -- the gate fails closed.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign TEXT;
+CREATE INDEX IF NOT EXISTS idx_leads_campaign ON leads (campaign);
 CREATE INDEX IF NOT EXISTS idx_meta_leads_proj_time ON meta_leads (project, created_time);
 
 CREATE TABLE IF NOT EXISTS settings (

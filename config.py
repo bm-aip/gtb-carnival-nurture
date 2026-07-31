@@ -4,18 +4,48 @@ def _b(v): return str(v).lower() in ("1", "true", "yes", "on")
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
+# CAMPAIGN ALLOW-LIST. The bot only ever touches leads from these campaigns.
+#
+# Owner decision 2026-07-31: "we use this bot only for the leads from one campaign
+# - not all", and old-lead reactivation is on hold until the conversation flow has
+# been tested for real.
+#
+# An allow-list is safer BY CONSTRUCTION than the block-list the design assumed. A
+# suppression list over 48,354 leads is only as good as its completeness -- one
+# stage nobody thought of and the bot messages the wrong person. "Only these
+# campaigns" has no such failure mode: everyone else is unreachable whatever their
+# status. The suppression list still gets built (task 16) for when reactivation is
+# switched on; it is no longer the thing standing between us and a first
+# conversation.
+#
+# Matched case-insensitively against Sell.do's campaign name.
 SELLDO = {
     "RON": {
         "db_url": os.environ["SELLDO_DB_URL_RON"],
         "project": "Republic Of Nature",
-        "campaign": "RON_Carnival",
+        "campaigns": [c.strip() for c in os.environ.get(
+            "RON_CAMPAIGNS", "RON_Meta_BM,GTB RON BM website").split(",") if c.strip()],
     },
     "ELEMENTS": {
         "db_url": os.environ["SELLDO_DB_URL_ELEMENTS"],
         "project": "Elements Common",
-        "campaign": "Meta",
+        # No live campaign. Empty list = the bot touches no Elements lead at all.
+        "campaigns": [c.strip() for c in os.environ.get(
+            "ELEMENTS_CAMPAIGNS", "").split(",") if c.strip()],
     },
 }
+
+
+def campaign_allowed(project_key, campaign):
+    """Is this lead's campaign one the bot may talk to? Case-insensitive.
+
+    Unknown project or missing campaign -> False. The gate fails CLOSED: a lead we
+    cannot attribute is a lead we do not message.
+    """
+    if not campaign:
+        return False
+    allowed = SELLDO.get(project_key, {}).get("campaigns") or []
+    return campaign.strip().lower() in {a.lower() for a in allowed}
 
 META_TOKENS = {
     "RON": os.environ["META_TOKEN_RON"],
