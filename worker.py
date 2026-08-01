@@ -28,6 +28,7 @@ import signal
 import threading
 import time
 
+import config
 import conversation
 import db
 import handoff
@@ -70,6 +71,18 @@ def _handle_inbound(job):
     if not lead:
         db.log_msg(None, "in", "unattributed", text,
                    detail=f"phone={phone} worker: no lead")
+        return
+
+    # THE ALLOW-LIST GATE. Owner 2026-07-31: "we use this bot only for the leads
+    # from one campaign - not all". Checked HERE, on the reply path, not only at
+    # intake -- the 563 carnival-era leads already in the table predate the
+    # allow-list, and any of them could message the number tomorrow.
+    #
+    # Fails closed: a lead with no campaign is not messaged.
+    if not config.campaign_allowed(lead.get("project"), lead.get("campaign")):
+        db.log_msg(lead["id"], "in", "out_of_scope", text,
+                   detail=f"campaign={lead.get('campaign')!r} not in allow-list; "
+                          f"recorded, no reply")
         return
 
     if not qualifier.configured():

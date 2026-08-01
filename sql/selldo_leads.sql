@@ -7,13 +7,14 @@ SELECT DISTINCT ON (l.id)
     cr.utm_lead_id      AS meta_lead_id,
     l.name              AS name,
     st.name             AS status,
+    ca.name             AS campaign,
     cr.created_at       AS response_at
 FROM reporting_leads l
 JOIN reporting_campaign_responses cr ON cr.reporting_lead_id = l.id
-JOIN reporting_campaigns c           ON c.id = cr.reporting_campaign_id
+JOIN reporting_campaigns ca          ON ca.id = cr.reporting_campaign_id
 LEFT JOIN reporting_projects p       ON p.id = cr.reporting_project_id
 LEFT JOIN reporting_lead_stages st   ON st.id = l.reporting_lead_stage_id
-WHERE c.name = %(campaign)s
+WHERE lower(ca.name) = ANY(%(campaigns)s)
   AND (p.name = %(project)s OR cr.reporting_project_id IS NULL)
   AND cr.created_at >= '2026-06-25'
 ORDER BY l.id, cr.created_at DESC

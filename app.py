@@ -10,7 +10,11 @@ import config
 
 # Bump on every deploy. /admin/config-check echoes it, so you can prove which
 # source is serving before flipping a switch that messages real people.
-CODE_VERSION = "2026-07-10-walkin-inbound"
+# Bump this on EVERY deploy. It is the only way to prove which source is actually
+# serving before flipping a switch that messages real people -- and it silently
+# lied through the whole Phase 0 rollout, still reporting the carnival build while
+# the new code was live. A stale value here is worse than no value.
+CODE_VERSION = "2026-07-31-campaign-allowlist"
 import db
 import selldo
 import meta

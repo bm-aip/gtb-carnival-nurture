@@ -23,13 +23,21 @@ def _load_sql():
 
 def poll_project(project_key):
     cfg = config.SELLDO[project_key]
+
+    # No allow-listed campaign for this project -> poll nothing at all. Checked
+    # before we connect, so an empty list costs no round trip. An empty list must
+    # mean "touch no lead", never "match everything".
+    campaigns = [name.lower() for name in cfg.get("campaigns") or []]
+    if not campaigns:
+        return
+
     sql = _load_sql()
     rows = []
     c = psycopg2.connect(cfg["db_url"])
     try:
         c.set_session(readonly=True)
         with c.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute(sql, {"project": cfg["project"], "campaign": cfg["campaign"]})
+            cur.execute(sql, {"project": cfg["project"], "campaigns": campaigns})
             rows = cur.fetchall()
     finally:
         c.close()
@@ -38,25 +46,21 @@ def poll_project(project_key):
     for r in rows:
         sid = str(r["selldo_lead_id"])
         seen_ids.add(sid)
-        qualified = config.status_qualifies(r.get("status"))
 
         existing = db.q(
             "SELECT * FROM leads WHERE project=%s AND selldo_lead_id=%s",
             (project_key, sid), one=True)
 
         if existing:
-            if existing["selldo_status"] != r.get("status"):
-                db.x("UPDATE leads SET selldo_status=%s, updated_at=now() WHERE id=%s",
-                     (r.get("status"), existing["id"]))
-            if not qualified and not existing["suppressed"]:
-                db.x("UPDATE leads SET suppressed=TRUE, wa_state='suppressed', updated_at=now() WHERE id=%s",
-                     (existing["id"],))
-            elif qualified and existing["suppressed"]:
-                db.x("UPDATE leads SET suppressed=FALSE, updated_at=now() WHERE id=%s",
-                     (existing["id"],))
-            continue
-
-        if not qualified:
+            if (existing["selldo_status"] != r.get("status")
+                    or existing.get("campaign") != r.get("campaign")):
+                db.x("""UPDATE leads SET selldo_status=%s, campaign=%s, updated_at=now()
+                        WHERE id=%s""",
+                     (r.get("status"), r.get("campaign"), existing["id"]))
+            # The carnival build suppressed any lead presales had not already marked
+            # "Interested". That is presales logic, and the bot REPLACES presales --
+            # gating on it would suppress exactly the new enquiries the bot exists to
+            # qualify. Suppression is now the opt-out ledger's job (Phase 0 task 2).
             continue
 
         # Already promoted straight from Meta (meta.promote_meta_leads). Sell.do
@@ -69,11 +73,12 @@ def poll_project(project_key):
 
         # New qualified lead → phone comes from the meta_leads matcher
         db.x("""INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name,
-                                   selldo_status, selldo_response_at, wa_state)
-                VALUES (%s,%s,%s,%s,%s,%s,'pending_match')
+                                   selldo_status, selldo_response_at, campaign,
+                                   wa_state)
+                VALUES (%s,%s,%s,%s,%s,%s,%s,'pending_match')
                 ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
              (project_key, sid, r.get("meta_lead_id"), r.get("name"),
-              r.get("status"), r.get("response_at")))
+              r.get("status"), r.get("response_at"), r.get("campaign")))
 
 
 def poll_all():
