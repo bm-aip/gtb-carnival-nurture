@@ -307,6 +307,42 @@ def _forced_escalation(why, chunks):
     }
 
 
+_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+# Typographic characters a model reaches for that add nothing on WhatsApp and
+# render inconsistently across handsets. Mapped to plain ASCII.
+_PUNCT = {
+    "—": " - ", "–": " - ",          # em / en dash
+    "‘": "'", "’": "'",              # curly single quotes
+    "“": '"', "”": '"',              # curly double quotes
+    "…": "...",                           # ellipsis
+    " ": " ",                             # non-breaking space
+}
+
+
+def _clean_reply(reply):
+    """Make the outbound text safe to put in front of a buyer.
+
+    Two problems, both seen in the first live turn (2026-08-01):
+
+    1. The model sometimes DOUBLE-escapes a unicode character inside its JSON
+       reply, so json.loads yields the six literal characters ``\\u2014`` instead
+       of an em dash. The buyer reads "the villa \\u2014 a weekend place". Decode
+       any such leftover escape.
+    2. Even decoded, typographic punctuation renders unevenly across handsets and
+       buys us nothing. Fold it down to ASCII.
+
+    Done here rather than in the prompt because a prompt is a request; every reply
+    passes through _enforce, so this is a guarantee.
+    """
+    if not reply:
+        return reply
+    reply = _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), reply)
+    for bad, good in _PUNCT.items():
+        reply = reply.replace(bad, good)
+    return re.sub(r"[ \t]{2,}", " ", reply).strip()
+
+
 def _enforce(d, chunks, lead):
     """Mechanical checks applied to whatever the model returned.
 
@@ -314,7 +350,8 @@ def _enforce(d, chunks, lead):
     because a prompt is a request and this is a guarantee.
     """
     valid_ids = {c["id"] for c in chunks}
-    reply = d.get("reply") or ""
+    reply = _clean_reply(d.get("reply") or "")
+    d["reply"] = reply
 
     # 1. CONFIDENCE FLOOR. A factual-sounding claim with no chunk behind it is
     #    exactly how invented schools and possession dates reach a buyer.

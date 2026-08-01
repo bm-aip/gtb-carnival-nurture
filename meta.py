@@ -173,10 +173,18 @@ def promote_meta_leads():
         return 0
     n = db.x("""
         INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name, phone,
-                           selldo_status, selldo_response_at, wa_state, selected_date)
+                           selldo_status, selldo_response_at, campaign, wa_state,
+                           selected_date)
         SELECT DISTINCT ON (m.phone)
                m.project, 'meta:' || m.meta_lead_id, m.meta_lead_id, m.name, m.phone,
-               'meta_direct', m.created_time, 'queued', m.preferred_date
+               'meta_direct', m.created_time,
+               -- The form name IS the campaign for a Meta-sourced lead. Without this
+               -- the row lands with campaign NULL and the allow-list gate in
+               -- worker.py silences it -- the gate fails closed, so an untagged lead
+               -- is an unanswerable lead. The form names are allow-listed alongside
+               -- the Sell.do campaign names in config.SELLDO[*]["campaigns"].
+               m.form_name,
+               'queued', m.preferred_date
         FROM meta_leads m
         WHERE m.phone IS NOT NULL
           AND m.form_name = ANY(%s)
