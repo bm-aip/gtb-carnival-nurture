@@ -68,9 +68,14 @@ def record_turn(conv, decision, gate_asked, framing_index):
     """
     checklist = dict(conv["checklist"] or {})
     learned = False
+    # visit_* are captured too: booking the site visit is an OUTCOME, not a nicety
+    # (owner 2026-08-01: "our job is to book the site visit - not just qualified").
+    # build_card already prints them; without this they were never stored, so a
+    # booked visit could never reach the salesperson.
     for field, key in (("purpose", "purpose"), ("location", "location"),
                        ("configuration", "configuration"), ("budget_inr", "budget"),
-                       ("timeline", "timeline")):
+                       ("timeline", "timeline"), ("visit_day", "visit_day"),
+                       ("visit_time", "visit_time"), ("visit_venue", "visit_venue")):
         val = decision.get(field)
         if val not in (None, "", "unknown") and not checklist.get(key):
             checklist[key] = val
@@ -123,7 +128,18 @@ def clears_the_bar(conv):
     return True, "budget and location clear"
 
 
-def set_outcome(conv_id, outcome):
+def set_outcome(conv_id, outcome, upgrade_from=None):
+    """Record a terminal outcome. First write wins, with one exception.
+
+    `upgrade_from` allows exactly one transition: qualified -> visit_booked. A
+    qualified lead who then names a day has got BETTER, and the salesperson needs
+    to know a visit exists. Every other outcome is still write-once, so nothing
+    can quietly overwrite a `dead` or an `escalated`.
+    """
+    if upgrade_from:
+        db.x("""UPDATE conversations SET outcome=%s, outcome_at=now(), updated_at=now()
+                WHERE id=%s AND outcome=%s""", (outcome, conv_id, upgrade_from))
+        return
     db.x("""UPDATE conversations SET outcome=%s, outcome_at=now(), updated_at=now()
             WHERE id=%s AND outcome IS NULL""", (outcome, conv_id))
 

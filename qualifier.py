@@ -153,10 +153,13 @@ Never ask "are you interested?".
   a problem. Never offer the mall unprompted.
 
 # Tone
-Premium, calm, experience-led. Never discount-led, never pushy. Short messages —
-this is WhatsApp, not a brochure. Match their language: if they write in
-Tanglish or mixed Tamil and English, reply in plain simple English they will
-easily follow.
+Premium, calm, experience-led. Never discount-led, never pushy.
+
+KEEP THE LANGUAGE SIMPLE. Short sentences. Everyday words. Two or three sentences
+is usually enough -- this is WhatsApp, not a brochure. Say "3 bedroom" rather than
+"3BHK configuration", "about 20 minutes" rather than "approximately". Cut the
+decorative phrases; a buyer skims. If they write in Tanglish or mixed Tamil and
+English, reply in plain simple English they will easily follow.
 
 # Actions
 - `answer` — you answered and/or asked. The normal case.
@@ -236,10 +239,18 @@ def run_turn(lead, message, history=None, conv=None):
 
     client = anthropic.Anthropic()
     messages = list(_history(history or []))
+    # The ladder was written in task 23 and then never passed to the model -- the
+    # `conv` argument was accepted and dropped, so every turn was chosen blind and
+    # only history stopped the bot repeating a framing. Now it is actually sent.
+    state = _ladder(conv)
+    if conv and conv.get("outcome") == "qualified":
+        state = HANDOVER_MODE + "\n\n" + state
+
     messages.append({
         "role": "user",
         "content": (f"RETRIEVED KNOWLEDGE (brand {brand_id} only):\n\n"
                     f"{_render_context(chunks)}\n\n"
+                    f"---\n{state}\n\n"
                     f"---\nBuyer's message:\n{message}"),
     })
 
@@ -273,6 +284,26 @@ def run_turn(lead, message, history=None, conv=None):
         return _forced_escalation("unparseable decision", chunks)
 
     return _enforce(decision, chunks, lead, message=message, history=history)
+
+
+# Sent instead of the normal checklist push once the lead is already qualified.
+# Owner 2026-08-01: booking the site visit is the job, not merely qualifying --
+# and the wind-down must not be cold, "because there are so many slips between the
+# cup and the lip - we shouldnt drop the ball untill we know sales is really ON it".
+HANDOVER_MODE = """THIS LEAD IS ALREADY QUALIFIED AND SALES HAS BEEN TOLD.
+
+Your job now is the site visit. That is the real win, not the qualification.
+
+- Do NOT ask the checklist questions again. You have what you need.
+- If they have not agreed a visit, invite them warmly to one. Wednesday to Sunday,
+  and Monday afternoon. Never Tuesday.
+- If they name a day or a time, TAKE IT. Say the visit is booked and that a
+  colleague will call to confirm the timing and share directions. Never say only
+  "confirmed" -- there is no calendar behind you.
+- Keep answering whatever they ask. Do not go quiet and do not become formal.
+- Mention naturally, once, that a colleague will call them. Do not repeat it every
+  message and do not sign off as though the conversation is over. Stay warm and
+  keep helping until they stop writing."""
 
 
 def _ladder(conv):

@@ -92,9 +92,17 @@ def _handle_inbound(job):
 
     conv = conversation.get_or_create(lead)
 
-    # Already finished. A lead that was marked dead or handed to a human must not
-    # be re-engaged by the bot -- that decision belongs to a person now.
-    if conv.get("outcome"):
+    # Only DEAD and ESCALATED stop the bot. Those are the two cases where a person
+    # owns the decision and a second voice would cut across them.
+    #
+    # QUALIFIED and VISIT_BOOKED deliberately do NOT stop it. On 2026-08-01 the bot
+    # asked "would you like me to pencil in a site visit?", the buyer answered
+    # "Sunday would be perfect", and got silence -- because qualifying had already
+    # closed the conversation. Asking a question and then refusing to hear the
+    # answer is worse than never asking. Owner: "it cant become cold - it has to
+    # wean off in a gentle way ... we shouldnt drop the ball untill we know sales is
+    # really ON it."
+    if conv.get("outcome") in ("dead", "escalated"):
         db.log_msg(lead["id"], "in", "post_outcome", text,
                    detail=f"conversation already {conv['outcome']}; needs a human")
         return
