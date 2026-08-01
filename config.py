@@ -230,7 +230,7 @@ VISIT_DAYS = {
 
 # Two venues, and the ORDER MATTERS.
 #
-# The site at Vadanemmeli is always offered first, because a site visit is the
+# The site is always offered first, because a site visit is the
 # definition of a win (design §2). The Experience Centre is NOT an equal option: it
 # is a distance-objection handler and a stepping stone. Offering it unprompted would
 # quietly convert site visits into mall visits, which is a downgrade the bot must
@@ -241,7 +241,10 @@ VISIT_DAYS = {
 # weekend. The EC visit is a milestone, not the outcome.
 VISIT_VENUES = {
     "site": {
-        "name": "the site at Vadanemmeli, ECR",
+        # Owner 2026-08-01: never say "Vadanemmeli" to a buyer -- it does not help
+        # the positioning and nobody knows where it is. qualifier._rename_locality
+        # enforces this on every outbound reply; this is the phrasing it uses.
+        "name": "the site on ECR, near Kovalam Junction",
         "priority": 1,
         "offer": "always",
     },

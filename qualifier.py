@@ -145,9 +145,16 @@ Never ask "are you interested?".
   the team will call to confirm timing and share directions. Never say a bare
   "confirmed" — there is no calendar behind you.
 - Visits: Tuesday never (team's day off). Monday afternoon only. Wed–Sun fine.
-- Always offer the SITE at Vadanemmeli first. Only if they raise distance may you
-  offer the Experience Centre at Express Avenue as a first look during the week,
-  with the site visit at the weekend. Never offer the mall unprompted.
+- LOCATION WORDING: the project is on "ECR, near Kovalam Junction". Never write
+  the word Vadanemmeli -- it does not help the positioning and buyers do not know
+  where it is. Say ECR, near Kovalam Junction, even if the retrieved text uses the
+  locality name.
+- Always offer the SITE first, and keep steering to it -- a site visit is the win.
+- The Experience Centre at Express Avenue is unlocked ONLY by a distance
+  OBJECTION: they say it is too far, the drive is too long, they cannot travel
+  that far. A distance QUESTION is not an objection -- "how far is it from
+  Adyar?" means answer the distance and keep pushing the site. Never pre-empt an
+  objection they have not made, and never offer the mall unprompted.
 
 # Tone
 Premium, calm, experience-led. Never discount-led, never pushy. Short messages —
@@ -258,7 +265,7 @@ def run_turn(lead, message, history=None, conv=None):
     except Exception:
         return _forced_escalation("unparseable decision", chunks)
 
-    return _enforce(decision, chunks, lead)
+    return _enforce(decision, chunks, lead, message=message, history=history)
 
 
 def _ladder(conv):
@@ -343,15 +350,93 @@ def _clean_reply(reply):
     return re.sub(r"[ \t]{2,}", " ", reply).strip()
 
 
-def _enforce(d, chunks, lead):
+# --- how the location is named (owner rule, 2026-08-01) ----------------------
+# "we dont say the word vadanemmeli - because it is not helping the luxury
+# positionining plus no one knows where is vadanememli - we say - ECR Near
+# Kovalam Junction".
+#
+# The locality name stays in the corpus because it is factually correct and helps
+# retrieval when a buyer uses it. This rewrites it on the way OUT, so whatever the
+# model retrieves, the buyer reads the positioning line.
+# Swallows a trailing ", ECR" / " on ECR" when the retrieved text already pairs
+# them, so we do not emit "ECR, near Kovalam Junction, ECR" -- but the group is
+# OPTIONAL, so a bare "Vadanemmeli is..." keeps its following space.
+_LOCALITY = re.compile(
+    r"\bvadanemmeli\b(?:\s*,?\s*(?:on|in|at)?\s*\bECR\b"
+    r"(?:\s*\(east\s+coast\s+road\))?)?", re.I)
+LOCATION_PHRASE = "ECR, near Kovalam Junction"
+
+
+def _rename_locality(reply):
+    if not reply or not _LOCALITY.search(reply):
+        return reply
+    out = _LOCALITY.sub(LOCATION_PHRASE, reply)
+    out = re.sub(r"\bECR,\s*(?=ECR, near Kovalam Junction)", "", out, flags=re.I)
+    return re.sub(r"\s{2,}", " ", out).strip()
+
+
+# --- the Experience Centre lock (owner rule, 2026-08-01) ---------------------
+# The site visit IS the win. Volunteering the mall quietly converts site visits
+# into mall visits, so Express Avenue is unlocked ONLY by a real distance
+# OBJECTION. Owner, asked directly whether "how far is it from Adyar?" should
+# unlock it: "just answer the distance and keep pushing the site."
+#
+# So a distance QUESTION must not match. Every pattern below is a statement of
+# difficulty, never an enquiry -- "how far is X" contains "far" and is
+# deliberately not matched.
+_MALL = re.compile(r"experience\s+cent(?:re|er)|express\s+avenue|\bEA\s+mall\b", re.I)
+_DISTANCE_OBJECTION = re.compile(
+    r"\b(too\s+far|very\s+far|bit\s+far|quite\s+far|so\s+far|far\s+away|"
+    r"long\s+(?:drive|way|journey|distance)|"
+    r"can(?:'?t|not)\s+(?:drive|travel|come|make)|"
+    r"hard\s+to\s+(?:reach|get)|difficult\s+to\s+(?:reach|travel|come)|"
+    r"that'?s\s+far|its\s+far|it\s+is\s+far)\b", re.I)
+
+
+def _raised_distance(message, history):
+    """Did the BUYER object to the distance? Their words only, never ours."""
+    texts = [message or ""]
+    for h in history or []:
+        if (h.get("direction") or "") == "in":
+            texts.append(h.get("body") or "")
+    return any(_DISTANCE_OBJECTION.search(t) for t in texts)
+
+
+def _strip_mall(reply):
+    """Remove the sentences that offer the mall, keep the rest of the answer."""
+    parts = re.split(r"(?<=[.!?])\s+", reply)
+    kept = [p for p in parts if not _MALL.search(p)]
+    return re.sub(r"\s{2,}", " ", " ".join(kept)).strip()
+
+
+def _enforce(d, chunks, lead, message=None, history=None):
     """Mechanical checks applied to whatever the model returned.
 
     Everything here is a rule the prompt also states. It is repeated in code
     because a prompt is a request and this is a guarantee.
     """
     valid_ids = {c["id"] for c in chunks}
-    reply = _clean_reply(d.get("reply") or "")
+    reply = _rename_locality(_clean_reply(d.get("reply") or ""))
     d["reply"] = reply
+
+    # 0. THE EXPERIENCE CENTRE LOCK. The mall may only be offered against a real
+    #    distance objection. Seen on the first live turn: the buyer asked "how far
+    #    is this from Adyar" -- a question -- and the model volunteered the mall
+    #    ("if the drive feels long..."), pre-empting an objection never made. The
+    #    prompt already forbids this; enforcing it here is what makes it true.
+    if _MALL.search(reply) and not _raised_distance(message, history):
+        stripped = _strip_mall(reply)
+        if stripped:
+            d["reply"] = reply = stripped
+            d["internal_note"] = (d.get("internal_note") or "") + \
+                " | mall offer removed: no distance objection from buyer"
+        else:
+            # The whole reply was the mall offer; there is nothing left to send.
+            out = _forced_escalation("mall offered with no distance objection", chunks)
+            out["internal_note"] += f" | suppressed reply: {reply[:160]}"
+            return out
+        if d.get("visit_venue") == "experience_centre":
+            d["visit_venue"] = "site"
 
     # 1. CONFIDENCE FLOOR. A factual-sounding claim with no chunk behind it is
     #    exactly how invented schools and possession dates reach a buyer.
