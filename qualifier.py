@@ -145,16 +145,12 @@ Never ask "are you interested?".
   the team will call to confirm timing and share directions. Never say a bare
   "confirmed" — there is no calendar behind you.
 - Visits: Tuesday never (team's day off). Monday afternoon only. Wed–Sun fine.
-- LOCATION WORDING: the project is on "ECR, near Kovalam Junction". Never write
-  the word Vadanemmeli -- it does not help the positioning and buyers do not know
-  where it is. Say ECR, near Kovalam Junction, even if the retrieved text uses the
-  locality name.
-- Always offer the SITE first, and keep steering to it -- a site visit is the win.
-- The Experience Centre at Express Avenue is unlocked ONLY by a distance
-  OBJECTION: they say it is too far, the drive is too long, they cannot travel
-  that far. A distance QUESTION is not an objection -- "how far is it from
-  Adyar?" means answer the distance and keep pushing the site. Never pre-empt an
-  objection they have not made, and never offer the mall unprompted.
+- Say the location as "ECR, near Kovalam Junction". Never write the locality name
+  Vadanemmeli, even if the retrieved text uses it.
+- Always offer the site first and keep steering towards it. A site visit is the win.
+- Only if they say the distance is a problem for them may you offer the Experience
+  Centre at Express Avenue. Someone simply asking how far away it is has not raised
+  a problem. Never offer the mall unprompted.
 
 # Tone
 Premium, calm, experience-led. Never discount-led, never pushy. Short messages —
@@ -196,13 +192,24 @@ def _render_context(chunks):
 
 
 def _history(turns):
-    """Prior turns as alternating messages. Oldest first."""
+    """Prior turns as alternating messages. Oldest first.
+
+    Corrupted OWN output is dropped rather than replayed. On 2026-08-01 one
+    mangled reply entered the history and every later turn read it back as its
+    own prior words; the corruption compounded turn over turn until the reply was
+    truncated mid-word. A bad message we already sent is a fact, but feeding it
+    back as an example of how we write is what turned one bad turn into four.
+    Buyer messages are never dropped -- whatever they typed is the truth.
+    """
     msgs = []
     for t in turns:
-        role = "user" if t["direction"] == "in" else "assistant"
+        inbound = t["direction"] == "in"
         text = (t.get("body") or "").strip()
-        if text:
-            msgs.append({"role": role, "content": text})
+        if not text:
+            continue
+        if not inbound and _CONTROL_CHARS.search(text):
+            continue
+        msgs.append({"role": "user" if inbound else "assistant", "content": text})
     return msgs
 
 
@@ -314,6 +321,10 @@ def _forced_escalation(why, chunks):
     }
 
 
+# C0 control characters. A WhatsApp message never legitimately contains one, so
+# their presence means the reply is corrupt -- see _looks_corrupt.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
 _ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
 # Typographic characters a model reaches for that add nothing on WhatsApp and
@@ -348,6 +359,39 @@ def _clean_reply(reply):
     for bad, good in _PUNCT.items():
         reply = reply.replace(bad, good)
     return re.sub(r"[ \t]{2,}", " ", reply).strip()
+
+
+def _looks_corrupt(reply):
+    """Is this reply damaged? Returns a reason, or None.
+
+    Seen live on 2026-08-01: the model emitted stray C0 control characters mid
+    sentence with words missing around them ("Perfect \\x08ness of it"), and one
+    reply stopped mid-word ("...helps me shortlist properly - do yo").
+
+    Deliberately NOT repaired. Stripping the control character out of
+    "Good \\x0cfit \\x0c., then" leaves "Good fit ., then" -- still broken, and now
+    it looks fine to every check downstream. A damaged reply is escalated to a
+    human, which is the same thing we do for any claim we cannot stand behind.
+    """
+    if not reply:
+        return None
+    if _CONTROL_CHARS.search(reply):
+        return "control character in reply"
+    # A newline is legitimate on WhatsApp, so it is not in _CONTROL_CHARS -- but a
+    # newline that INTERRUPTS a sentence is the same damage wearing a legal
+    # character: "...for you \nding: will this be" was a real one. A genuine line
+    # break follows sentence-ending punctuation or a colon, and a genuine new line
+    # does not begin lowercase mid-clause.
+    if re.search(r"[^.!?:\n]\s*\n\s*[a-z]", reply):
+        return "line break mid-sentence"
+    # Truncated mid-word: ends on a letter with no sentence-ending punctuation.
+    # A bullet or numbered last line legitimately ends without punctuation, so it
+    # is exempt -- otherwise every list we send would be escalated.
+    last_line = reply.rsplit("\n", 1)[-1].strip()
+    listish = bool(re.match(r"^([-*•]|\d+[.)])\s", last_line))
+    if len(reply) > 30 and not listish and re.search(r"[A-Za-z]$", reply):
+        return "reply ends mid-sentence"
+    return None
 
 
 # --- how the location is named (owner rule, 2026-08-01) ----------------------
@@ -418,6 +462,15 @@ def _enforce(d, chunks, lead, message=None, history=None):
     valid_ids = {c["id"] for c in chunks}
     reply = _rename_locality(_clean_reply(d.get("reply") or ""))
     d["reply"] = reply
+
+    # 00. CORRUPTION. Before any other rule, because a damaged reply cannot be
+    #     judged: the checks below read the text, and text with words missing can
+    #     pass them while still being unsendable.
+    damage = _looks_corrupt(reply)
+    if damage:
+        out = _forced_escalation(damage, chunks)
+        out["internal_note"] += f" | suppressed reply: {reply[:160]!r}"
+        return out
 
     # 0. THE EXPERIENCE CENTRE LOCK. The mall may only be offered against a real
     #    distance objection. Seen on the first live turn: the buyer asked "how far
