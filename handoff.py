@@ -42,7 +42,8 @@ def build_card(lead, conv, reason=""):
     """
     c = conv["checklist"] or {}
     lines = [
-        f"*Qualified lead — {lead.get('project')}*",
+        (f"*SITE VISIT BOOKED — {lead.get('project')}*" if c.get("visit_day")
+         else f"*Qualified lead — {lead.get('project')}*"),
         f"Name: {lead.get('name') or 'not given'}",
         f"Phone: {lead.get('phone')}",
         "",
@@ -133,6 +134,26 @@ def route(lead, conv, decision):
                 "escalation")
         conversation.mark_handed_off(conv["id"])
         return "escalated"
+
+    # THE SECOND SUCCESS EXIT. Owner 2026-08-01: "our job is to book the site visit
+    # - not just qualified ... two exits - qualified without date, and booked site
+    # visit - both are good to escalate."
+    #
+    # A lead who was already qualified and has now named a day has got BETTER, so
+    # this fires a second, upgraded card rather than staying silent. Checked before
+    # the `qualified` branch because such a conversation already carries that
+    # outcome and would otherwise fall through to nothing.
+    booked = (conv.get("checklist") or {}).get("visit_day")
+    if booked and conv.get("outcome") == "qualified":
+        conversation.set_outcome(conv["id"], "visit_booked", upgrade_from="qualified")
+        db.x("UPDATE leads SET wa_state='visit_booked', updated_at=now() WHERE id=%s",
+             (lead["id"],))
+        conv = conversation.get_or_create(lead)
+        _notify(config.HANDOFF_PHONES, build_card(lead, conv, "SITE VISIT BOOKED"),
+                "visit_booked")
+        conversation.mark_handed_off(conv["id"])
+        log.info("lead %s -> VISIT BOOKED (%s)", lead["id"], booked)
+        return "visit_booked"
 
     if action == "qualified":
         ok, reason = conversation.clears_the_bar(conv)
