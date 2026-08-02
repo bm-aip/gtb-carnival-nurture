@@ -305,6 +305,34 @@ def extract_msg_id(detail):
     return None
 
 
+def parse_source(payload):
+    """Where did this inbound come from? DIAGNOSTIC ONLY -- nothing branches on it.
+
+    A click-to-WhatsApp message should carry a reference back to the ad that
+    produced it. If it does, we can eventually adopt only strangers who arrived
+    through OUR ads rather than every unknown number (owner question, 2026-08-02:
+    GT Bharathi's leads should not be engaged, but we have no way to recognise
+    them). On the one sample we have -- a typed message -- these are all empty,
+    and we have no CTWA sample yet. So this records the evidence instead of
+    assuming the answer.
+
+    Returns a short string for the log, or None when there is nothing to say.
+    """
+    try:
+        m = payload.get("data") or payload
+        if not isinstance(m, dict):
+            return None
+        bits = []
+        for key in ("sourceType", "sourceId", "sourceUrl", "referral",
+                    "messageReferral", "adReferral", "ctwaClid", "bsuid"):
+            v = m.get(key)
+            if v not in (None, "", {}, [], 0):
+                bits.append(f"{key}={str(v)[:120]}")
+        return " ".join(bits) or None
+    except Exception:
+        return None
+
+
 def parse_inbound(payload):
     """Extract (phone, text) from a Wati inbound webhook.
 

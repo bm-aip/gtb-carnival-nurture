@@ -28,12 +28,15 @@ on. It was only ever reachable with WALKIN_ENABLED=true, which has always
 defaulted false, so removing it changes no live behaviour.
 """
 from datetime import datetime, timedelta, timezone
+import logging
 import config
 import db
 import wati
 import sendgate
 import optout
 import failures
+
+log = logging.getLogger("sequencer")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -166,21 +169,68 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
 
 
 def tick():
-    """Scheduled pass. Currently a no-op by design.
+    """Scheduled pass. Runs the knock engine.
 
-    The carnival send loops that used to live here are deleted (task 1b) and the
-    knock-engine scheduler that replaces them is task 17, which is blocked on
-    Phase 0 tasks 2, 3, 4 and on the suppression gate (task 16). Nothing may be
-    scheduled to send before the interlocks that bound it exist.
+    Empty until 2026-08-02. The carnival send loops were deleted in task 1b and
+    their replacement (task 17) was gated behind the suppression list -- the rule
+    that no lead may be knocked before checking whether a salesperson already owns
+    them. That interlock protected the 48,354 old Sell.do leads; it does not apply
+    to somebody who filled our own form this morning, and the campaign allow-list
+    now restricts every send to exactly those people. Meanwhile 39 buyers filled
+    the live forms and heard nothing.
 
-    Left as a live scheduled call rather than unhooked from APScheduler so the
-    process model, the lock in app.py and the /admin/poll-now path stay exercised
-    -- when task 17 fills this in, the plumbing around it is already known good.
+    Imported here rather than at module scope: knocks imports sequencer for the
+    one send door, and a top-level import would be circular.
     """
     db.set_setting("last_tick_at", now_ist().isoformat())
+    import knocks
+    try:
+        n = knocks.run()
+        if n:
+            log.info("knock engine sent %s", n)
+    except Exception as e:
+        log.exception("knock engine failed: %s", e)
+        db.set_setting("knock_error", str(e)[:500])
 
 
-def handle_inbound(phone, text, sender_name=None, allow_create=False):
+def _adopt_direct_inbound(phone, sender_name, opted_out=False, source=None):
+    """A stranger messaged us. Make them a lead so the bot can answer.
+
+    Returns the new lead row, or None if we must stay silent.
+
+    Only ever called when the phone has NO lead of any kind -- that lookup is the
+    GT Bharathi guard. A number already attached to one of their leads keeps that
+    row, stays out of the allow-list, and is left alone.
+
+    The project comes from config, never from the customer's words. That was the
+    objection to the old walk-in path (task 1b) and it is why this is safe now:
+    one project runs on this number, so there is nothing to guess.
+    """
+    if not config.DIRECT_INBOUND_ENABLED:
+        return None
+    if opted_out:
+        # They opened with a stop word. Creating a lead for someone whose first act
+        # was to opt out is exactly how a suppression list gets quietly undone.
+        return None
+
+    project = config.DIRECT_INBOUND_PROJECT
+    db.x("""INSERT INTO leads (project, selldo_lead_id, name, phone, campaign,
+                               selldo_status, wa_state, last_inbound_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, 'direct_inbound', 'queued', now(), now())
+            ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+         (project, f"direct:{phone}", sender_name, phone,
+          config.DIRECT_INBOUND_CAMPAIGN))
+    lead = db.q("""SELECT * FROM leads WHERE project=%s AND selldo_lead_id=%s""",
+                (project, f"direct:{phone}"), one=True)
+    if lead:
+        db.log_msg(lead["id"], "in", "direct_inbound_lead", None,
+                   detail=f"stranger {phone} adopted as {config.DIRECT_INBOUND_CAMPAIGN} "
+                          f"({project}); no prior lead existed"
+                          + (f" | source: {source}" if source else " | source: none"))
+    return lead
+
+
+def handle_inbound(phone, text, sender_name=None, allow_create=False, source=None):
     """Called by the webhook. Records an inbound message against its lead.
 
     RECORD-ONLY at this stage, deliberately. The bot does not reply: replies are
@@ -211,9 +261,13 @@ def handle_inbound(phone, text, sender_name=None, allow_create=False):
         phone, text, project=(lead or {}).get("project"))
 
     if not lead:
+        lead = _adopt_direct_inbound(phone, sender_name, opted_out=bool(scope),
+                                     source=source)
+    if not lead:
         db.log_msg(None, "in", "unattributed", text,
                    detail=f"phone={phone} no_lead needs_human"
-                          + (f" optout={scope}:{matched}" if scope else ""))
+                          + (f" optout={scope}:{matched}" if scope else "")
+                          + (f" | {source}" if source else ""))
         return
 
     db.x("""UPDATE leads SET last_inbound_at=now(), last_inbound_text=%s,

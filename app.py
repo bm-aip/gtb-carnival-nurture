@@ -1,5 +1,7 @@
 import os
 import datetime as _dt
+import hashlib
+import hmac
 import secrets
 import threading
 from functools import wraps
@@ -14,7 +16,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-01-book-the-visit"
+CODE_VERSION = "2026-07-31-conversation-loop"
 import db
 import selldo
 import meta
@@ -161,7 +163,8 @@ def _wati_inbound(payload, allow_create):
     # Both are a regex and an insert. Neither needs a language model.
     sequencer.handle_inbound(phone, text,
                              sender_name=wati.parse_sender_name(payload),
-                             allow_create=allow_create)
+                             allow_create=allow_create,
+                             source=wati.parse_source(payload))
 
     # ASYNCHRONOUS: the thinking. An LLM turn takes seconds and WhatsApp wants an
     # immediate 200 -- four slow turns in-process and the webhook stops answering,
@@ -184,6 +187,137 @@ def _stash_wati(raw):
         db.set_setting("wati_webhook_hits", str(n))
     except Exception:
         pass
+
+
+@app.route("/webhook/meta", methods=["GET"])
+def meta_webhook_verify():
+    """Meta's subscription handshake. It calls this once when you save the URL."""
+    if not config.META_VERIFY_TOKEN:
+        return "verify token not configured", 503
+    args = request.args
+    if (args.get("hub.mode") == "subscribe"
+            and args.get("hub.verify_token") == config.META_VERIFY_TOKEN):
+        return args.get("hub.challenge", ""), 200
+    return "forbidden", 403
+
+
+def _meta_signature_ok(raw):
+    """Meta signs every delivery with the app secret.
+
+    Without this anyone who guessed the URL could inject a lead and make us send
+    a WhatsApp template to a number of their choosing. An unset secret therefore
+    REFUSES everything -- failing closed, like the campaign gate.
+    """
+    if not config.META_APP_SECRET:
+        return False
+    sig = request.headers.get("X-Hub-Signature-256", "")
+    if not sig.startswith("sha256="):
+        return False
+    expected = hmac.new(config.META_APP_SECRET.encode(), raw,
+                        hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig.split("=", 1)[1])
+
+
+@app.route("/webhook/meta", methods=["POST"])
+def meta_webhook():
+    """A lead was just submitted. Create it and knock immediately.
+
+    Answers 200 in every case Meta should not retry. A 500 makes Meta redeliver,
+    which for us means a second WhatsApp template to a real person, so anything
+    we have already recorded is acknowledged rather than retried.
+    """
+    raw = request.get_data() or b""
+    if not config.LEADGEN_WEBHOOK_ENABLED:
+        return jsonify({"ok": True, "disabled": True})
+    if not _meta_signature_ok(raw):
+        db.log_msg(None, "in", "leadgen_rejected", None, ok=False,
+                   detail="bad or missing X-Hub-Signature-256")
+        return "forbidden", 403
+
+    payload = request.get_json(silent=True) or {}
+    handled = 0
+    for entry in payload.get("entry", []) or []:
+        for change in entry.get("changes", []) or []:
+            if change.get("field") != "leadgen":
+                continue
+            v = change.get("value") or {}
+            leadgen_id = str(v.get("leadgen_id") or "")
+            page_id = str(v.get("page_id") or "")
+            if not leadgen_id:
+                continue
+
+            # Only our own page. A second page on the same app must never be able
+            # to push leads into RON.
+            allowed_pages = config.META_PAGE_IDS.get("RON") or []
+            if allowed_pages and page_id and page_id not in allowed_pages:
+                db.log_msg(None, "in", "leadgen_rejected", None, ok=False,
+                           detail=f"page {page_id} not in META_PAGE_IDS_RON")
+                continue
+
+            # Meta retries. Two knocks to one buyer is the failure that matters.
+            if not db.mark_webhook_new(f"leadgen:{leadgen_id}"):
+                handled += 1
+                continue
+
+            threading.Thread(target=_handle_leadgen, args=(leadgen_id,),
+                             daemon=True).start()
+            handled += 1
+    return jsonify({"ok": True, "handled": handled})
+
+
+def _handle_leadgen(leadgen_id):
+    """Fetch, store, create the lead, knock. Runs off the request thread so Meta
+    gets its 200 immediately -- their delivery timeout is short and a slow reply
+    counts as a failure."""
+    try:
+        lead_data = meta.fetch_lead("RON", leadgen_id)
+        if not lead_data or not lead_data.get("phone"):
+            db.log_msg(None, "in", "leadgen_rejected", None, ok=False,
+                       detail=f"{leadgen_id}: no phone in field_data")
+            return
+
+        form_name = lead_data.get("form_name")
+        if form_name not in config.RON_FORMS:
+            db.log_msg(None, "in", "leadgen_rejected", None, ok=False,
+                       detail=f"{leadgen_id}: form {form_name!r} not in RON_FORMS")
+            return
+
+        db.x("""INSERT INTO meta_leads (meta_lead_id, project, page_id, form_id,
+                                        form_name, name, phone, created_time)
+                VALUES (%s,'RON',%s,%s,%s,%s,%s,%s)
+                ON CONFLICT (meta_lead_id) DO NOTHING""",
+             (lead_data["meta_lead_id"], lead_data.get("page_id"),
+              lead_data.get("form_id"), form_name, lead_data.get("name"),
+              lead_data["phone"], lead_data.get("created_time")))
+
+        # Already known by phone? Then they are an existing lead and the knock
+        # engine's own rules decide -- do not create a second row for one person.
+        existing = db.q("SELECT * FROM leads WHERE phone=%s ORDER BY updated_at DESC "
+                        "LIMIT 1", (lead_data["phone"],), one=True)
+        if existing:
+            db.log_msg(existing["id"], "in", "leadgen_dup", None,
+                       detail=f"{leadgen_id}: phone already lead #{existing['id']}")
+            return
+
+        db.x("""INSERT INTO leads (project, selldo_lead_id, meta_lead_id, name, phone,
+                                   campaign, selldo_status, selldo_response_at,
+                                   wa_state)
+                VALUES ('RON',%s,%s,%s,%s,%s,'meta_direct',%s,'queued')
+                ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+             (f"meta:{lead_data['meta_lead_id']}", lead_data["meta_lead_id"],
+              lead_data.get("name"), lead_data["phone"], form_name,
+              lead_data.get("created_time")))
+        lead = db.q("SELECT * FROM leads WHERE project='RON' AND selldo_lead_id=%s",
+                    (f"meta:{lead_data['meta_lead_id']}",), one=True)
+        if not lead:
+            return
+        db.log_msg(lead["id"], "in", "leadgen", None,
+                   detail=f"{leadgen_id} via {form_name}")
+
+        import knocks
+        knocks.knock_now(lead)
+    except Exception as e:
+        db.set_setting("leadgen_error", f"{leadgen_id}: {str(e)[:400]}")
 
 
 @app.route("/webhook/wati", methods=["POST"])
