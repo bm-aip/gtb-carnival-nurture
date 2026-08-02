@@ -2,6 +2,8 @@ import os
 import datetime as _dt
 import hashlib
 import hmac
+import json
+import re
 import secrets
 import threading
 from functools import wraps
@@ -16,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-02-faster-first-touch"
+CODE_VERSION = "2026-08-02-delivery-tracking"
 import db
 import selldo
 import meta
@@ -149,6 +151,32 @@ def _wati_inbound(payload, allow_create):
         return jsonify({"ok": True, "dup": True})
     phone, text = wati.parse_inbound(payload)
     if not (phone and text):
+        # NOT nothing. Wati called us 183 times on 2026-08-02 and only ONE row
+        # reached message_delivery, because anything that is neither a recognised
+        # status nor a parseable inbound returned 200 and vanished. That is why a
+        # 62% template failure rate had to be noticed by a human instead of by us.
+        #
+        # Keep it, shapeless, so the real schema becomes visible. Capped per hour
+        # so a chatty provider cannot fill the table.
+        try:
+            recent = db.q("""SELECT count(*) n FROM message_delivery
+                             WHERE status='unrecognised'
+                               AND created_at > now() - interval '1 hour'""",
+                          one=True)
+            if (recent or {}).get("n", 0) < 200:
+                db.record_delivery({
+                    "phone": re.sub(r"\D", "", str(
+                        (payload.get("data") or payload or {}).get("waId") or "")) or None,
+                    "provider_msg_id": _mid,
+                    "status": "unrecognised",
+                    "reason": None,
+                    "event_type": str((payload.get("data") or payload or {})
+                                      .get("eventType") or "")[:80] or None,
+                    "event_ts": None,
+                    "raw": json.dumps(payload)[:4000],
+                })
+        except Exception:
+            pass
         return jsonify({"ok": True})
 
     # SYNCHRONOUS, and deliberately so (task 12). Two things must happen before this
@@ -568,6 +596,31 @@ def admin_webhook_status():
         "wati_webhook_hits": db.get_setting("wati_webhook_hits", "0"),
         "last_wati_webhook_raw": db.get_setting("last_wati_webhook_raw", ""),
         "wasender_webhook_hits": db.get_setting("webhook_hits", "0"),
+    })
+
+
+@app.route("/admin/delivery")
+@auth
+def admin_delivery():
+    """Did the knocks arrive? `ok=TRUE` in our log only means Wati ACCEPTED them.
+
+    Exists because on 2026-08-02 we sent 26 templates, logged all 26 as fine, and
+    16 had failed -- which a human noticed before the system did.
+    """
+    hours = int(request.args.get("hours", "72"))
+    rows = db.knock_delivery(hours)
+    return jsonify({
+        "window_hours": hours,
+        "summary": db.knock_delivery_summary(hours),
+        "note": ("outcome=null means no callback ever arrived for that send; "
+                 "our log's ok=TRUE is acceptance by Wati, not delivery"),
+        "sends": [{"lead_id": r["lead_id"], "name": r["name"], "phone": r["phone"],
+                   "template": r["msg_type"], "at": str(r["ts"])[:19],
+                   "outcome": r["outcome"], "fail_reason": r["fail_reason"]}
+                  for r in rows[:200]],
+        "unrecognised_webhooks_1h": (db.q(
+            """SELECT count(*) n FROM message_delivery WHERE status='unrecognised'
+               AND created_at > now() - interval '1 hour'""", one=True) or {}).get("n"),
     })
 
 
