@@ -77,9 +77,19 @@ def record_turn(conv, decision, gate_asked, framing_index):
                        ("timeline", "timeline"), ("visit_day", "visit_day"),
                        ("visit_time", "visit_time"), ("visit_venue", "visit_venue")):
         val = decision.get(field)
-        if val not in (None, "", "unknown") and not checklist.get(key):
-            checklist[key] = val
-            learned = True
+        if val in (None, "", "unknown"):
+            continue
+        # First write wins -- EXCEPT configuration, which a buyer is allowed to
+        # change their mind about. A villa enquirer who accepts the apartment
+        # offer must be able to become an apartment enquirer, or the pivot can
+        # never be recorded and clears_the_bar keeps applying the villa floor to
+        # someone who just agreed to look at apartments.
+        if checklist.get(key) and key != "configuration":
+            continue
+        if checklist.get(key) == val:
+            continue
+        checklist[key] = val
+        learned = True
 
     asked = {k: list(v) for k, v in (conv["asked"] or {}).items()}
     if gate_asked and framing_index is not None:
@@ -110,21 +120,52 @@ def record_turn(conv, decision, gate_asked, framing_index):
     return fresh
 
 
+def wants_villa(checklist):
+    """Is this a villa enquiry? Unknown configuration counts as NOT a villa.
+
+    Deliberately generous. Every live ad is a villa ad, so assuming villa for
+    anyone who has not said would apply the ₹3.94 Cr floor to people who never
+    asked for one and kill them. The stricter floor is applied only to someone
+    who actually said villa.
+    """
+    cfg = str((checklist or {}).get("configuration") or "").lower()
+    return "villa" in cfg and "apartment" not in cfg
+
+
 def clears_the_bar(conv):
     """(qualified, reason). Budget and location are the only hard gates.
 
     Deliberately NOT a judgement call — the qualifier reports what it heard and
     this decides. Configuration only rejects off-category, which the agent flags
     rather than this function inferring.
+
+    THE VILLA FLOOR (owner, 2026-08-02). Every live ad sells villas from ₹3.94 Cr,
+    but the general floor is ₹1.28 Cr -- the cheapest apartment. Without a second
+    floor, someone who clicked a villa ad and has ₹1.2 Cr passes as QUALIFIED and
+    reaches a salesperson as a villa buyer who cannot afford any villa. That is
+    the handoff that costs sales their trust in the queue.
+
+    So a villa enquirer must clear the VILLA floor. Below it they are not dead --
+    the bot offers apartments, and if they accept, `configuration` changes and
+    they qualify on the apartment floor instead. Owner: "if they say yes for
+    apartments and 1.2 cr of budget then it is a qualified lead - or else we dont
+    qualify". Interim rule pending a decision with marketing.
     """
     c = conv["checklist"] or {}
     budget = c.get("budget")
     if not isinstance(budget, int) or budget <= 0:
         return False, "budget not captured"
-    if budget < config.BUDGET_FLOOR:
-        return False, f"below floor ({budget} < {config.BUDGET_FLOOR})"
     if not c.get("location"):
         return False, "location not captured"
+
+    if wants_villa(c):
+        if budget < config.VILLA_FLOOR:
+            return False, (f"villa enquiry, budget {budget} below the villa entry "
+                           f"{config.VILLA_FLOOR}; has not accepted apartments")
+        return True, "villa budget and location clear"
+
+    if budget < config.BUDGET_FLOOR:
+        return False, f"below floor ({budget} < {config.BUDGET_FLOOR})"
     return True, "budget and location clear"
 
 
