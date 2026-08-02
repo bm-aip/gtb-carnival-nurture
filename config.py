@@ -1,4 +1,5 @@
 import os
+import re
 
 def _b(v): return str(v).lower() in ("1", "true", "yes", "on")
 
@@ -80,6 +81,77 @@ RON_FORMS = [f.strip() for f in os.environ.get(
 # money that remains, so the carve-out cannot widen by accident.
 VILLA_PRICE_TEXT = os.environ.get("VILLA_PRICE_TEXT", "₹3.94 Cr")
 VILLA_FLOOR = int(os.environ.get("VILLA_FLOOR", "39400000"))     # ₹3.94 crore
+
+# --- price and configuration qualify TOGETHER (owner, 2026-08-02) -------------
+#
+# "each configuration and price has to be tied together - we cant qualify someone
+# who says 1.2 without we confirming that config is apartment - so both go hand in
+# hand - our job is to qualify for the price and unit configuration".
+#
+# One floor per configuration, not one floor for the project. A 1.5 Cr buyer is
+# qualified for a 2BHK and NOT for the 3BHK they asked about, and the difference
+# matters: sales receiving "qualified, wants 3BHK" for someone 6 lakh short of a
+# 2BHK is the handoff that loses their trust in the queue.
+CONFIG_FLOORS = (
+    # (label, floor) -- ordered cheapest first; the label is what a card shows.
+    ("Compact 2BHK apartment", 12800000),
+    ("2BHK apartment",         14600000),
+    ("3BHK apartment",         21000000),
+    ("3 bed villa",            39400000),
+    ("4 bed villa",            55000000),
+)
+
+# Buyers understate, and they stretch. Owner: "buyers will be able to strecch -
+# 20% to 25% more is usually fine". So a stated budget is compared to the floor
+# AFTER stretching, which is why 1.2 Cr qualifies for a 1.28 Cr apartment.
+# Effective entry becomes about 1.02 Cr.
+BUDGET_STRETCH = float(os.environ.get("BUDGET_STRETCH", "1.25"))
+
+
+def classify_configuration(text):
+    """Free text -> (label, floor). (None, None) when we cannot tell.
+
+    Cannot-tell is not a failure to paper over: configuration is a hard gate, so
+    an unrecognised answer means the bot keeps asking rather than guessing a floor.
+    """
+    t = (text or "").lower()
+    if not t.strip():
+        return None, None
+    # OFF-CATEGORY FIRST. These appear in older material and are not currently
+    # sold (see kb/RON/inventory.md), so they have no floor. Checked before
+    # anything else because "island villa" contains "villa" and "1BHK" contains
+    # "bhk" -- both would otherwise be priced as a product we cannot sell them.
+    if re.search(r"\b1\s*bhk\b|\bone\s*bhk\b|villament|island\s*villa|"
+                 r"beach\s*front|beachfront|\b5\s*bhk\b", t):
+        return None, None
+    if "villa" in t:
+        if "4" in t or "four" in t:
+            return "4 bed villa", 55000000
+        if "3" in t or "three" in t:
+            return "3 bed villa", 39400000
+        return "3 bed villa", 39400000          # villas start at the 3 bed
+    if "apartment" in t or "bhk" in t or "flat" in t:
+        if "compact" in t:
+            return "Compact 2BHK apartment", 12800000
+        if "3" in t or "three" in t:
+            return "3BHK apartment", 21000000
+        if "2" in t or "two" in t:
+            return "2BHK apartment", 14600000
+        return "Compact 2BHK apartment", 12800000   # apartments start here
+    return None, None
+
+
+def budget_reaches(budget, floor):
+    """Can this budget reach that floor once stretched?"""
+    if not isinstance(budget, int) or budget <= 0 or not floor:
+        return False
+    return budget * BUDGET_STRETCH >= floor
+
+
+def affordable_configs(budget):
+    """Every configuration this budget can reach, cheapest first."""
+    return [(label, floor) for label, floor in CONFIG_FLOORS
+            if budget_reaches(budget, floor)]
 
 # LEADGEN WEBHOOK. Meta pushes a lead the moment the form is submitted, so the
 # first template goes out in seconds instead of waiting up to 15 minutes for the

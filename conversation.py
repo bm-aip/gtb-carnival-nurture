@@ -77,9 +77,19 @@ def record_turn(conv, decision, gate_asked, framing_index):
                        ("timeline", "timeline"), ("visit_day", "visit_day"),
                        ("visit_time", "visit_time"), ("visit_venue", "visit_venue")):
         val = decision.get(field)
-        if val not in (None, "", "unknown") and not checklist.get(key):
-            checklist[key] = val
-            learned = True
+        if val in (None, "", "unknown"):
+            continue
+        # First write wins -- EXCEPT configuration, which a buyer is allowed to
+        # change their mind about. A villa enquirer who accepts the apartment
+        # offer must be able to become an apartment enquirer, or the pivot can
+        # never be recorded and clears_the_bar keeps applying the villa floor to
+        # someone who just agreed to look at apartments.
+        if checklist.get(key) and key != "configuration":
+            continue
+        if checklist.get(key) == val:
+            continue
+        checklist[key] = val
+        learned = True
 
     asked = {k: list(v) for k, v in (conv["asked"] or {}).items()}
     if gate_asked and framing_index is not None:
@@ -110,22 +120,56 @@ def record_turn(conv, decision, gate_asked, framing_index):
     return fresh
 
 
+def wants_villa(checklist):
+    """Is this a villa enquiry? Unknown configuration counts as NOT a villa."""
+    cfg = str((checklist or {}).get("configuration") or "").lower()
+    return "villa" in cfg and "apartment" not in cfg
+
+
 def clears_the_bar(conv):
     """(qualified, reason). Budget and location are the only hard gates.
 
     Deliberately NOT a judgement call — the qualifier reports what it heard and
     this decides. Configuration only rejects off-category, which the agent flags
     rather than this function inferring.
+
+    PRICE AND CONFIGURATION QUALIFY TOGETHER (owner, 2026-08-02): "each
+    configuration and price has to be tied together - we cant qualify someone who
+    says 1.2 without we confirming that config is apartment - so both go hand in
+    hand - our job is to qualify for the price and unit configuration".
+
+    So configuration is a HARD GATE alongside budget and location. A project-wide
+    floor is not enough: a ₹1.5 Cr buyer asking about a 3BHK (from ₹2.1 Cr) clears
+    the cheapest apartment and still cannot afford what they asked for. Sales
+    receiving "qualified, wants 3BHK" for that person is the handoff that loses
+    their trust in the queue.
+
+    Budget is compared AFTER stretching -- buyers understate and can reach higher
+    (owner: "20% to 25% more is usually fine"), which is why ₹1.2 Cr qualifies for
+    a ₹1.28 Cr apartment. Below what they asked for they are not dead: the bot
+    names what it starts at and offers what they CAN reach, and if they accept,
+    `configuration` changes and they qualify against the new floor.
     """
     c = conv["checklist"] or {}
     budget = c.get("budget")
     if not isinstance(budget, int) or budget <= 0:
         return False, "budget not captured"
-    if budget < config.BUDGET_FLOOR:
-        return False, f"below floor ({budget} < {config.BUDGET_FLOOR})"
     if not c.get("location"):
         return False, "location not captured"
-    return True, "budget and location clear"
+
+    raw_cfg = c.get("configuration")
+    if not raw_cfg:
+        return False, "configuration not captured"
+    label, floor = config.classify_configuration(raw_cfg)
+    if not label:
+        return False, f"configuration not recognised ({raw_cfg!r})"
+
+    if not config.budget_reaches(budget, floor):
+        reach = config.affordable_configs(budget)
+        can = reach[-1][0] if reach else "nothing in the current release"
+        return False, (f"{label} starts at {floor}; budget {budget} does not reach "
+                       f"it even stretched. Best fit: {can}")
+    return True, f"{label} within budget {budget}, location clear"
 
 
 def set_outcome(conv_id, outcome, upgrade_from=None):
