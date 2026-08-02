@@ -300,7 +300,7 @@ def run_turn(lead, message, history=None, conv=None):
     # The ladder was written in task 23 and then never passed to the model -- the
     # `conv` argument was accepted and dropped, so every turn was chosen blind and
     # only history stopped the bot repeating a framing. Now it is actually sent.
-    state = _ladder(conv)
+    state = _ladder(conv) + "\n".join(_already_quoted(messages))
     if conv and conv.get("outcome") == "qualified":
         state = HANDOVER_MODE + "\n\n" + state
     elif conv and conv.get("outcome") == "escalated":
@@ -379,6 +379,34 @@ who is still asking questions is the worst thing you can do here.
 - Only escalate again if they raise something genuinely new that you cannot answer.
   Repeating the same escalation is noise a salesperson learns to ignore.
 - If they are still engaged and a visit makes sense, still invite them."""
+
+
+def _already_quoted(history):
+    """Prices we have ALREADY given this buyer, so we stop repeating them.
+
+    2026-08-02, live: the bot said "3 bedroom villas from Rs 3.94 Cr" in four
+    consecutive messages. The price chunk is retrieved on every price-adjacent turn
+    and its guardrail says to always say from/starting/onwards, so the model kept
+    restating the whole formula. It reads like hammering.
+
+    A person says a price once. Telling the model what it has already said is more
+    reliable than asking it to remember -- the same approach as the affordability
+    verdict, and for the same reason.
+    """
+    said = []
+    for m in history or []:
+        if m.get("role") != "assistant":
+            continue
+        for fig in sorted(_money_figures(m.get("content") or "")):
+            if fig not in said:
+                said.append(fig)
+    if not said:
+        return []
+    return ["", "ALREADY QUOTED to this buyer: " + ", ".join("Rs " + s for s in said)
+                + ". Do NOT state these figures again -- they have them. Refer back "
+                  "briefly if you must ('as I mentioned') and otherwise move on. "
+                  "Quote a price again ONLY if they ask again, or for a "
+                  "configuration you have not priced yet."]
 
 
 def _affordability_verdict(known):
