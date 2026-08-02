@@ -356,6 +356,51 @@ def record_delivery(ev):
     return n == 1
 
 
+def knock_delivery(hours=72):
+    """Did our knocks actually ARRIVE? One row per send.
+
+    Template sends go through Wati's sendTemplateMessage, whose response carries
+    no whatsappMessageId -- so a delivery callback can never be matched to the send
+    by id. It is matched by PHONE and TIME instead: the outcome of a send is the
+    best delivery event for that phone in the hour after it went out.
+
+    `ok=TRUE` in message_log means Wati ACCEPTED the send. It is not delivery, and
+    conflating the two is how a 62% failure rate went unnoticed on 2026-08-02.
+    """
+    return q("""
+        WITH sends AS (
+            SELECT ml.id, ml.lead_id, ml.msg_type, ml.ts, l.phone, l.name
+            FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+            WHERE ml.direction='out' AND ml.ok
+              AND ml.msg_type LIKE 'knock\\_%%'
+              AND ml.ts > now() - (%s || ' hours')::interval
+        )
+        SELECT s.id, s.lead_id, s.name, s.phone, s.msg_type, s.ts,
+               (SELECT md.status FROM message_delivery md
+                 WHERE md.phone = s.phone
+                   AND md.created_at BETWEEN s.ts AND s.ts + interval '1 hour'
+                   AND md.status <> 'unrecognised'
+                 ORDER BY CASE md.status WHEN 'read' THEN 1 WHEN 'delivered' THEN 2
+                                         WHEN 'sent' THEN 3 WHEN 'failed' THEN 4
+                                         ELSE 5 END
+                 LIMIT 1) AS outcome,
+               (SELECT md.reason FROM message_delivery md
+                 WHERE md.phone = s.phone AND md.status='failed'
+                   AND md.created_at BETWEEN s.ts AND s.ts + interval '1 hour'
+                 LIMIT 1) AS fail_reason
+        FROM sends s ORDER BY s.ts DESC""", (str(hours),)) or []
+
+
+def knock_delivery_summary(hours=72):
+    """Counts by outcome. `None` means no callback ever arrived for that send --
+    which is itself the finding, not a gap to hide."""
+    rows = knock_delivery(hours)
+    out = {}
+    for r in rows:
+        out[r["outcome"] or "no callback"] = out.get(r["outcome"] or "no callback", 0) + 1
+    return {"sends": len(rows), "by_outcome": out}
+
+
 def delivery_rollup(hours=24):
     """Counts per status over a rolling window, plus the failure rate.
 
