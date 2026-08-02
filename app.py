@@ -163,7 +163,8 @@ def _wati_inbound(payload, allow_create):
     # Both are a regex and an insert. Neither needs a language model.
     sequencer.handle_inbound(phone, text,
                              sender_name=wati.parse_sender_name(payload),
-                             allow_create=allow_create)
+                             allow_create=allow_create,
+                             source=wati.parse_source(payload))
 
     # ASYNCHRONOUS: the thinking. An LLM turn takes seconds and WhatsApp wants an
     # immediate 200 -- four slow turns in-process and the webhook stops answering,

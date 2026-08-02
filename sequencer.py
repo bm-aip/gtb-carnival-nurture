@@ -193,7 +193,7 @@ def tick():
         db.set_setting("knock_error", str(e)[:500])
 
 
-def _adopt_direct_inbound(phone, sender_name, opted_out=False):
+def _adopt_direct_inbound(phone, sender_name, opted_out=False, source=None):
     """A stranger messaged us. Make them a lead so the bot can answer.
 
     Returns the new lead row, or None if we must stay silent.
@@ -225,11 +225,12 @@ def _adopt_direct_inbound(phone, sender_name, opted_out=False):
     if lead:
         db.log_msg(lead["id"], "in", "direct_inbound_lead", None,
                    detail=f"stranger {phone} adopted as {config.DIRECT_INBOUND_CAMPAIGN} "
-                          f"({project}); no prior lead existed")
+                          f"({project}); no prior lead existed"
+                          + (f" | source: {source}" if source else " | source: none"))
     return lead
 
 
-def handle_inbound(phone, text, sender_name=None, allow_create=False):
+def handle_inbound(phone, text, sender_name=None, allow_create=False, source=None):
     """Called by the webhook. Records an inbound message against its lead.
 
     RECORD-ONLY at this stage, deliberately. The bot does not reply: replies are
@@ -260,11 +261,13 @@ def handle_inbound(phone, text, sender_name=None, allow_create=False):
         phone, text, project=(lead or {}).get("project"))
 
     if not lead:
-        lead = _adopt_direct_inbound(phone, sender_name, opted_out=bool(scope))
+        lead = _adopt_direct_inbound(phone, sender_name, opted_out=bool(scope),
+                                     source=source)
     if not lead:
         db.log_msg(None, "in", "unattributed", text,
                    detail=f"phone={phone} no_lead needs_human"
-                          + (f" optout={scope}:{matched}" if scope else ""))
+                          + (f" optout={scope}:{matched}" if scope else "")
+                          + (f" | {source}" if source else ""))
         return
 
     db.x("""UPDATE leads SET last_inbound_at=now(), last_inbound_text=%s,
