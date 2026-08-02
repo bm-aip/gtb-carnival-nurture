@@ -146,9 +146,41 @@ def chunk_inventory(text):
                     "1BHK apartments, villaments, island villas and beachfront "
                     "villas are described in older material but are not currently "
                     "being sold."),
-        "guardrail": ("Never state a price, a price range, or a per-square-foot rate. "
-                      "Every price question goes to a human. Do not volunteer the top "
-                      "of the villa range as exact -- sources disagree (3634 vs 3643)."),
+        # Pricing moved to its own publishable chunk on 2026-08-02, so this no
+        # longer says "never state a price". The 3634/3643 conflict is resolved:
+        # the price sheet is authoritative and both documents now say 3634.
+        "guardrail": ("Starting prices only, and always say from / starting / "
+                      "onwards. Never a per-square-foot rate and never a price "
+                      "against a specific unit or size."),
+    }]
+
+
+def chunk_pricing(text):
+    """The publishable STARTING prices -- one chunk, so the rules travel with the
+    numbers.
+
+    Deliberately one chunk and not one per row. A price split from its "onwards"
+    framing is a flat price, and the villa-size incident on 2026-08-02 showed
+    exactly how that goes wrong: the caveat lived in a different document, the
+    figure was retrieved alone, and the wrong number reached a buyer. Here the
+    guardrail rides on the same chunk as the figures.
+    """
+    rows = re.findall(r"^\|\s*([^|]+?)\s*\|\s*(₹[^|]+?)\s*\|\s*$", text, re.M)
+    rows = [(c.strip(), p.strip()) for c, p in rows
+            if c.strip().lower() not in ("configuration", "---")]
+    if not rows:
+        return []
+    listing = "; ".join(f"{c} {p}" for c, p in rows)
+    return [{
+        "content": ("Republic of Nature starting prices: " + listing + ". These are "
+                    "STARTING prices only. The exact price of any particular unit "
+                    "depends on the unit, the floor and the current release, and is "
+                    "confirmed by a colleague."),
+        "guardrail": ("Always say from, starting or onwards -- never a flat price, "
+                      "never a range with a top, never a per-square-foot rate, never "
+                      "a price against a specific unit or size. No discounts, offers, "
+                      "payment plans or pre-EMI. Anything beyond a starting figure "
+                      "goes to a human."),
     }]
 
 
@@ -160,6 +192,8 @@ SOURCES = {
          "doc_type": "location", "chunker": chunk_location},
         {"path": "kb/RON/inventory.md", "title": "RON sellable configurations",
          "doc_type": "inventory", "chunker": chunk_inventory},
+        {"path": "kb/RON/pricing.md", "title": "RON starting prices",
+         "doc_type": "pricing", "chunker": chunk_pricing},
     ],
 }
 

@@ -67,6 +67,20 @@ DIRECT_INBOUND_CAMPAIGN = os.environ.get("DIRECT_INBOUND_CAMPAIGN", "direct_what
 RON_FORMS = [f.strip() for f in os.environ.get(
     "RON_FORMS", "RON_Villa_BM,RON_Villa_HI_BM").split(",") if f.strip()]
 
+# THE ONE PRICE THE BOT MAY SAY. Every live ad publishes it -- "Luxury Villas on
+# ECR | ₹3.94 Cr* Onwards" -- so a buyer arrives already knowing it. Refusing to
+# repeat your own advertised number reads as evasion at the first question
+# (owner, 2026-08-02: "yes the bot can say 3.94 cr starting price").
+#
+# It matches the price sheet, which rounds the cheapest villa to ₹3.9 Cr. The ad
+# figure is the precise one and the one the buyer saw, so it is the one we quote.
+#
+# NOTHING ELSE. Apartment prices, the ₹5.5 Cr four-bed, per-unit figures: still a
+# human's job. The guard in _enforce removes this phrase and then rejects any
+# money that remains, so the carve-out cannot widen by accident.
+VILLA_PRICE_TEXT = os.environ.get("VILLA_PRICE_TEXT", "₹3.94 Cr")
+VILLA_FLOOR = int(os.environ.get("VILLA_FLOOR", "39400000"))     # ₹3.94 crore
+
 # LEADGEN WEBHOOK. Meta pushes a lead the moment the form is submitted, so the
 # first template goes out in seconds instead of waiting up to 15 minutes for the
 # next poll. Polling stays on as the safety net for anything a webhook misses.

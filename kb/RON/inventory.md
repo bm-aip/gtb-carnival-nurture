@@ -48,8 +48,14 @@ These belong to later phases or are not released. **A buyer asking for any of th
 not off-category — they are asking for something we do not sell yet.** Escalate to a
 human rather than rejecting them; the answer is a sales conversation, not a gate.
 
-## Known discrepancy, unresolved
+## Villa top size — RESOLVED 2026-08-02
 
-The price sheet gives the largest villa as **3634 sqft**; FAQ row 8 says **3643 sqft**.
-Likely a transposed digit. Nobody has confirmed which is right, so the bot should not
-volunteer the top of the villa range as an exact figure.
+The largest villa is **3634 sqft**. The FAQ sheet said 3643, a transposed digit;
+the owner confirmed the price sheet is final. Both documents now agree.
+
+Worth remembering how this surfaced: the conflict was spotted when the corpus was
+built and written down here as a note saying the bot "should not volunteer the top
+of the villa range". Nothing enforced that, because it was prose in a document the
+bot only ever reads as retrieved text. The FAQ chunk was retrieved on its own, cited
+correctly, and 3643 went to a real buyer. **A caveat recorded next to a fact does
+not travel with the fact** — if a figure must not be used, remove or fix the figure.
