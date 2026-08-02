@@ -343,6 +343,22 @@ def record_delivery(ev):
     send we failed to record an id for, and the phone is the durable link. Returns
     True if this was a new event, False if it was a duplicate callback.
     """
+    # Wati's delivery events drop the phone. Verified against a live callback on
+    # 2026-08-02:
+    #
+    #   templateMessageSent       waId=919789988124   wamid.HBgMOTE5...
+    #   sentMessageDELIVERED_v2   waId ABSENT         wamid.HBgMOTE5...  <- same id
+    #
+    # The message id is the thread between them, so a phone-less event inherits the
+    # phone from the send we already recorded. Without this every delivered/read/
+    # failed row is orphaned and the report can never say who a failure belongs to.
+    if not ev.get("phone") and ev.get("provider_msg_id"):
+        prior = q("""SELECT phone, lead_id FROM message_delivery
+                     WHERE provider_msg_id=%s AND phone IS NOT NULL
+                     ORDER BY id LIMIT 1""", (ev["provider_msg_id"],), one=True)
+        if prior:
+            ev = dict(ev, phone=prior["phone"])
+
     lead = q("SELECT id FROM leads WHERE phone=%s ORDER BY updated_at DESC LIMIT 1",
              (ev.get("phone"),), one=True) if ev.get("phone") else None
     n = x("""INSERT INTO message_delivery
