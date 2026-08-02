@@ -86,16 +86,25 @@ def _first_name(name):
     return "there"
 
 
-def knock_state(lead_id):
-    """(how many knocks RECEIVED, when the last one went out).
+def knock_state(phone):
+    """(how many knocks this PERSON received, when the last one went out).
 
-    ok=TRUE only. A template that never reached the handset has not been spent,
-    and counting it would silently shorten the sequence for exactly the people we
-    already struggled to reach.
+    KEYED ON PHONE, NOT LEAD ID -- the Phase 0 rule, and it was broken here until
+    2026-08-02. One buyer, lavanya, was created twice: once by the promote path
+    from her Meta form (campaign RON_Villa_BM) and forty minutes later by the
+    Sell.do poll (campaign RON_Meta_BM). Both rows were allow-listed, both looked
+    un-knocked, and she received the same template twice.
+
+    `leads` is UNIQUE (project, selldo_lead_id), so the schema GUARANTEES one human
+    can be several rows. Counting per lead therefore counts the rows, not the
+    person -- and the person is who receives the message.
+
+    ok=TRUE only: a template that never reached the handset has not been spent.
     """
-    r = db.q("""SELECT count(*) n, max(ts) last_at FROM message_log
-                WHERE lead_id=%s AND direction='out' AND ok=TRUE
-                  AND msg_type LIKE 'knock\\_%%'""", (lead_id,), one=True) or {}
+    r = db.q("""SELECT count(*) n, max(ml.ts) last_at
+                FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+                WHERE l.phone = %s AND ml.direction='out' AND ml.ok=TRUE
+                  AND ml.msg_type LIKE 'knock\\_%%'""", (phone,), one=True) or {}
     return r.get("n", 0), r.get("last_at")
 
 
@@ -136,8 +145,15 @@ def due(limit=None):
 
     now = datetime.now(timezone.utc)
     out = []
+    # Phone-keyed within the batch too. knock_state reads what has already been
+    # SENT, so two rows for one person both read zero and both qualify -- which is
+    # exactly how lavanya was messaged twice. The database check stops it across
+    # runs; this stops it inside one.
+    claimed = set()
     for lead in rows:
-        sent, last_at = knock_state(lead["id"])
+        if lead["phone"] in claimed:
+            continue
+        sent, last_at = knock_state(lead["phone"])
         if sent >= len(KNOCK_SCHEDULE) or sent >= config.KNOCK_MAX_PER_JOURNEY:
             continue
         days_after, step_key = KNOCK_SCHEDULE[sent]
@@ -156,6 +172,7 @@ def due(limit=None):
             if now < last_at + timedelta(days=_min_gap_days(sent)):
                 continue
         out.append((lead, sent, step_key))
+        claimed.add(lead["phone"])
         if len(out) >= limit:
             break
     return out
@@ -205,7 +222,7 @@ def knock_now(lead):
         db.log_msg(lead["id"], "out", "knock_skipped", None, ok=False,
                    detail=f"campaign={lead.get('campaign')!r} not in allow-list")
         return False
-    sent, _last = knock_state(lead["id"])
+    sent, _last = knock_state(lead["phone"])
     if sent:
         return False
     return send_knock(lead, 0, KNOCK_SCHEDULE[0][1])
