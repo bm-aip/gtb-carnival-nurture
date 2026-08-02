@@ -28,12 +28,15 @@ on. It was only ever reachable with WALKIN_ENABLED=true, which has always
 defaulted false, so removing it changes no live behaviour.
 """
 from datetime import datetime, timedelta, timezone
+import logging
 import config
 import db
 import wati
 import sendgate
 import optout
 import failures
+
+log = logging.getLogger("sequencer")
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -166,18 +169,28 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
 
 
 def tick():
-    """Scheduled pass. Currently a no-op by design.
+    """Scheduled pass. Runs the knock engine.
 
-    The carnival send loops that used to live here are deleted (task 1b) and the
-    knock-engine scheduler that replaces them is task 17, which is blocked on
-    Phase 0 tasks 2, 3, 4 and on the suppression gate (task 16). Nothing may be
-    scheduled to send before the interlocks that bound it exist.
+    Empty until 2026-08-02. The carnival send loops were deleted in task 1b and
+    their replacement (task 17) was gated behind the suppression list -- the rule
+    that no lead may be knocked before checking whether a salesperson already owns
+    them. That interlock protected the 48,354 old Sell.do leads; it does not apply
+    to somebody who filled our own form this morning, and the campaign allow-list
+    now restricts every send to exactly those people. Meanwhile 39 buyers filled
+    the live forms and heard nothing.
 
-    Left as a live scheduled call rather than unhooked from APScheduler so the
-    process model, the lock in app.py and the /admin/poll-now path stay exercised
-    -- when task 17 fills this in, the plumbing around it is already known good.
+    Imported here rather than at module scope: knocks imports sequencer for the
+    one send door, and a top-level import would be circular.
     """
     db.set_setting("last_tick_at", now_ist().isoformat())
+    import knocks
+    try:
+        n = knocks.run()
+        if n:
+            log.info("knock engine sent %s", n)
+    except Exception as e:
+        log.exception("knock engine failed: %s", e)
+        db.set_setting("knock_error", str(e)[:500])
 
 
 def _adopt_direct_inbound(phone, sender_name, opted_out=False):
