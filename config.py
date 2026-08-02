@@ -412,10 +412,21 @@ FRAMINGS = {
         "because a weekend home and a full-time home are very different picks here",
         "so I don't waste your time on the wrong side of the project",
     ],
+    # REWRITTEN 2026-08-02. The previous three were "whether this stretch of ECR
+    # works for you", "the drive matters differently depending on where you're
+    # coming from" and "whether we're the right fit". Every one planted doubt
+    # before the buyer had any, and the bot came across as apologetic about a
+    # premium coastal project -- owner: "we are apologetic about someone who wants
+    # a full time home and we are already defensive if that works out for them".
+    #
+    # They also asked two different questions. "Where are you coming from" is where
+    # they LIVE; the gate wants where they want to BUY, and the model merged them
+    # into "based in or looking to buy around?", which a real buyer answered "Yes".
+    # One meaning now, and a reason that gives them something.
     "location": [
-        "so I can tell you honestly whether this stretch of ECR works for you",
-        "because the drive matters differently depending on where you're coming from",
-        "so I can be straight with you about whether we're the right fit",
+        "so I can show you how it connects to the places you already go",
+        "so I can line up the right homes and the right views before you come",
+        "so I can tell you what the drive actually looks like from your side of town",
     ],
     "configuration": [
         "so I can tell you what's actually available rather than everything at once",

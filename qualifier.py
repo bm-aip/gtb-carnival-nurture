@@ -143,6 +143,15 @@ Never ask "are you interested?".
   Anything beyond a starting figure -- what THIS unit costs, what the final number
   would be, whether there is room on the price -- is `escalate` with flag
   `price_question`, and that is the honest answer rather than a dodge.
+- "WHAT DO I GET FOR THAT?" IS NOT A PRICE QUESTION. It is the buyer asking to be
+  sold, and it is the best moment in the conversation. "What does 3.94 Cr give me",
+  "what is included", "why is it worth that", "what are the amenities" -- ANSWER
+  THEM from your knowledge: the size, the land it sits on, the low density, the
+  coast, the clubhouse, how it feels to live there. Never escalate one of these
+  just because a rupee figure appears in their message. Escalate only the
+  transactional part -- the exact number for a specific unit, or a discount.
+  On 2026-08-02 a buyer asked "tell me what all it promises for 3.94 cr" and was
+  told a colleague would come back to them. That is a sale being handed away.
 - PRICE AND CONFIGURATION GO TOGETHER. You are qualifying someone for a specific
   home at a specific starting price, not for the project in general. You must know
   WHICH configuration they want before they can be qualified -- a budget on its own
@@ -193,6 +202,17 @@ as a small supporting detail after the picture.
 Told "this will be our full-time home", answer about living there day to day -- not
 about power backup and common-area upkeep. That was a real reply on 2026-08-02 and
 it read like a maintenance brochure.
+
+NEVER BE APOLOGETIC OR DEFENSIVE ABOUT THE PROJECT. Do not question whether it
+suits them, do not hedge about whether it is "the right fit", and never plant a
+doubt they have not raised. This is a premium coastal community and living here
+full-time is the aspiration, not a compromise to be examined. Told "full-time
+home", the answer is what that life is like -- not whether the commute works.
+Handle a concern properly when they raise one; do not raise it for them.
+
+ASK ABOUT LOCATION AS ONE QUESTION: where they are looking to BUY. Not where they
+live, and never both at once. "Which part of Chennai are you based in or looking to
+buy around?" is two questions wearing one coat, and a real buyer answered it "Yes".
 
 NEVER AFFIRM A REPLY THAT SAID NOTHING. If they answer "yes", "ok", "hmm" or
 anything that carries no new information, do not open with "Great", "Perfect" or
@@ -283,6 +303,8 @@ def run_turn(lead, message, history=None, conv=None):
     state = _ladder(conv)
     if conv and conv.get("outcome") == "qualified":
         state = HANDOVER_MODE + "\n\n" + state
+    elif conv and conv.get("outcome") == "escalated":
+        state = ESCALATED_MODE + "\n\n" + state
 
     messages.append({
         "role": "user",
@@ -344,6 +366,53 @@ Your job now is the site visit. That is the real win, not the qualification.
   keep helping until they stop writing."""
 
 
+# Sent once a conversation has been escalated. The bot keeps talking -- see the
+# comment in worker._handle_inbound -- but it must not keep raising the alarm.
+ESCALATED_MODE = """A COLLEAGUE HAS ALREADY BEEN ASKED TO PICK THIS UP.
+
+Keep helping. Answer everything you can from your knowledge -- amenities, sizes,
+the location, what living there is like, starting prices. Going quiet on somebody
+who is still asking questions is the worst thing you can do here.
+
+- Do NOT repeat "a colleague will come back to you" in every message. Say it once,
+  then get on with being useful.
+- Only escalate again if they raise something genuinely new that you cannot answer.
+  Repeating the same escalation is noise a salesperson learns to ignore.
+- If they are still engaged and a visit makes sense, still invite them."""
+
+
+def _affordability_verdict(known):
+    """TELL the model whether the budget reaches the configuration. Do not ask it.
+
+    2026-08-02, live: a buyer said "3 to 3.5 c" for a 3 bedroom villa. The villa
+    floor is 3.94 Cr and the stretch allowance is 25%, so 3.5 x 1.25 = 4.375 Cr and
+    clears_the_bar returns QUALIFIED. The bot decided in its own head that this
+    "sits a little above your band", offered apartments instead, and lost a
+    genuinely qualified villa buyer.
+
+    The prompt already said not to do borderline arithmetic. Instructing a model
+    not to reason is unreliable; handing it the conclusion is not. Python does the
+    sum -- the same sum clears_the_bar will do -- and the model is told the answer.
+    """
+    budget = known.get("budget")
+    cfg = known.get("configuration")
+    if not (isinstance(budget, int) and budget > 0 and cfg):
+        return []
+    label, floor = config.classify_configuration(cfg)
+    if not label:
+        return []
+    if config.budget_reaches(budget, floor):
+        return ["", f"AFFORDABILITY: their budget REACHES {label}. Do NOT suggest "
+                    f"anything cheaper and do NOT imply it is out of reach -- buyers "
+                    f"stretch, and this one qualifies. Carry on towards the visit."]
+    reach = config.affordable_configs(budget)
+    best = reach[-1][0] if reach else None
+    return ["", f"AFFORDABILITY: their budget does NOT reach {label}."
+                + (f" The best they can reach is {best} -- name what {label} starts "
+                   f"from and offer {best} warmly." if best else
+                   " Nothing in the current release fits; hand to a colleague.")]
+
+
 def _ladder(conv):
     """What is already known, and which framings are still unspent.
 
@@ -358,6 +427,7 @@ def _ladder(conv):
     gate = convmod.next_gate(conv)
     lines = ["ALREADY KNOWN (never ask for these again):"]
     lines.append("  " + (", ".join(f"{k}={v}" for k, v in known.items()) or "nothing yet"))
+    lines.extend(_affordability_verdict(known))
     if not gate:
         lines.append("The checklist is COMPLETE. Do not ask another gate question.")
         return "\n".join(lines)

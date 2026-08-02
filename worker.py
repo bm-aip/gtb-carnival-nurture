@@ -92,8 +92,17 @@ def _handle_inbound(job):
 
     conv = conversation.get_or_create(lead)
 
-    # Only DEAD and ESCALATED stop the bot. Those are the two cases where a person
-    # owns the decision and a second voice would cut across them.
+    # Only DEAD stops the bot now.
+    #
+    # ESCALATED used to stop it too, and that was wrong for the same reason
+    # QUALIFIED was. Live on 2026-08-02: the bot escalated a price question, the
+    # buyer then asked "what all amenities and services it promises" -- an ordinary,
+    # answerable question -- and got silence, because the conversation had already
+    # been closed. Escalating means a human should pick up the hard part; it does
+    # not mean the buyer stops being a person mid-sentence.
+    #
+    # A human taking over in Wati is visible to the buyer anyway, and the operator
+    # can pause the bot. Going mute on somebody still typing is the worse failure.
     #
     # QUALIFIED and VISIT_BOOKED deliberately do NOT stop it. On 2026-08-01 the bot
     # asked "would you like me to pencil in a site visit?", the buyer answered
@@ -102,9 +111,9 @@ def _handle_inbound(job):
     # answer is worse than never asking. Owner: "it cant become cold - it has to
     # wean off in a gentle way ... we shouldnt drop the ball untill we know sales is
     # really ON it."
-    if conv.get("outcome") in ("dead", "escalated"):
+    if conv.get("outcome") == "dead":
         db.log_msg(lead["id"], "in", "post_outcome", text,
-                   detail=f"conversation already {conv['outcome']}; needs a human")
+                   detail="conversation already dead; needs a human")
         return
 
     turns = db.q("""SELECT direction, body FROM message_log
