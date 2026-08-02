@@ -129,6 +129,16 @@ def route(lead, conv, decision):
         return "dead"
 
     if action == "escalate":
+        # The bot no longer goes mute after escalating, so it can escalate again a
+        # few turns later. Sales must not get the same card five times -- an alert
+        # that repeats is an alert people stop reading. First one wins; later
+        # escalations are recorded and stay silent.
+        if conv.get("outcome") == "escalated" and conv.get("handoff_sent_at"):
+            db.x("""UPDATE conversations SET updated_at=now() WHERE id=%s""",
+                 (conv["id"],))
+            log.info("lead %s escalated again; card already sent, not re-notifying",
+                     lead["id"])
+            return "escalated"
         conversation.set_outcome(conv["id"], "escalated")
         _notify(config.ESCALATION_PHONES, build_escalation(lead, conv, decision),
                 "escalation")
