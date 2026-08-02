@@ -36,6 +36,31 @@ SELLDO = {
 }
 
 
+# DIRECT INBOUND -- a stranger messaging the business number.
+#
+# 58 people did this and got silence, most recently at 05:52 on 2026-08-02. They
+# arrive from a click-to-WhatsApp ad, so THEY started the conversation: the 24-hour
+# window is open, no template is needed, and intent is higher than anything sitting
+# in a form list.
+#
+# Lead creation from an inbound was removed in task 1b because it guessed the brand
+# from the customer's own message text, which rev 2 forbids. The project is now
+# stamped from CONFIG, not from anything the customer typed -- only one project runs
+# on this number. That is the "correct basis" task 14 was waiting for.
+#
+# The hard rule (owner, 2026-08-02): adopt ONLY a phone with no lead of any kind.
+# A phone already attached to a GT Bharathi lead is left alone -- we no longer have
+# rights to that audience. See [[phone-number-blocker]].
+DIRECT_INBOUND_ENABLED = _b(os.environ.get("DIRECT_INBOUND_ENABLED", "true"))
+DIRECT_INBOUND_PROJECT = os.environ.get("DIRECT_INBOUND_PROJECT", "RON")
+DIRECT_INBOUND_CAMPAIGN = os.environ.get("DIRECT_INBOUND_CAMPAIGN", "direct_whatsapp")
+
+# Appended in code rather than in the RON_CAMPAIGNS default so that overriding the
+# campaign list in Railway can never silently strip it and mute every walk-up.
+if DIRECT_INBOUND_ENABLED and DIRECT_INBOUND_PROJECT in SELLDO:
+    SELLDO[DIRECT_INBOUND_PROJECT]["campaigns"].append(DIRECT_INBOUND_CAMPAIGN)
+
+
 def campaign_allowed(project_key, campaign):
     """Is this lead's campaign one the bot may talk to? Case-insensitive.
 

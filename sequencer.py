@@ -180,6 +180,42 @@ def tick():
     db.set_setting("last_tick_at", now_ist().isoformat())
 
 
+def _adopt_direct_inbound(phone, sender_name, opted_out=False):
+    """A stranger messaged us. Make them a lead so the bot can answer.
+
+    Returns the new lead row, or None if we must stay silent.
+
+    Only ever called when the phone has NO lead of any kind -- that lookup is the
+    GT Bharathi guard. A number already attached to one of their leads keeps that
+    row, stays out of the allow-list, and is left alone.
+
+    The project comes from config, never from the customer's words. That was the
+    objection to the old walk-in path (task 1b) and it is why this is safe now:
+    one project runs on this number, so there is nothing to guess.
+    """
+    if not config.DIRECT_INBOUND_ENABLED:
+        return None
+    if opted_out:
+        # They opened with a stop word. Creating a lead for someone whose first act
+        # was to opt out is exactly how a suppression list gets quietly undone.
+        return None
+
+    project = config.DIRECT_INBOUND_PROJECT
+    db.x("""INSERT INTO leads (project, selldo_lead_id, name, phone, campaign,
+                               selldo_status, wa_state, last_inbound_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, 'direct_inbound', 'queued', now(), now())
+            ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+         (project, f"direct:{phone}", sender_name, phone,
+          config.DIRECT_INBOUND_CAMPAIGN))
+    lead = db.q("""SELECT * FROM leads WHERE project=%s AND selldo_lead_id=%s""",
+                (project, f"direct:{phone}"), one=True)
+    if lead:
+        db.log_msg(lead["id"], "in", "direct_inbound_lead", None,
+                   detail=f"stranger {phone} adopted as {config.DIRECT_INBOUND_CAMPAIGN} "
+                          f"({project}); no prior lead existed")
+    return lead
+
+
 def handle_inbound(phone, text, sender_name=None, allow_create=False):
     """Called by the webhook. Records an inbound message against its lead.
 
@@ -210,6 +246,8 @@ def handle_inbound(phone, text, sender_name=None, allow_create=False):
     scope, matched = optout.handle_inbound_text(
         phone, text, project=(lead or {}).get("project"))
 
+    if not lead:
+        lead = _adopt_direct_inbound(phone, sender_name, opted_out=bool(scope))
     if not lead:
         db.log_msg(None, "in", "unattributed", text,
                    detail=f"phone={phone} no_lead needs_human"
