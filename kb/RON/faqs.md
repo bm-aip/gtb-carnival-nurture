@@ -63,7 +63,15 @@ Phase 3 - Island Villas 5BHK, Beach front 4BHK, Villaments 2BHK, 3BHK, 4BHK
 
 ## What are the starting to ending sizes in villas ?
 
-Starts at 2552 Sqft 3 BHK and Ends at 3643 Sqft
+Villas start at 2552 sqft (3 bedroom) and go up to 3634 sqft (4 bedroom).
+The 3 bedroom villas are 2552 and 2612 sqft.
+
+<!-- Was "3643 sqft" until 2026-08-02. A transposed digit: the price sheet says
+     3634 and the owner confirmed the price sheet is final. The wrong figure
+     reached a real buyer (lead #657) before it was caught, because inventory.md
+     recorded the conflict as prose in a different document and nothing enforced
+     it. Resolved -- both files now say 3634. -->
+
 
 <!-- faq:8 xlsx:10 -->
 

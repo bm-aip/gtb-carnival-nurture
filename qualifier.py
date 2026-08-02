@@ -19,7 +19,10 @@ Anything that must not fail is enforced in code, not asked for in the prompt:
     model never chooses which corpus to read.
   * the budget gate is arithmetic against config.BUDGET_FLOOR. The model reports
     the number it heard; Python decides whether that passes.
-  * the corpus contains no price, so there is no figure available to leak.
+  * prices: the corpus holds STARTING prices only, and every figure in a reply
+    must be traceable to a cited chunk or to the buyer's own words. An untraceable
+    figure is an invented one and the turn escalates. The exact per-unit sheet is
+    still absent from the corpus, so it cannot be quoted at all.
   * the model must cite the chunk ids behind any factual claim, and a factual
     answer citing nothing is downgraded to an escalation before it is sent.
 
@@ -132,8 +135,14 @@ exist for each; never repeat a framing you have already used in this conversatio
 Never ask "are you interested?".
 
 # Hard rules — these are not style preferences
-- NEVER state a price, a price range, or a per-square-foot rate. No figure exists
-  in your knowledge. Every price question is `escalate` with flag `price_question`.
+- PRICES: you may give a STARTING price, and only from the retrieved knowledge.
+  Always say "from", "starting at" or "onwards" -- never a flat price and never a
+  range with a top. Never a per-square-foot rate. Never a price against a specific
+  unit or a specific size ("2552 sqft is X" is forbidden; "3 bedroom villas from X"
+  is right). No discounts, offers, payment plans, pre-EMI or registration charges.
+  Anything beyond a starting figure -- what THIS unit costs, what the final number
+  would be, whether there is room on the price -- is `escalate` with flag
+  `price_question`, and that is the honest answer rather than a dodge.
 - NEVER state a handover, possession or completion date. Escalate.
 - NEVER imply a natural or private beach. The approved wording is "a planned
   man-made beach and lagoon experience within the community".
@@ -160,6 +169,21 @@ is usually enough -- this is WhatsApp, not a brochure. Say "3 bedroom" rather th
 "3BHK configuration", "about 20 minutes" rather than "approximately". Cut the
 decorative phrases; a buyer skims. If they write in Tanglish or mixed Tamil and
 English, reply in plain simple English they will easily follow.
+
+LEAD WITH WHAT IT IS LIKE TO LIVE THERE, not with what is installed there. Power
+backup, maintenance arrangements and specifications are true and they are not why
+anyone buys a coastal home. Reach first for the space, the openness, the 32 acres
+with only 341 homes, the coast, the quiet. Mention a facility only if they ask, or
+as a small supporting detail after the picture.
+
+Told "this will be our full-time home", answer about living there day to day -- not
+about power backup and common-area upkeep. That was a real reply on 2026-08-02 and
+it read like a maintenance brochure.
+
+NEVER AFFIRM A REPLY THAT SAID NOTHING. If they answer "yes", "ok", "hmm" or
+anything that carries no new information, do not open with "Great", "Perfect" or
+"Good to know" -- it makes you sound like you are not reading. Ask again simply,
+with a different reason, the way a person would: "sorry, which area do you mean?"
 
 # Actions
 - `answer` — you answered and/or asked. The normal case.
@@ -392,6 +416,103 @@ def _clean_reply(reply):
     return re.sub(r"[ \t]{2,}", " ", reply).strip()
 
 
+# A buyer message that carries nothing: a bare acknowledgement, not an answer.
+_EMPTY_REPLY = re.compile(
+    r"^\s*(y(es|eah|ep|a)?|ok(ay)?|k|sure|fine|hmm+|hm|nice|got it|alright|"
+    r"right|good|👍|ok\.)\s*[.!]?\s*$", re.I)
+
+# How the model opens when it thinks it heard something useful.
+_AFFIRMATION = re.compile(
+    r"^\s*(great|perfect|good to know|excellent|wonderful|lovely|"
+    r"that'?s (great|good|helpful)|noted|understood|good choice|"
+    r"thanks for (that|sharing))\b[\s,.!:—-]*", re.I)
+
+
+def _strip_empty_affirmation(reply, message):
+    """Do not congratulate someone for saying "yes".
+
+    Live on 2026-08-02: asked which areas they were looking at, the buyer replied
+    "Yes". The bot opened its next turn with "Great." -- affirming a reply that
+    answered nothing, which reads as not listening. The prompt now forbids it;
+    this makes it true.
+
+    Only fires when the buyer's message really was empty, so a genuine "Perfect,
+    that helps" after a real answer is untouched.
+    """
+    if not reply or not message or not _EMPTY_REPLY.match(message):
+        return reply
+    stripped = _AFFIRMATION.sub("", reply, count=1)
+    if not stripped.strip():
+        return reply                      # the affirmation was the whole reply
+    return stripped[0].upper() + stripped[1:]
+
+
+# Any money-shaped figure, and the number inside it.
+_MONEY = re.compile(r"(?:₹|\brs\.?\s*)?\s*(\d+(?:[.,]\d+)?)\s*"
+                    r"(cr\b|crore|lakh|lac|l\b)", re.I)
+_BARE_RUPEE = re.compile(r"₹\s*(\d+(?:[.,]\d+)?)")
+_STARTING = re.compile(r"\b(from|starting|onwards|starts? at|begins? at)\b", re.I)
+_PER_SQFT = re.compile(r"per\s*(sq|square)\s*(ft|foot|feet)|/\s*sq", re.I)
+# "₹3.94 Cr to ₹5.5 Cr" -- a range has a TOP, and a top reads as a cap we have not
+# agreed to. Two separate starting prices ("apartments from X, villas from Y") are
+# fine and deliberately do not match this.
+_PRICE_RANGE = re.compile(
+    r"\d[\d.,]*\s*(?:cr\b|crore|lakh|lac)?\s*(?:to|up\s*to|until|[-–—])\s*"
+    r"₹?\s*\d[\d.,]*\s*(?:cr\b|crore|lakh|lac)", re.I)
+
+
+def _money_figures(text):
+    """Every monetary number in the text, as bare strings: {'3.94', '1.28'}."""
+    out = set()
+    for m in _MONEY.finditer(text or ""):
+        out.add(m.group(1).replace(",", ""))
+    for m in _BARE_RUPEE.finditer(text or ""):
+        out.add(m.group(1).replace(",", ""))
+    return out
+
+
+def _price_problem(reply, chunks, cited, message):
+    """Why this reply's pricing is unsendable, or None if it is fine.
+
+    Replaces the old "any money escalates" rule. Three conditions:
+
+    1. EVERY figure must be traceable -- present in a cited chunk, or in the
+       buyer's own message (echoing "so 2 crore is fine?" back is not us quoting
+       a price). An untraceable figure is an invented one, which is the failure
+       the blanket ban really existed to prevent. This is stricter than the ban:
+       it survives the corpus gaining prices, which the ban could not.
+    2. If we are quoting a price FROM the corpus, the reply must say from /
+       starting / onwards. Owner: "always say starting or onwards - so that we
+       are safe." A flat price is a commitment nobody authorised.
+    3. Per-square-foot rates are never allowed. They invite arithmetic against a
+       specific unit, which is exactly what starting prices avoid.
+    """
+    figures = _money_figures(reply)
+    if not figures and not _PER_SQFT.search(reply or ""):
+        return None
+    if _PER_SQFT.search(reply or ""):
+        return "reply quoted a per-square-foot rate"
+    if _PRICE_RANGE.search(reply or ""):
+        return "reply quoted a price range with a top"
+
+    cited_text = " ".join((c.get("content") or "") + " " + (c.get("guardrail") or "")
+                          for c in (chunks or []) if c.get("id") in set(cited or []))
+    buyer_figures = _money_figures(message or "")
+
+    from_corpus = False
+    for fig in figures:
+        if fig in buyer_figures:
+            continue                       # their number, handed back to them
+        if fig in _money_figures(cited_text) or fig in cited_text:
+            from_corpus = True
+            continue
+        return f"reply contained an unsupported price figure ({fig})"
+
+    if from_corpus and not _STARTING.search(reply or ""):
+        return "quoted a price without saying from/starting/onwards"
+    return None
+
+
 def _looks_corrupt(reply):
     """Is this reply damaged? Returns a reason, or None.
 
@@ -491,7 +612,8 @@ def _enforce(d, chunks, lead, message=None, history=None):
     because a prompt is a request and this is a guarantee.
     """
     valid_ids = {c["id"] for c in chunks}
-    reply = _rename_locality(_clean_reply(d.get("reply") or ""))
+    reply = _strip_empty_affirmation(
+        _rename_locality(_clean_reply(d.get("reply") or "")), message)
     d["reply"] = reply
 
     # 00. CORRUPTION. Before any other rule, because a damaged reply cannot be
@@ -533,8 +655,14 @@ def _enforce(d, chunks, lead, message=None, history=None):
     # 2. PRICE. The corpus holds no figure, but a model can still produce one
     #    from the buyer's own message ("so 2 crore is fine?"). Nothing that looks
     #    like money leaves this function.
-    if re.search(r"₹|\brs\.?\s*\d|\bcrore\b|\blakh\b|\bcr\b\s*\d|per sq", reply, re.I):
-        return _forced_escalation("reply contained a price", chunks)
+    #    The blanket ban is gone (owner, 2026-08-02: "we should be able to talk
+    #    about price - always say starting or onwards - so that we are safe"), and
+    #    the starting prices are now a citable corpus document. Three rules replace
+    #    it, and together they are stricter than the ban was about the thing that
+    #    actually mattered -- an INVENTED figure.
+    price_problem = _price_problem(reply, chunks, cited, message)
+    if price_problem:
+        return _forced_escalation(price_problem, chunks)
 
     # 3. Beach claim.
     if re.search(r"private beach|natural beach|own beach|beach access", reply, re.I):
