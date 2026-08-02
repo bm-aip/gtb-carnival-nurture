@@ -586,8 +586,21 @@ SEND_BATCH_PER_TICK = int(os.environ.get("SEND_BATCH_PER_TICK", "10"))
 DASH_USER = os.environ.get("DASH_USER", "admin")
 DASH_PASS = os.environ.get("DASH_PASS", "change-me")
 
+# HOW FAST A NEW LEAD IS REACHED. Owner 2026-08-02: "can u reduce this to 1 min".
+#
+# The old chain was Sell.do (10) -> Meta forms (10) -> tick (5), so 5-15 minutes
+# before the first template, plus however long Sell.do took to receive the lead.
+# Speeding up the tick alone would not have helped: the lead still waited on a
+# partner database.
+#
+# So the fast path stops going through Sell.do. Meta form leads are polled every
+# minute and promoted straight into `leads` with their phone already attached, and
+# the tick that knocks them also runs every minute. Sell.do stays on a slow poll --
+# it is somebody else's database, it is no longer on the critical path, and
+# hammering it every minute buys nothing.
 SELLDO_POLL_MIN = int(os.environ.get("SELLDO_POLL_MIN", "10"))
+META_LEADS_POLL_MIN = int(os.environ.get("META_LEADS_POLL_MIN", "1"))
 META_ADS_POLL_MIN = int(os.environ.get("META_ADS_POLL_MIN", "30"))
-SEQUENCER_TICK_MIN = int(os.environ.get("SEQUENCER_TICK_MIN", "5"))
+SEQUENCER_TICK_MIN = int(os.environ.get("SEQUENCER_TICK_MIN", "1"))
 
 IST_OFFSET_HOURS = 5.5

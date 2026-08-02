@@ -16,7 +16,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-02-villa-pivot"
+CODE_VERSION = "2026-08-02-faster-first-touch"
 import db
 import selldo
 import meta
@@ -687,7 +687,8 @@ def start_scheduler():
     sched.add_job(selldo.poll_all, "interval", minutes=config.SELLDO_POLL_MIN,
                   id="selldo", max_instances=1, coalesce=True,
                   next_run_time=soon(5))
-    sched.add_job(meta.poll_meta_leads, "interval", minutes=config.SELLDO_POLL_MIN,
+    # Every minute: this is the fast path to a new lead now, not Sell.do.
+    sched.add_job(meta.poll_meta_leads, "interval", minutes=config.META_LEADS_POLL_MIN,
                   id="meta_leads", max_instances=1, coalesce=True,
                   next_run_time=soon(20))
     sched.add_job(meta.poll_campaign_stats, "interval", minutes=config.META_ADS_POLL_MIN,

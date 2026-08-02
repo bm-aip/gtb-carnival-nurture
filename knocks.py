@@ -29,6 +29,7 @@ The last two are not re-implemented here. There is one door and this walks throu
 it like everything else.
 """
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 import config
@@ -62,13 +63,27 @@ def msg_type_for(step_key):
 
 
 def _first_name(name):
-    """Templates open 'Hi {{1}},'. A Sell.do name carries a '(#53773)' suffix and
-    is often the full name doubled; neither belongs in a greeting."""
+    """Templates open 'Hi {{1}},'. Return something that reads like a name.
+
+    A Sell.do name carries a '(#53773)' suffix and is often the full name doubled.
+    Meta names are worse: people fill forms with decorated unicode, and a real one
+    in the queue today was "꧁𓊈𒆜𝘔𝘠 𝘕𝘈𝘔𝘌 𝘚𝘏𝘈𝘐𝘓 𝘉𝘖𝘚". Greeting somebody with that
+    looks broken, and it risks the template send failing outright.
+
+    So: strip the id suffix, keep only plain letters, and fall back to "there"
+    when nothing sensible survives. "Hi there," is a perfectly good greeting; a
+    mojibake salutation is not.
+    """
     if not name:
         return "there"
-    cleaned = name.split("(")[0].strip()
-    first = cleaned.split()[0] if cleaned.split() else ""
-    return first[:40] or "there"
+    cleaned = re.sub(r"\(#?\d+\)", " ", str(name))
+    for word in cleaned.split():
+        # ASCII letters only -- decorated unicode look-alikes are not letters here,
+        # which is exactly why this rejects them.
+        plain = re.sub(r"[^A-Za-z'\-]", "", word)
+        if len(plain) >= 2:
+            return plain[:40]
+    return "there"
 
 
 def knock_state(lead_id):
