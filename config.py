@@ -55,10 +55,43 @@ DIRECT_INBOUND_ENABLED = _b(os.environ.get("DIRECT_INBOUND_ENABLED", "true"))
 DIRECT_INBOUND_PROJECT = os.environ.get("DIRECT_INBOUND_PROJECT", "RON")
 DIRECT_INBOUND_CAMPAIGN = os.environ.get("DIRECT_INBOUND_CAMPAIGN", "direct_whatsapp")
 
+# OUR OWN LEAD FORMS -- the live BM ones, verified against the Meta page
+# "Republic of Nature by GTB" (1144824778724398) on 2026-08-02. ONE list, THREE
+# uses, so they cannot drift apart:
+#
+#   1. the promote path stamps a lead's campaign with its form name
+#   2. the allow-list must therefore contain those names, or the gate we built in
+#      #6 silences every lead the promote path creates -- exactly the trap left
+#      open in #7
+#   3. the leadgen webhook refuses any form not on this list
+RON_FORMS = [f.strip() for f in os.environ.get(
+    "RON_FORMS", "RON_Villa_BM,RON_Villa_HI_BM").split(",") if f.strip()]
+
+# LEADGEN WEBHOOK. Meta pushes a lead the moment the form is submitted, so the
+# first template goes out in seconds instead of waiting up to 15 minutes for the
+# next poll. Polling stays on as the safety net for anything a webhook misses.
+#
+# META_VERIFY_TOKEN is any random string; the SAME value goes in the Meta app's
+# webhook configuration. META_APP_SECRET signs every delivery -- without it we
+# would accept a lead from anyone who guessed the URL, so an unset secret means
+# the endpoint refuses everything rather than trusting it.
+META_VERIFY_TOKEN = os.environ.get("META_VERIFY_TOKEN") or os.environ.get("VERIFY_TOKEN")
+META_APP_SECRET = os.environ.get("META_APP_SECRET")
+LEADGEN_WEBHOOK_ENABLED = _b(os.environ.get("LEADGEN_WEBHOOK_ENABLED", "true"))
+
 # Appended in code rather than in the RON_CAMPAIGNS default so that overriding the
 # campaign list in Railway can never silently strip it and mute every walk-up.
 if DIRECT_INBOUND_ENABLED and DIRECT_INBOUND_PROJECT in SELLDO:
     SELLDO[DIRECT_INBOUND_PROJECT]["campaigns"].append(DIRECT_INBOUND_CAMPAIGN)
+
+# THE GAP FROM #7, CLOSED. A lead created from a Meta form is stamped with the
+# FORM's name, not a Sell.do campaign name. Without these entries the allow-list
+# gate fails closed on every one of them -- the promote path and the leadgen
+# webhook would both create leads correctly and then be unable to say a word to
+# them. Same reasoning as above: appended in code so an env override cannot
+# silently remove them.
+if "RON" in SELLDO:
+    SELLDO["RON"]["campaigns"].extend(RON_FORMS)
 
 
 def campaign_allowed(project_key, campaign):
@@ -190,17 +223,7 @@ LEADS_SINCE = "2026-06-25"
 # RON side is restricted to the _BM forms only. The other RON carnival forms
 # (_Apt, _Villa, _Villa 1, Ron_carnival_*) and the broad-audience forms are
 # deliberately excluded.
-PROMOTE_FORMS = [f.strip() for f in os.environ.get(
-    "PROMOTE_FORMS",
-    "GTB_Carnival_RON_2BHK_BM,"
-    "GTB_Carnival_RON_3BHK_BM,"
-    "GTB_Carnival_RON_3BHK_Villa BM,"
-    "GTB_Carnival_RON_4BHK_Villa BM,"
-    "GTB_Carnival_RON_Villa_BM,"
-    "Elements Carnival,"
-    "Elements Carnival - E4 New,"
-    "Elements- 3 Carnival"
-).split(",") if f.strip()]
+PROMOTE_FORMS = list(RON_FORMS)
 # Only promote recent form fills. Without this the first run would sweep the
 # entire LEADS_SINCE backlog (729 people) into the send queue at once -- three
 # days of sending on a 250/day tier, for an event that ends in two.

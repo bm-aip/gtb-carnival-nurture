@@ -173,6 +173,29 @@ def send_knock(lead, step_index, step_key):
     return ok
 
 
+def knock_now(lead):
+    """Send knock 1 to a lead that has just this second been created.
+
+    The leadgen webhook path. Waiting for the next scheduled tick would cost up
+    to five minutes, and the whole point of the webhook is that the buyer is
+    still looking at their phone.
+
+    Every guard still applies -- this calls the same send_knock as the scheduler,
+    so fatigue, the allow-list, opt-out and both pauses are enforced identically.
+    Refuses if anything has already been sent, so a Meta retry cannot double-knock.
+    """
+    if not lead or not lead.get("phone"):
+        return False
+    if not config.campaign_allowed(lead.get("project"), lead.get("campaign")):
+        db.log_msg(lead["id"], "out", "knock_skipped", None, ok=False,
+                   detail=f"campaign={lead.get('campaign')!r} not in allow-list")
+        return False
+    sent, _last = knock_state(lead["id"])
+    if sent:
+        return False
+    return send_knock(lead, 0, KNOCK_SCHEDULE[0][1])
+
+
 def run():
     """One scheduled pass. Returns how many knocks went out."""
     batch = due()

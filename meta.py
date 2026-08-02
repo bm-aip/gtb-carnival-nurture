@@ -151,6 +151,51 @@ def poll_meta_leads():
             db.set_setting(f"meta_leads_error_{pk}", str(e)[:500])
 
 
+def fetch_lead(project_key, leadgen_id):
+    """One lead, by the id Meta hands us in a leadgen webhook.
+
+    Uses the PAGE token, not the user token: lead retrieval is a page-scoped
+    permission and the user token is refused on some accounts.
+
+    Returns {"meta_lead_id","name","phone","created_time","form_id","form_name"}
+    or None. Never raises -- a webhook that 500s is a webhook Meta retries.
+    """
+    try:
+        pages = get_pages(project_key)
+    except Exception:
+        return None
+    if not pages:
+        return None
+    ptoken = pages[0].get("access_token")
+    if not ptoken:
+        return None
+
+    try:
+        j = _get(f"{config.GRAPH}/{leadgen_id}",
+                 {"access_token": ptoken,
+                  "fields": "id,created_time,field_data,form_id"})
+    except Exception:
+        return None
+    if not j or "error" in j:
+        return None
+
+    name, phone, _pref = _extract_name_phone(j.get("field_data"))
+    form_id = j.get("form_id")
+    form_name = None
+    if form_id:
+        try:
+            f = _get(f"{config.GRAPH}/{form_id}",
+                     {"access_token": ptoken, "fields": "name"})
+            form_name = (f or {}).get("name")
+        except Exception:
+            pass
+    return {"meta_lead_id": str(j.get("id") or leadgen_id),
+            "name": name, "phone": phone,
+            "created_time": j.get("created_time"),
+            "form_id": form_id, "form_name": form_name,
+            "page_id": pages[0]["id"]}
+
+
 def promote_meta_leads():
     """Queue a cached Meta form lead straight into the sequencer, skipping the
     Sell.do 'Interested' gate.
