@@ -168,6 +168,29 @@ def test_corruption_is_refused_not_repaired():
             known_bug=True)
 
 
+def test_garbled_is_retried_not_escalated():
+    """2026-08-03: a real villa lead tapped "Need More Details" 40 seconds into
+    their first conversation. The model produced "...near Kovalam Junction \\ronking
+    about it \\\\ two hundred - it's a coastal community...". The guard correctly
+    refused to send it and then ESCALATED, so the buyer was handed to a human and
+    the bot went quiet. Corruption is a stutter, not a judgement."""
+    real = ("Happy to help. Republic of Nature is on ECR, near Kovalam Junction "
+            + chr(13) + "onking about it " + chr(10) + "two hundred - a coastal "
+            "community with apartments and villas.")
+    R.check("the real 2026-08-03 reply is caught", q._looks_corrupt(real) is not None)
+    R.check("a bare carriage return is a control character",
+            q._looks_corrupt("Kovalam Junction " + chr(13) + "onking") is not None)
+    for reason in ("control character in reply", "line break mid-sentence",
+                   "reply ends mid-sentence", "unparseable decision",
+                   "no text in response", "response truncated"):
+        R.check(f"retried, not escalated: {reason}", reason in q._GARBLED)
+    for reason in ("model declined the request", "factual claim with no supporting chunk",
+                   "reply contained a price range with a top",
+                   "mall offered with no distance objection"):
+        R.check(f"a judgement stands, never retried: {reason}", reason not in q._GARBLED)
+    R.check("more than one extra attempt", q.GARBLE_RETRIES >= 1, str(q.GARBLE_RETRIES))
+
+
 def test_never_congratulate_a_non_answer():
     R.eq("'Great.' after 'Yes' is stripped",
          q._strip_empty_affirmation("Great. Which part of Chennai?", "Yes"),
@@ -218,7 +241,7 @@ def main():
     for fn in (test_qualification, test_configuration_classifier, test_price_guard,
                test_say_a_price_once, test_affordability_is_decided_for_the_model,
                test_locality_never_spoken, test_mall_locked_to_a_real_objection,
-               test_corruption_is_refused_not_repaired,
+               test_corruption_is_refused_not_repaired, test_garbled_is_retried_not_escalated,
                test_never_congratulate_a_non_answer, test_greeting_never_mojibake,
                test_knock_spacing, test_below_entry_should_not_kill_a_live_buyer):
         fn()
