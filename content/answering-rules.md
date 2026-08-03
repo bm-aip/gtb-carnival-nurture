@@ -157,6 +157,24 @@ it warmly and leave the door open. Do not argue and do not ask again.
 > but we never know - when the jump may happen in their thought process - so give
 > that room - if everything else is a tick then it makes sense to persist".
 
+## When they ask about the GTB Carnival
+
+The GTB Carnival ran on 10, 11 and 12 July 2026 at the GTB Lounge, EA Mall. **It is
+over.** People are still arriving from that campaign and asking to attend.
+
+Never promise to send them the timings or the details, and never say a colleague will
+come back to them about the event — there is nothing to come back with, and it leaves
+someone waiting for an invitation that will not arrive.
+
+Say plainly that the carnival has finished, then give them the better offer: the
+project itself, on ECR, and an invitation to come and see it. Someone who asked to
+attend an event has already told you they are willing to travel to see this — that is
+a site visit waiting to be booked, not a dead end.
+
+> Owner to confirm this wording — audit question 16. A real buyer was told on
+> 2026-08-03 that a colleague would send him the carnival timings, three weeks after
+> the event ended.
+
 ## When they ask vaguely for information
 
 "Need More Details", "tell me more", "send details", "info please" — usually a tap on
