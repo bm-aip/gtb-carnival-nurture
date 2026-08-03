@@ -168,6 +168,56 @@ def test_corruption_is_refused_not_repaired():
             known_bug=True)
 
 
+def test_the_rulebook_loads_and_fails_loudly():
+    """content/answering-rules.md is now the bot's mouth. A section quietly missing
+    would mean answering a real buyer without its price rules, so a bad edit must
+    stop the process rather than degrade the conversation."""
+    import io as _io
+    import answering as a
+
+    R.eq("every section present", sorted(a.RULES) == sorted(a.SECTIONS.values()), True)
+    R.check("the prompt is assembled from the document",
+            len(a.system_prompt("Republic of Nature")) > 4000)
+    R.check("the escalation sentence comes from the document",
+            a.RULES["escalation_reply"].startswith("Let me have someone"),
+            a.RULES["escalation_reply"])
+    R.check("qualifier uses it", q._forced_escalation("x", [])["reply"]
+            == a.RULES["escalation_reply"])
+
+    doc = _io.open(a.__file__.replace("answering.py", "content/answering-rules.md"),
+                   encoding="utf-8").read()
+
+    # A RENAMED HEADING is the classic silent edit: the section vanishes and nothing
+    # complains. It must report BOTH the missing field and the orphaned heading.
+    renamed = doc.replace("## Talking about price", "## Talking about pricing")
+    try:
+        a.validate(*a.parse(renamed))
+        R.check("a renamed heading raises", False, "no error raised")
+    except a.RulesError as e:
+        R.check("a renamed heading names the missing section",
+                "Talking about price" in str(e), str(e)[:200])
+        R.check("...and the orphaned heading", "does nothing" in str(e), str(e)[:200])
+
+    # An emptied section must not be silently defaulted.
+    gutted = doc.replace("Let me have someone from our team come back to you on this.", "")
+    try:
+        a.validate(*a.parse(gutted))
+        R.check("an emptied section raises", False, "no error raised")
+    except a.RulesError:
+        R.check("an emptied section raises", True)
+
+    # `>` notes are for whoever edits the file and must never reach the model.
+    parsed, _ = a.parse(doc)
+    R.check("editor notes are stripped",
+            "WHAT IS NOT IN THIS FILE" not in " ".join(parsed.values()))
+
+    # The document must NOT restate what the code enforces -- two copies drift.
+    body = " ".join(parsed.values())
+    for leaked in ("39400000", "12800000", "1.25", "BUDGET_STRETCH", "CONFIG_FLOORS"):
+        R.check(f"the document does not restate {leaked!r}", leaked not in body,
+                "a rule the code enforces must not also live in prose")
+
+
 def test_garbled_is_retried_not_escalated():
     """2026-08-03: a real villa lead tapped "Need More Details" 40 seconds into
     their first conversation. The model produced "...near Kovalam Junction \\ronking
@@ -243,7 +293,8 @@ def main():
                test_locality_never_spoken, test_mall_locked_to_a_real_objection,
                test_corruption_is_refused_not_repaired, test_garbled_is_retried_not_escalated,
                test_never_congratulate_a_non_answer, test_greeting_never_mojibake,
-               test_knock_spacing, test_below_entry_should_not_kill_a_live_buyer):
+               test_knock_spacing, test_the_rulebook_loads_and_fails_loudly,
+               test_below_entry_should_not_kill_a_live_buyer):
         fn()
     return R.report("RULES  (no database, no API)")
 
