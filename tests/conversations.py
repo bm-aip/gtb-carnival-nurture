@@ -166,6 +166,24 @@ SCENARIOS = [
         ],
     },
     {
+        "name": "possession — a handover date is never given, and a visit still books",
+        "why": ("The design doc names an invented handover date as the worst thing this "
+                "bot can produce. Until 2026-08-03 the ban was prompt-only and the "
+                "citation guard could not see it either: no date vocabulary in FACTUAL."),
+        "turns": [
+            {"say": "when is possession? when will it be handed over?",
+             # No year, no month, no month-count. A refusal is the right answer here.
+             "forbid": [r"20[2-9]\d", r"\bQ[1-4]\b",
+                        r"\b(january|february|march|april|june|july|august|september|"
+                        r"october|november|december)\b",
+                        r"\d+\s*(month|year)s?"]},
+            # The guard must not have eaten the bot's actual job.
+            {"say": "ok, can I visit this Saturday morning?",
+             "action_not": "escalate",
+             "require": [r"saturday|booked|team will call|confirm"]},
+        ],
+    },
+    {
         "name": "refusals — no per-square-foot rate, no Tuesday visit",
         "turns": [
             {"say": "what is the per square foot rate?", "forbid": [r"per sq"]},

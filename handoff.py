@@ -203,12 +203,43 @@ def route(lead, conv, decision):
             log.warning("lead %s claimed qualified but %s -- not handing off",
                         lead["id"], reason)
             return None
-        conversation.set_outcome(conv["id"], "qualified")
+
+        # SEND THE CARD ONCE. The escalate branch above has always had this guard;
+        # this branch did not, and it matters MORE here -- the qualified queue is
+        # what sales judges us on, so a card that arrives five times trains them to
+        # ignore the one channel this system depends on.
+        #
+        # Reachable, not theoretical: the bot deliberately keeps talking after
+        # qualifying (see worker._handle_inbound), the checklist stays complete, and
+        # nothing in the schema or the handover copy stops the model reporting
+        # `qualified` again on a later turn. Every one of those turns re-sent a card.
+        prior = conv.get("outcome")
+        if prior in ("qualified", "visit_booked") and conv.get("handoff_sent_at"):
+            db.x("UPDATE conversations SET updated_at=now() WHERE id=%s", (conv["id"],))
+            log.info("lead %s qualified again; card already sent, not re-notifying",
+                     lead["id"])
+            return prior
+
+        if prior == "escalated":
+            # A SECOND NAMED TRANSITION, for the same reason visit_booked exists:
+            # this lead has got BETTER. They were escalated for something the bot
+            # could not answer, have since cleared every gate, and `escalated` is
+            # write-once -- so without this the outcome column would keep saying
+            # "escalated" for somebody who is actually qualified, and every later
+            # turn would fall through and fire another card.
+            #
+            # The escalation card was already sent, so nothing is lost by relabelling
+            # -- the human who needed to know already knows.
+            conversation.set_outcome(conv["id"], "qualified", upgrade_from="escalated")
+        else:
+            conversation.set_outcome(conv["id"], "qualified")
+
         db.x("UPDATE leads SET wa_state='qualified', updated_at=now() WHERE id=%s",
              (lead["id"],))
         _notify(config.HANDOFF_PHONES, build_card(lead, conv, reason), "qualified")
         conversation.mark_handed_off(conv["id"])
-        log.info("lead %s -> QUALIFIED", lead["id"])
+        log.info("lead %s -> QUALIFIED%s", lead["id"],
+                 " (was escalated)" if prior == "escalated" else "")
         return "qualified"
 
     return None

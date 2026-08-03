@@ -183,8 +183,10 @@ def clears_the_bar(conv):
 # the thing that buried them. Owner: "when the jump may happen in their thought
 # process - so give that room".
 #
-# qualified -> visit_booked is NOT here. It is a named transition and stays explicit,
-# via upgrade_from.
+# Two transitions are NOT here and stay explicit, via upgrade_from, because each is
+# a specific "this lead got better" case rather than a general permission:
+#   qualified -> visit_booked   (handoff.py, the second success exit)
+#   escalated -> qualified      (handoff.py, a lead who has since cleared every gate)
 UPGRADABLE = ("nurture",)
 
 

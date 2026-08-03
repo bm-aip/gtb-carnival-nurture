@@ -69,6 +69,66 @@ def test_configuration_classifier():
 
 
 # --------------------------------------------------------------------------
+# Possession / handover dates. The design doc calls an invented handover date the
+# worst thing this bot can produce, and until 2026-08-03 the ban was prompt-only:
+# FACTUAL had no date vocabulary, so "Handover is expected by December 2027"
+# looked non-factual, skipped the citation rule, and could be sent uncited.
+# --------------------------------------------------------------------------
+def test_possession_dates_are_refused():
+    bad = [
+        "Handover is expected by December 2027.",
+        "Possession is scheduled for Q3 2028.",
+        "The villas will be ready to move in 18 months.",
+        "We hand over the apartments in mid-2027.",
+        "Completion is targeted for end of next year.",
+        "Move-in is planned for March 2029.",
+    ]
+    for reply in bad:
+        R.check(f"refused: {reply[:44]!r}", q._possession_problem(reply) is not None)
+        R.check(f"...and now looks factual: {reply[:30]!r}", q._looks_factual(reply))
+
+    # FALSE POSITIVES ARE THE REAL RISK HERE. Booking a site visit is the bot's job
+    # and every booking names a day, so a guard that trips on dates would escalate
+    # the win. None of these may match.
+    fine = [
+        "Saturday at 11am works, I'll book that for you.",
+        "Monday afternoon is fine, the team will call to confirm timing.",
+        "Any day from Wednesday to Sunday works. Which suits you?",
+        "You may visit whenever suits you.",                 # bare 'may' is not a month
+        "The 3 bedroom villas are 2552 sqft and start from ₹3.94 Cr onwards.",
+        "The clubhouse is 60,000 sqft with a mini theatre.",
+        "Phase 2 sits closer to the lagoon.",
+        "It's ready to move whenever you are.",              # no time expression
+        "We're open Wednesday to Sunday, 10am to 6pm.",
+    ]
+    for reply in fine:
+        R.check(f"allowed: {reply[:44]!r}", q._possession_problem(reply) is None)
+
+
+# --------------------------------------------------------------------------
+# The qualified card is sent ONCE. The escalate branch always had this guard;
+# the qualified branch did not, and it matters more -- the qualified queue is what
+# sales judges us on.
+# --------------------------------------------------------------------------
+def test_qualified_card_is_sent_once():
+    src = open(os.path.join(os.path.dirname(__file__), "..", "handoff.py"),
+               encoding="utf-8").read()
+    branch = src.split('if action == "qualified":')[1]
+
+    R.check("the qualified branch checks it has not already notified",
+            "handoff_sent_at" in branch,
+            "no re-fire guard: the bot keeps talking after qualifying, so the model "
+            "can report `qualified` again and sales gets the same card every turn")
+    R.check("...and relabels a previously-escalated lead instead of re-firing",
+            'upgrade_from="escalated"' in branch,
+            "escalated is write-once, so without this the outcome column keeps "
+            "saying escalated and every later turn falls through and sends a card")
+    R.check("escalated -> qualified is a NAMED transition, not a general permission",
+            cv.UPGRADABLE == ("nurture",),
+            f"UPGRADABLE is {cv.UPGRADABLE}")
+
+
+# --------------------------------------------------------------------------
 # Prices
 # --------------------------------------------------------------------------
 PRICE_CHUNK = {"id": 423, "content":
@@ -380,7 +440,9 @@ def main():
                test_below_entry_is_nurtured_not_killed,
                test_nurture_never_suppresses_and_can_be_upgraded,
                test_no_outcome_silences_the_bot,
-               test_the_below_entry_rules_are_editable_english):
+               test_the_below_entry_rules_are_editable_english,
+               test_possession_dates_are_refused,
+               test_qualified_card_is_sent_once):
         fn()
     return R.report("RULES  (no database, no API)")
 
