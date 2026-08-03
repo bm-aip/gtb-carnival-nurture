@@ -495,9 +495,20 @@ ESCALATION_PHONES = _phones(os.environ.get("ESCALATION_PHONES", _DEFAULT_RECIPIE
 # complaint -- you simply never hear from the people it discarded. Re-check this
 # whenever pricing moves.
 #
-# Only the FLOOR rejects. The ceiling is a signal for sales, not a filter: somebody
-# with more money than the top unit is a good problem, not an unqualified lead.
-BUDGET_FLOOR = int(os.environ.get("BUDGET_FLOOR", "12800000"))      # ₹1.28 cr
+# ⚠️ THERE IS EXACTLY ONE FLOOR AND IT IS DERIVED. Until 2026-08-03 a separate
+# BUDGET_FLOOR env var held ₹1.28 cr as its own number, and it was compared RAW
+# while clears_the_bar compared the same figure STRETCHED. Two floors, one stretched
+# and one not, and the un-stretched one fired first -- so a ₹1.1 cr buyer, who
+# stretched reaches ₹1.375 cr and can genuinely afford the entry apartment, was
+# marked dead and suppressed permanently. Exactly the failure the comment above
+# warns about: no error, no complaint, you simply never hear from them again.
+#
+# So the entry price is now READ OFF CONFIG_FLOORS, and every comparison goes
+# through budget_reaches(). One number cannot disagree with itself.
+ENTRY_FLOOR = CONFIG_FLOORS[0][1]                                   # ₹1.28 cr
+
+# A signal for sales, not a filter: somebody with more money than the top unit is a
+# good problem, not an unqualified lead.
 BUDGET_CEILING = int(os.environ.get("BUDGET_CEILING", "55000000"))  # ₹5.5 cr
 
 # --- Knowledge base / RAG (task 8) ---

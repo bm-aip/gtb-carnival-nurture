@@ -17,8 +17,9 @@ Anything that must not fail is enforced in code, not asked for in the prompt:
 
   * the brand fence is `kb.answer_context(brand_id, ...)` — a WHERE clause. The
     model never chooses which corpus to read.
-  * the budget gate is arithmetic against config.BUDGET_FLOOR. The model reports
-    the number it heard; Python decides whether that passes.
+  * the budget gate is arithmetic: config.budget_reaches() against one derived
+    floor. The model reports the number it heard; Python decides whether it passes.
+    There is deliberately no second floor to disagree with the first.
   * prices: the corpus holds STARTING prices only, and every figure in a reply
     must be traceable to a cited chunk or to the buyer's own words. An untraceable
     figure is an invented one and the turn escalates. The exact per-unit sheet is
@@ -391,10 +392,21 @@ def _affordability_verdict(known):
                     f"stretch, and this one qualifies. Carry on towards the visit."]
     reach = config.affordable_configs(budget)
     best = reach[-1][0] if reach else None
-    return ["", f"AFFORDABILITY: their budget does NOT reach {label}."
-                + (f" The best they can reach is {best} -- name what {label} starts "
-                   f"from and offer {best} warmly." if best else
-                   " Nothing in the current release fits; hand to a colleague.")]
+    if best:
+        return ["", f"AFFORDABILITY: their budget does NOT reach {label}. The best "
+                    f"they can reach is {best} -- name what {label} starts from and "
+                    f"offer {best} warmly."]
+    # BELOW EVERYTHING WE SELL, and this is where the bot used to hand over and go
+    # quiet. Owner, 2026-08-03: "the logic here is not to reject but to nurture and
+    # see if they are willing to make the jump ... when the jump may happen in their
+    # thought process - so give that room". Nobody is called; the bot keeps talking
+    # and probes for room. See the rulebook section 'When their budget is below
+    # anything we sell' for how, which is editable English.
+    return ["", "AFFORDABILITY: their budget reaches NOTHING in the current release. "
+                "Do NOT hand this to a colleague and do NOT close the conversation. "
+                "Keep helping them, and probe gently for room -- whether the figure "
+                "is firm, their timeline, funding, who else decides. Follow 'When "
+                "their budget is below anything we sell'."]
 
 
 def _ladder(conv):
@@ -761,10 +773,31 @@ def _enforce(d, chunks, lead, message=None, history=None):
     # 5. BUDGET GATE — arithmetic, not judgement. The model reports the number it
     #    heard; Python decides. Only the floor rejects: someone above the ceiling
     #    is a good problem, not an unqualified lead.
+    #
+    #    THE COMPARISON IS STRETCHED, and that is not a loosening -- it is the same
+    #    sum clears_the_bar has always done. This line compared the RAW figure until
+    #    2026-08-03 while clears_the_bar stretched it, so a ₹1.1 cr buyer who can
+    #    reach the ₹1.28 cr entry apartment was killed here before the stretch was
+    #    ever applied. See config.ENTRY_FLOOR.
+    #    AND BELOW THE FLOOR IS NURTURE, NOT DEATH. Owner, 2026-08-03: "the logic
+    #    here is not to reject but to nurture and see if they are willing to make the
+    #    jump - most of the leads come with the bit of an understanding of the price -
+    #    if they say lower number it may be low balling - but we never know - when the
+    #    jump may happen in their thought process - so give that room".
+    #
+    #    `nurture` is deliberately NOT in DECISION_SCHEMA's enum. The model never
+    #    chooses it -- it is arithmetic, decided here, the same way the affordability
+    #    verdict is computed rather than reasoned about. What the model gets is the
+    #    verdict and the rulebook section telling it how to probe.
     budget = d.get("budget_inr")
-    if isinstance(budget, int) and budget > 0 and budget < config.BUDGET_FLOOR:
-        d["action"] = "dead"
-        d["internal_note"] = (f"below budget floor ({budget} < {config.BUDGET_FLOOR}); "
+    if (isinstance(budget, int) and budget > 0
+            and not config.budget_reaches(budget, config.ENTRY_FLOOR)):
+        # Never downgrade a better exit. Someone who names a low figure AND books a
+        # visit has given us the visit; that is worth more than the number.
+        if d.get("action") in ("answer", "ask", "dead"):
+            d["action"] = "nurture"
+        d["internal_note"] = (f"below entry floor ({budget} stretched does not reach "
+                              f"{config.ENTRY_FLOOR}) -- nurturing, no handover; "
                               + (d.get("internal_note") or ""))
 
     d["sources"] = cited

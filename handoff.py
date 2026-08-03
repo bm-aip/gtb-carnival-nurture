@@ -1,12 +1,25 @@
 """Exit router and the handoff card (task 24).
 
-Three terminal exits and one loop-back (design §5):
+Exits (design §5, revised 2026-08-03):
 
-    QUALIFIED  -> card to sales. Terminal.
-    DEAD       -> suppressed permanently. Terminal.
-    ESCALATED  -> a human owns the conversation now. Terminal for the bot.
+    QUALIFIED  -> card to sales.
+    NURTURE    -> below everything we sell. NOBODY is called and NOTHING is
+                  suppressed. The bot keeps talking and probes for room.
+    DEAD       -> wrong city, or a product we do not sell at all. Recorded, and the
+                  lead is suppressed so no template chases them.
+    ESCALATED  -> a human owns the hard part. The bot keeps talking.
     goes quiet -> NOT an exit. Loop-back into the knock engine, resuming
                   mid-checklist. Its own terminal is Dormant (task 19).
+
+NONE OF THESE SILENCE THE BOT ANY MORE. An outcome records what we learned; it is
+not a door closing on somebody who is still typing. See worker._handle_inbound.
+
+WHY NURTURE EXISTS. Until 2026-08-03 a budget below the entry price was DEAD: the
+conversation was closed, the lead suppressed, and every future template blocked
+forever -- on the strength of one number typed into WhatsApp in ten seconds. Owner:
+"the logic here is not to reject but to nurture and see if they are willing to make
+the jump ... when the jump may happen in their thought process - so give that room -
+if everything else is a tick then it makes sense to persist".
 
 ⚠️ THE DESIGN SAYS "WhatsApp group ping". THAT IS NOT BUILDABLE AS WRITTEN.
 The official WhatsApp Cloud API addresses individual phone numbers; it cannot post
@@ -121,7 +134,23 @@ def route(lead, conv, decision):
     """
     action = decision.get("action")
 
+    # NURTURE. Deliberately the shortest branch in this file: no card, no
+    # suppression, no state change on the lead. Recording it is the whole job -- it
+    # tells the admin view who is one number away, and it lets the bot keep going.
+    #
+    # It must NOT set leads.suppressed. That column blocks every future send
+    # permanently (knocks.py:138, and any re-opener built later), so suppressing a
+    # buyer whose thinking might move is the exact thing this change undoes.
+    if action == "nurture":
+        conversation.set_outcome(conv["id"], "nurture")
+        log.info("lead %s -> NURTURE, no handover (%s)",
+                 lead["id"], decision.get("internal_note"))
+        return "nurture"
+
     if action == "dead":
+        # Reserved for wrong city and products we do not sell. A low budget no
+        # longer arrives here -- the qualifier turns that into `nurture` before this
+        # runs -- so suppression stays safe: there is genuinely nothing to sell.
         conversation.set_outcome(conv["id"], "dead")
         db.x("""UPDATE leads SET wa_state='dead', suppressed=TRUE, updated_at=now()
                 WHERE id=%s""", (lead["id"],))

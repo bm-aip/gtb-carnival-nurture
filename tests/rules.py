@@ -12,8 +12,11 @@ A case marked known_bug=True is a defect we KNOW about and have not yet fixed. I
 prints separately and does not fail the run -- so an open defect stays visible
 instead of being either forgotten or silently tolerated.
 """
+import os
+
 from _bootstrap import Results
 
+import answering
 import config
 import conversation as cv
 import knocks
@@ -273,18 +276,97 @@ def test_knock_spacing():
 
 
 # --------------------------------------------------------------------------
-# THE OPEN DEFECT. Left failing on purpose.
+# One floor, stretched. The bug this replaces: rule 5 compared the RAW figure
+# while clears_the_bar compared the STRETCHED one, so buyers in the gap between
+# the two were killed and suppressed by the rule that ran first.
 # --------------------------------------------------------------------------
-def test_below_entry_should_not_kill_a_live_buyer():
-    """2026-08-02: the bot said "if you can stretch a little", the buyer said
-    "Okay", and had already been marked dead and suppressed. Awaiting the owner's
-    decision: escalate to a human, or kill? Until then this stays visible."""
-    budget = 1 * CR
-    R.check("dead rule ignores the stretch every other rule applies",
-            budget >= config.BUDGET_FLOOR / config.BUDGET_STRETCH,
-            f"{budget} stretched = {int(budget * config.BUDGET_STRETCH)}, "
-            f"floor {config.BUDGET_FLOOR}; rule 5 compares the RAW floor",
-            known_bug=True)
+def _rule5(budget):
+    """Run only the budget gate. Returns the action it left behind."""
+    d = {"action": "answer", "reply": "Sure.", "sources": [], "budget_inr": budget}
+    return q._enforce(d, (), {"id": 1, "project": "RON"}, message="", history=[])["action"]
+
+
+def test_one_floor_and_it_is_stretched():
+    R.eq("there is only one entry floor, read off CONFIG_FLOORS",
+         config.ENTRY_FLOOR, config.CONFIG_FLOORS[0][1])
+    R.check("and no second floor survives anywhere",
+            not hasattr(config, "BUDGET_FLOOR"),
+            "config.BUDGET_FLOOR still exists -- two floors is the whole defect")
+
+    # ₹1.1 cr: stretched = ₹1.375 cr, which reaches the ₹1.28 cr entry apartment.
+    # This is the buyer the raw comparison was killing.
+    R.eq("1.1cr is NOT killed -- stretched it reaches the entry apartment",
+         _rule5(11 * CR // 10), "answer")
+    R.eq("...and clears_the_bar agrees, which is the point",
+         cv.clears_the_bar({"checklist": {"budget": 11 * CR // 10, "location": "ECR",
+                                          "configuration": "compact 2bhk"}})[0], True)
+
+
+# --------------------------------------------------------------------------
+# Below the entry price is NURTURE, not death. Owner 2026-08-03: "the logic here
+# is not to reject but to nurture and see if they are willing to make the jump".
+# --------------------------------------------------------------------------
+def test_below_entry_is_nurtured_not_killed():
+    # 80 lakh stretched is ₹1 cr, genuinely short of the ₹1.28 cr entry.
+    R.eq("80 lakh is nurtured, not killed", _rule5(8000000), "nurture")
+    R.eq("...and 20 lakh too, however far below", _rule5(2000000), "nurture")
+
+    R.eq("a reachable budget is left alone", _rule5(2 * CR), "answer")
+
+    # A better exit must survive. Someone who low-balls AND books a visit has given
+    # us the visit; the number is worth less than the appointment.
+    for better in ("qualified", "visit_booked", "escalate"):
+        d = {"action": better, "reply": "Sure.", "sources": [], "budget_inr": 8000000}
+        R.eq(f"{better} is not downgraded to nurture",
+             q._enforce(d, (), {"id": 1, "project": "RON"}, message="", history=[])["action"],
+             better)
+
+    # The model must never pick this itself -- it is arithmetic, not judgement.
+    actions = q.DECISION_SCHEMA["properties"]["action"]["enum"]
+    R.check("nurture is NOT offered to the model", "nurture" not in actions,
+            f"schema enum is {actions}")
+
+
+def test_nurture_never_suppresses_and_can_be_upgraded():
+    R.check("nurture is the only provisional outcome", cv.UPGRADABLE == ("nurture",),
+            f"UPGRADABLE is {cv.UPGRADABLE}; qualified/escalated/dead must stay "
+            f"write-once or an escalation would demote a lead sales already has")
+
+    src = open(os.path.join(os.path.dirname(__file__), "..", "handoff.py"),
+               encoding="utf-8").read()
+    nurture_branch = src.split('if action == "nurture":')[1].split("if action ==")[0]
+    R.check("the nurture branch never suppresses a lead",
+            "suppressed" not in nurture_branch,
+            "suppressed=TRUE blocks every future send permanently (knocks.py), which "
+            "is the exact thing nurture exists to undo")
+    R.check("...and never notifies sales", "_notify" not in nurture_branch,
+            "owner chose option 2: bot keeps talking, no salesperson called")
+
+
+def test_no_outcome_silences_the_bot():
+    """Removed three times, once per outcome. It must not come back a fourth."""
+    src = open(os.path.join(os.path.dirname(__file__), "..", "worker.py"),
+               encoding="utf-8").read()
+    body = src.split("def _handle_inbound")[1].split("\ndef ")[0]
+    for outcome in ("qualified", "escalated", "dead", "nurture"):
+        R.check(f"{outcome} does not stop the bot replying",
+                f'outcome") == "{outcome}"' not in body
+                and f"outcome') == '{outcome}'" not in body,
+                f"_handle_inbound returns early on outcome={outcome}; silence has "
+                f"exactly two legitimate sources, STOP and an operator pause")
+
+
+def test_the_below_entry_rules_are_editable_english():
+    rules = answering.RULES["below_entry"]
+    R.check("the probing rules exist in the document", len(rules) > 400, rules[:80])
+    for must in ("firm", "loan", "one question at a time"):
+        R.check(f"...and mention {must!r}", must in rules.lower(), rules[:120])
+    R.check("the model is told NOT to say they cannot afford it",
+            "cannot afford" in rules.lower(), rules[:120])
+    # Same no-restatement rule as every other section: the arithmetic is code's.
+    for forbidden in ("12800000", "1.25", "BUDGET_STRETCH", "ENTRY_FLOOR"):
+        R.check(f"and does not restate {forbidden} (code owns that)",
+                forbidden not in rules, rules[:120])
 
 
 def main():
@@ -294,7 +376,11 @@ def main():
                test_corruption_is_refused_not_repaired, test_garbled_is_retried_not_escalated,
                test_never_congratulate_a_non_answer, test_greeting_never_mojibake,
                test_knock_spacing, test_the_rulebook_loads_and_fails_loudly,
-               test_below_entry_should_not_kill_a_live_buyer):
+               test_one_floor_and_it_is_stretched,
+               test_below_entry_is_nurtured_not_killed,
+               test_nurture_never_suppresses_and_can_be_upgraded,
+               test_no_outcome_silences_the_bot,
+               test_the_below_entry_rules_are_editable_english):
         fn()
     return R.report("RULES  (no database, no API)")
 
