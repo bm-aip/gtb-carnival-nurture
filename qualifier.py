@@ -143,6 +143,13 @@ Never ask "are you interested?".
   Anything beyond a starting figure -- what THIS unit costs, what the final number
   would be, whether there is room on the price -- is `escalate` with flag
   `price_question`, and that is the honest answer rather than a dodge.
+- A VAGUE ASK FOR INFORMATION STILL DESERVES INFORMATION. "Need More Details",
+  "tell me more", "send details", "info please" -- these are usually a tap on the
+  template's own button, and they are the FIRST thing a buyer does after we paid for
+  the ad that reached them. Give them something real before you ask anything: where
+  it is, the scale of the community, what is on offer. Never answer a request for
+  details with only a question back, and never escalate one -- there is nothing to
+  escalate.
 - "WHAT DO I GET FOR THAT?" IS NOT A PRICE QUESTION. It is the buyer asking to be
   sold, and it is the best moment in the conversation. "What does 3.94 Cr give me",
   "what is included", "why is it worth that", "what are the amenities" -- ANSWER
@@ -293,14 +300,25 @@ def run_turn(lead, message, history=None, conv=None):
     brand_name = {"RON": "Republic of Nature",
                   "ELEMENTS": "Elements Senior Living"}.get(brand_id, brand_id)
 
-    chunks = kb.answer_context(brand_id, message)
+    chunks = kb.answer_context(brand_id, _retrieval_query(message))
 
     client = anthropic.Anthropic()
     messages = list(_history(history or []))
     # The ladder was written in task 23 and then never passed to the model -- the
     # `conv` argument was accepted and dropped, so every turn was chosen blind and
     # only history stopped the bot repeating a framing. Now it is actually sent.
-    state = _ladder(conv) + "\n".join(_already_quoted(messages))
+    # Fold a budget stated in THIS message into the state before building it, so
+    # the affordability verdict exists on the turn it is needed rather than the
+    # turn after. Never overwrites a budget we already hold.
+    live_conv = conv
+    if conv is not None and not (conv.get("checklist") or {}).get("budget"):
+        heard = budget_from_text(message)
+        if heard:
+            live_conv = {**conv,
+                         "checklist": {**(conv.get("checklist") or {}),
+                                       "budget": heard}}
+
+    state = _ladder(live_conv) + "\n".join(_already_quoted(messages))
     if conv and conv.get("outcome") == "qualified":
         state = HANDOVER_MODE + "\n\n" + state
     elif conv and conv.get("outcome") == "escalated":
@@ -407,6 +425,56 @@ def _already_quoted(history):
                   "briefly if you must ('as I mentioned') and otherwise move on. "
                   "Quote a price again ONLY if they ask again, or for a "
                   "configuration you have not priced yet."]
+
+
+# Messages that carry no searchable content. Embedding "Need More Details" finds
+# nothing about the project, so the model wrote facts, the citation rule could not
+# match them to a chunk, and rule 1 forced an escalation -- roughly one turn in
+# three. The bot looked disobedient; it was actually being failed by retrieval.
+#
+# "Need More Details" is the template's own quick-reply and the FIRST thing a
+# knocked buyer taps, so this is the most expensive turn in the funnel to waste.
+_LOW_CONTENT = re.compile(
+    r"^\s*(need\s+more\s+details?|more\s+details?|tell\s+me\s+more|send\s+details?|"
+    r"details?\s*(please|pls)?|inf(o|ormation)\s*(please|pls)?|hi+|hey+|hello+|"
+    r"interested|yes\s*interested|ok(ay)?|\?+)\s*[.!]?\s*$", re.I)
+
+# What such a buyer actually wants: the project, described.
+_OVERVIEW_QUERY = ("Republic of Nature overview: where it is on ECR, the size of the "
+                   "community, the apartments and villas available, and the amenities")
+
+
+def _retrieval_query(message):
+    """What to embed. Usually the buyer's words; sometimes they carry none."""
+    return _OVERVIEW_QUERY if _LOW_CONTENT.match(message or "") else message
+
+
+_CRORE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:cr\b|crore|c\b)", re.I)
+_LAKH = re.compile(r"(\d+(?:\.\d+)?)\s*(?:lakh|lac|l\b)", re.I)
+
+
+def budget_from_text(text):
+    """A rupee amount stated in this message, in rupees, or None.
+
+    Needed because the affordability verdict is built from the checklist, which
+    holds the state BEFORE this turn -- so on the very turn the buyer names their
+    budget, there was no verdict and the model did the sum itself. That is exactly
+    when it went wrong: "Budget is 3 to 3.5 crore" for a villa produced "that sits
+    a little above what you have in mind" and an offer of apartments, for a buyer
+    who qualifies.
+
+    Takes the TOP of a range, matching how the rest of the system reads a budget:
+    people understate, and "3 to 3.5" means they can find 3.5.
+    """
+    if not text:
+        return None
+    crores = [float(m) for m in _CRORE.findall(text)]
+    if crores:
+        return int(max(crores) * 10000000)
+    lakhs = [float(m) for m in _LAKH.findall(text)]
+    if lakhs:
+        return int(max(lakhs) * 100000)
+    return None
 
 
 def _affordability_verdict(known):
