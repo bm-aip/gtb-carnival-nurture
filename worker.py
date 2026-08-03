@@ -115,29 +115,33 @@ def _handle_inbound(job):
 
     conv = conversation.get_or_create(lead)
 
-    # Only DEAD stops the bot now.
+    # NO OUTCOME STOPS THE BOT. An outcome records what we learned about somebody;
+    # it is not a door closing on a person who is still typing.
     #
-    # ESCALATED used to stop it too, and that was wrong for the same reason
-    # QUALIFIED was. Live on 2026-08-02: the bot escalated a price question, the
-    # buyer then asked "what all amenities and services it promises" -- an ordinary,
-    # answerable question -- and got silence, because the conversation had already
-    # been closed. Escalating means a human should pick up the hard part; it does
-    # not mean the buyer stops being a person mid-sentence.
+    # This check has been removed three times, once per outcome, and each removal was
+    # prompted by a real buyer getting silence:
     #
-    # A human taking over in Wati is visible to the buyer anyway, and the operator
-    # can pause the bot. Going mute on somebody still typing is the worse failure.
+    #   QUALIFIED  2026-08-01. The bot asked "would you like me to pencil in a site
+    #              visit?", the buyer answered "Sunday would be perfect", and got
+    #              nothing -- qualifying had already closed the conversation. Asking
+    #              a question and then refusing to hear the answer is worse than
+    #              never asking. Owner: "it cant become cold - it has to wean off in
+    #              a gentle way ... we shouldnt drop the ball untill we know sales is
+    #              really ON it."
+    #   ESCALATED  2026-08-02. A price question escalated, the buyer then asked what
+    #              amenities the place has -- ordinary and answerable -- and got
+    #              silence. Escalating means a human picks up the hard part; it does
+    #              not mean the buyer stops being a person mid-sentence.
+    #   DEAD       2026-08-03. The last one. A budget below the entry price no longer
+    #              reaches `dead` at all (it is `nurture` now), and what remains --
+    #              wrong city, a product we do not sell -- still does not justify
+    #              refusing to answer someone who writes back. There is nothing to
+    #              sell them; that is not a reason to be rude.
     #
-    # QUALIFIED and VISIT_BOOKED deliberately do NOT stop it. On 2026-08-01 the bot
-    # asked "would you like me to pencil in a site visit?", the buyer answered
-    # "Sunday would be perfect", and got silence -- because qualifying had already
-    # closed the conversation. Asking a question and then refusing to hear the
-    # answer is worse than never asking. Owner: "it cant become cold - it has to
-    # wean off in a gentle way ... we shouldnt drop the ball untill we know sales is
-    # really ON it."
-    if conv.get("outcome") == "dead":
-        db.log_msg(lead["id"], "in", "post_outcome", text,
-                   detail="conversation already dead; needs a human")
-        return
+    # Three instances of one wrong idea: that an outcome is an ending. It is a label.
+    # Silence now has exactly two legitimate sources, and both are explicit acts by a
+    # person: the buyer sends STOP (optout.py, enforced in sendgate), or an operator
+    # pauses the bot in Wati. Do not add a third.
 
     turns = db.q("""SELECT direction, body FROM message_log
                     WHERE lead_id=%s AND msg_type IN ('inbound','qualifier_turn')
