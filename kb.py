@@ -89,6 +89,25 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
 CREATE INDEX IF NOT EXISTS idx_kbchunks_brand ON kb_chunks (brand_id);
 CREATE INDEX IF NOT EXISTS idx_kbchunks_doc ON kb_chunks (document_id);
 
+-- QUARANTINE, added 2026-08-03 after the KB audit (docs/KB-AUDIT-2026-08-03.md).
+--
+-- `active` lives on the DOCUMENT, so before this there was no way to withdraw ONE
+-- bad chunk without withdrawing the whole 64-chunk FAQ. That is why a chunk known to
+-- be wrong on 2026-08-02 -- "204 Units in an 8 Acre property", lifted from an answer
+-- about traffic management at the gate -- was still being quoted to a real buyer on
+-- 2026-08-03. It was recorded as a defect and there was no mechanism to act on it.
+--
+-- Quarantine is NOT deletion. The text and the embedding stay; retrieval stops
+-- selecting it. The reason is stored so a curator can see WHY, and clearing the flag
+-- restores the chunk in one UPDATE.
+--
+-- Use it for a chunk that is wrong, that contradicts another chunk, that describes a
+-- product we do not sell, or whose wording is a liability. A chunk that is merely
+-- INTERNAL should get a guardrail instead -- quarantine loses the fact.
+ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS quarantined BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS quarantine_reason TEXT;
+ALTER TABLE kb_chunks ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ;
+
 -- Vector index. Cosine, because embeddings are normalised and cosine is what the
 -- providers' own similarity is defined in.
 CREATE INDEX IF NOT EXISTS idx_kbchunks_embedding
@@ -183,7 +202,7 @@ def search(brand_id, embedding, k=None, doc_type=None):
                     d.title, d.doc_type, d.version,
                     c.embedding <=> %s::vector AS distance
              FROM kb_chunks c JOIN kb_documents d ON d.id = c.document_id
-             WHERE c.brand_id = %s AND d.active"""
+             WHERE c.brand_id = %s AND d.active AND NOT c.quarantined"""
     params = [embedding, brand_id]
     if doc_type:
         sql += " AND d.doc_type = %s"
