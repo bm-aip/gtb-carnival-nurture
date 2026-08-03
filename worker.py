@@ -85,6 +85,29 @@ def _handle_inbound(job):
                           f"recorded, no reply")
         return
 
+    # STALE JOB. A turn that failed and came back later must not answer a question
+    # the conversation has already moved past.
+    #
+    # 2026-08-02: Anthropic returned 529 for "ECR mostly but considering omr too".
+    # The buyer waited, typed "You there ?", and the NEXT turn answered them with
+    # the OMR message already visible in history -- location was captured
+    # correctly. The failed job then sat queued, due to retry. Left alone it would
+    # have replied to a ninety-minute-old message, out of context, as a second
+    # voice in a conversation that had moved on.
+    #
+    # If we have already spoken since this job was created, it is redundant: the
+    # message it carries was in history when we spoke.
+    answered_since = db.q("""SELECT 1 FROM message_log
+                             WHERE lead_id=%s AND direction='out'
+                               AND msg_type='qualifier_turn' AND ok
+                               AND ts > %s LIMIT 1""",
+                          (lead["id"], job.get("created_at")), one=True)
+    if answered_since and job.get("attempts", 1) > 1:
+        db.log_msg(lead["id"], "in", "stale_turn", text,
+                   detail=f"job {job.get('id')} retried after we had already "
+                          f"replied; message was in history, not answering twice")
+        return
+
     if not qualifier.configured():
         db.log_msg(lead["id"], "in", "queued_turn", text,
                    detail="ANTHROPIC_API_KEY not set; message recorded, no reply")

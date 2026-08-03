@@ -34,8 +34,14 @@ from the same stale state and reply twice, or race on the checklist. Different
 people are fully parallel.
 """
 import json
+import re
 
 import db
+
+# The provider is busy, not broken. Worth retrying in seconds rather than minutes.
+_TRANSIENT = re.compile(
+    r"overloaded|529|rate.?limit|429|timeout|timed out|temporarily unavailable|"
+    r"503|502|connection reset|connection aborted", re.I)
 
 KIND_INBOUND = "inbound_message"
 
@@ -112,6 +118,13 @@ def fail(job, error):
         return False
     # 30s, 60s, 120s, 240s...
     backoff = 30 * (2 ** (attempts - 1))
+    # ...EXCEPT for a provider that is merely busy. On 2026-08-02 Anthropic
+    # returned 529 Overloaded mid-conversation; the buyer got nothing for two
+    # minutes and typed "You there ?". Thirty seconds is an eternity to somebody
+    # watching a chat, and an overloaded API is usually fine seconds later. Retry
+    # those almost immediately and keep the long backoff for real faults.
+    if _TRANSIENT.search(err):
+        backoff = min(5 * attempts, 20)
     db.x("""UPDATE job_queue SET status=%s, last_error=%s, claimed_at=NULL,
                                  run_after = now() + (%s * interval '1 second'),
                                  updated_at=now()
