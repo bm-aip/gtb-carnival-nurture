@@ -332,19 +332,46 @@ def run_turn(lead, message, history=None, conv=None):
                     f"---\nBuyer's message:\n{message}"),
     })
 
-    resp = client.messages.create(
-        model=MODEL,
-        max_tokens=MAX_TOKENS,
-        output_config={
-            "effort": EFFORT,
-            "format": {"type": "json_schema", "schema": DECISION_SCHEMA},
-        },
-        # The system prompt is stable per brand, so it caches; the retrieved
-        # chunks sit after it in the messages and change every turn.
-        system=[{"type": "text", "text": _system_prompt(brand_name),
-                 "cache_control": {"type": "ephemeral"}}],
-        messages=messages,
-    )
+    # ASK AGAIN IF THE TEXT COMES BACK MANGLED, before giving up on the buyer.
+    #
+    # 2026-08-03, a real villa lead tapped "Need More Details" and the model
+    # produced: "Republic of Nature is on ECR, near Kovalam Junction \ronking about
+    # it \\ two hundred - it's a coastal community...". The corruption guard
+    # correctly refused to send it -- and then escalated, so a buyer forty seconds
+    # into their first conversation was handed to a human and the bot went quiet.
+    #
+    # Every part behaved as designed and the outcome was still bad, because
+    # corruption was treated as a judgement ("we cannot answer this") when it is a
+    # stutter ("that came out wrong"). It is intermittent: clean turns sit either
+    # side of a mangled one. So try again, and only escalate if it keeps happening.
+    decision = None
+    for attempt in range(1, GARBLE_RETRIES + 2):
+        resp = client.messages.create(
+            model=MODEL,
+            max_tokens=MAX_TOKENS,
+            output_config={
+                "effort": EFFORT,
+                "format": {"type": "json_schema", "schema": DECISION_SCHEMA},
+            },
+            # The system prompt is stable per brand, so it caches; the retrieved
+            # chunks sit after it in the messages and change every turn.
+            system=[{"type": "text", "text": _system_prompt(brand_name),
+                     "cache_control": {"type": "ephemeral"}}],
+            messages=messages,
+        )
+        decision = _decide(resp, chunks, lead, message, history)
+        if decision.get("_forced") not in _GARBLED:
+            if attempt > 1:
+                decision["internal_note"] = (
+                    f"clean on attempt {attempt} | " + (decision.get("internal_note") or ""))
+            return decision
+        log.warning("lead %s: garbled reply (%s), attempt %s of %s",
+                    lead.get("id"), decision.get("_forced"), attempt, GARBLE_RETRIES + 1)
+    return decision
+
+
+def _decide(resp, chunks, lead, message, history):
+    """One model response -> a decision. Split out so run_turn can retry."""
 
     # Opus 5 can decline a request outright. Check before reading content --
     # indexing content[0] on a refusal raises.
@@ -558,7 +585,20 @@ def _forced_escalation(why, chunks):
 
 # C0 control characters. A WhatsApp message never legitimately contains one, so
 # their presence means the reply is corrupt -- see _looks_corrupt.
-_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# \x0d (carriage return) is included: a bare CR is never legitimate in a WhatsApp
+# message, and a real reply on 2026-08-03 contained "Kovalam Junction \ronking about
+# it" -- it was only caught by the mid-sentence rule, by luck.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b-\x0d\x0e-\x1f\x7f]")
+
+# How many times to ask again when the text comes back mangled. Two extra tries:
+# corruption is intermittent, and clean turns sit either side of a bad one.
+GARBLE_RETRIES = 2
+
+# Failures that mean "that came out wrong", not "we cannot answer this". Only these
+# are retried -- a refusal or an uncited claim is a judgement and stands.
+_GARBLED = ("control character in reply", "line break mid-sentence",
+            "reply ends mid-sentence", "unparseable decision",
+            "no text in response", "response truncated")
 
 _ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
 
