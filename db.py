@@ -136,7 +136,11 @@ CREATE TABLE IF NOT EXISTS conversations (
     asked JSONB NOT NULL DEFAULT '{}'::jsonb,
     unreciprocated INT NOT NULL DEFAULT 0,
     human_flagged_at TIMESTAMPTZ,
-    outcome TEXT,                      -- qualified | dead | escalated | null
+    -- qualified | visit_booked | nurture | dead | escalated | null
+    -- `nurture` is the only PROVISIONAL one: below everything we sell today, and
+    -- allowed to become qualified later if the budget moves (conversation.UPGRADABLE).
+    -- No value here silences the bot -- see worker._handle_inbound.
+    outcome TEXT,
     outcome_at TIMESTAMPTZ,
     handoff_sent_at TIMESTAMPTZ,
     last_turn_at TIMESTAMPTZ,

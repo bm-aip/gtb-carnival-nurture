@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-03-answering-rules"
+CODE_VERSION = "2026-08-03-nurture-not-dead"
 import db
 import selldo
 import meta
@@ -596,6 +596,49 @@ def admin_webhook_status():
         "wati_webhook_hits": db.get_setting("wati_webhook_hits", "0"),
         "last_wati_webhook_raw": db.get_setting("last_wati_webhook_raw", ""),
         "wasender_webhook_hits": db.get_setting("webhook_hits", "0"),
+    })
+
+
+@app.route("/admin/nurture")
+@auth
+def admin_nurture():
+    """Buyers below the entry price whom the bot is still working on.
+
+    Owner, 2026-08-03: "if everything else is a tick then it makes sense to
+    persist". `all_ticks` marks exactly those -- purpose, location and configuration
+    captured, budget the only thing short. That person is one number away from
+    qualified, and worth an eye. Nobody here has been called or suppressed.
+    """
+    rows = db.q("""SELECT c.id, c.lead_id, c.checklist, c.outcome_at, c.last_turn_at,
+                          l.name, l.phone, l.campaign
+                   FROM conversations c JOIN leads l ON l.id = c.lead_id
+                   WHERE c.outcome = 'nurture'
+                   ORDER BY c.last_turn_at DESC NULLS LAST LIMIT 200""") or []
+    out = []
+    for r in rows:
+        ck = r["checklist"] or {}
+        budget = ck.get("budget")
+        out.append({
+            "lead_id": r["lead_id"], "name": r["name"], "phone": r["phone"],
+            "campaign": r["campaign"],
+            "budget": budget,
+            "short_by": (config.ENTRY_FLOOR - int(budget * config.BUDGET_STRETCH)
+                         if isinstance(budget, int) and budget > 0 else None),
+            "wants": ck.get("configuration"), "purpose": ck.get("purpose"),
+            "location": ck.get("location"),
+            "all_ticks": bool(ck.get("purpose") and ck.get("location")
+                              and ck.get("configuration")),
+            "since": str(r["outcome_at"])[:19],
+            "last_turn": str(r["last_turn_at"])[:19],
+        })
+    return jsonify({
+        "entry_floor": config.ENTRY_FLOOR,
+        "stretch": config.BUDGET_STRETCH,
+        "note": ("short_by is the gap AFTER the stretch allowance, in rupees. "
+                 "all_ticks=true means budget is the only thing missing."),
+        "count": len(out),
+        "all_ticks": sum(1 for r in out if r["all_ticks"]),
+        "conversations": out,
     })
 
 
