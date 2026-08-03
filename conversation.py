@@ -172,20 +172,40 @@ def clears_the_bar(conv):
     return True, f"{label} within budget {budget}, location clear"
 
 
-def set_outcome(conv_id, outcome, upgrade_from=None):
-    """Record a terminal outcome. First write wins, with one exception.
+# The one PROVISIONAL outcome. Everything else is write-once, so nothing can quietly
+# overwrite a `dead`, an `escalated` or a `qualified` -- in particular an escalation
+# three turns after qualifying must not demote a lead sales has already been sent.
+#
+# `nurture` is provisional because the whole point of nurturing is that the number
+# can change. A buyer told us ₹80 lakh, we kept talking, and three messages later
+# they say the loan is approved for more -- if `nurture` were write-once that person
+# could never become qualified, and the state we added to keep them alive would be
+# the thing that buried them. Owner: "when the jump may happen in their thought
+# process - so give that room".
+#
+# qualified -> visit_booked is NOT here. It is a named transition and stays explicit,
+# via upgrade_from.
+UPGRADABLE = ("nurture",)
 
-    `upgrade_from` allows exactly one transition: qualified -> visit_booked. A
-    qualified lead who then names a day has got BETTER, and the salesperson needs
-    to know a visit exists. Every other outcome is still write-once, so nothing
-    can quietly overwrite a `dead` or an `escalated`.
+
+def set_outcome(conv_id, outcome, upgrade_from=None):
+    """Record an outcome. First write wins, except for the upgrades above.
+
+    Called with `upgrade_from` for the one named transition qualified ->
+    visit_booked. Called without it for a new outcome, which still lands on a
+    conversation sitting in an UPGRADABLE state — so a nurtured buyer whose budget
+    moves becomes qualified, while a `dead` or `escalated` stays put.
     """
     if upgrade_from:
         db.x("""UPDATE conversations SET outcome=%s, outcome_at=now(), updated_at=now()
                 WHERE id=%s AND outcome=%s""", (outcome, conv_id, upgrade_from))
         return
+    # `nurture` never overwrites itself: re-recording it on every turn would reset
+    # outcome_at and lose when we first learned the budget was short.
     db.x("""UPDATE conversations SET outcome=%s, outcome_at=now(), updated_at=now()
-            WHERE id=%s AND outcome IS NULL""", (outcome, conv_id))
+            WHERE id=%s AND outcome IS DISTINCT FROM %s
+              AND (outcome IS NULL OR outcome = ANY(%s))""",
+         (outcome, conv_id, outcome, list(UPGRADABLE)))
 
 
 def mark_handed_off(conv_id):

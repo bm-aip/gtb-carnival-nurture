@@ -142,6 +142,30 @@ SCENARIOS = [
         ],
     },
     {
+        "name": "below entry — an 80 lakh buyer is nurtured, never shown the door",
+        "why": ("Owner 2026-08-03, choosing this over killing them: 'the logic here is "
+                "not to reject but to nurture and see if they are willing to make the "
+                "jump ... when the jump may happen in their thought process - so give "
+                "that room'. Before today this was `dead` + suppressed forever."),
+        "turns": [
+            {"say": "looking for a 2 bedroom apartment"},
+            {"say": "my budget is 80 lakhs",
+             "action_not": "dead",
+             # No rejection language, and nobody is called -- option 2 was chosen
+             # precisely so sales is not handed an unaffordable lead.
+             "forbid": [r"cannot afford", r"can't afford", r"out of (your|their) (league|range|budget)",
+                        r"nothing (for you|available|in your)", r"colleague will (come back|call)",
+                        r"keep you posted", r"discount"],
+             "qualifies": False},
+            # The probe. It may come on either turn, so the assertion is on the reply
+            # that follows -- what must never happen is the conversation closing.
+            {"say": "yes I am still interested, it is a beautiful place",
+             "action_not": "dead",
+             "forbid": [r"cannot afford", r"can't afford", r"best of luck",
+                        r"do let us know if.{0,30}(changes|increases)"]},
+        ],
+    },
+    {
         "name": "refusals — no per-square-foot rate, no Tuesday visit",
         "turns": [
             {"say": "what is the per square foot rate?", "forbid": [r"per sq"]},
