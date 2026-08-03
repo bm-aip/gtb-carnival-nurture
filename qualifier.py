@@ -168,11 +168,54 @@ def _history(turns):
 
 FACTUAL = re.compile(
     r"\b(km|kilomet|sqft|sq ft|acre|bhk|villa|apartment|amenit|school|hospital|"
-    r"metro|beach|lagoon|clubhouse|parking|floor|phase)\b", re.I)
+    r"metro|beach|lagoon|clubhouse|parking|floor|phase|"
+    # Date vocabulary, added 2026-08-03. Without it "Handover is expected by
+    # December 2027" matched nothing here, so _looks_factual said False, the
+    # citation requirement never ran, and a fabricated completion date could be
+    # sent uncited -- in the one function written to stop exactly that.
+    r"possession|handover|hand over|completion|occupancy|ready to move|"
+    r"move[-\s]?in)\b", re.I)
 
 
 def _looks_factual(text):
     return bool(FACTUAL.search(text or ""))
+
+
+# --- possession / handover timeline (rulebook: never state one) ---------------
+# Words that mean "when will it be finished".
+_POSSESSION = re.compile(
+    r"\b(possession|handover|hand(ing|ed)?\s+over|completion|"
+    r"occupancy\s+certificate|completion\s+certificate|"
+    r"ready\s+(to\s+move|for\s+(possession|occupancy))|move[-\s]?in)\b", re.I)
+
+# Anything that pins a time to it.
+#
+# Deliberately does NOT match a bare weekday or a clock time: "Saturday at 11" and
+# "Monday afternoon" are how a SITE VISIT is booked, which is the bot's whole job, so
+# matching those would escalate the win. Bare "May" is also excluded -- it collides
+# with the ordinary verb ("you may visit on Saturday"), and losing one month name is
+# cheaper than escalating every polite sentence.
+_WHEN = re.compile(
+    r"\b(20[2-9]\d"                                    # a year: 2027, 2031
+    r"|q[1-4]\s*20\d\d"                                # Q3 2027
+    r"|jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|jun(e)?|jul(y)?"
+    r"|aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?"
+    r"|\d+\s*(month|year)s?"                           # "in 18 months"
+    r"|end\s+of\s+(this|next)?\s*(year|month)"
+    r"|mid[-\s]?20\d\d)\b", re.I)
+
+
+def _possession_problem(reply):
+    """A completion timeline in the reply, or None.
+
+    Requires BOTH a possession word and a time expression. Either alone is
+    legitimate -- "ready to move" appears in general marketing copy, and a date
+    appears whenever a visit is booked -- so it is the combination that commits us
+    to something nobody has authorised.
+    """
+    if _POSSESSION.search(reply or "") and _WHEN.search(reply or ""):
+        return "reply stated a possession/handover timeline"
+    return None
 
 
 def run_turn(lead, message, history=None, conv=None):
@@ -760,6 +803,18 @@ def _enforce(d, chunks, lead, message=None, history=None):
     # 3. Beach claim.
     if re.search(r"private beach|natural beach|own beach|beach access", reply, re.I):
         return _forced_escalation("reply implied private beach access", chunks)
+
+    # 3b. POSSESSION / HANDOVER TIMELINE. The design doc names an invented handover
+    #     date as the worst thing this bot can produce, and until 2026-08-03 the ban
+    #     was prompt-only -- the citation guard could not catch it either, because
+    #     `FACTUAL` had no date vocabulary, so "Handover is expected by December 2027"
+    #     matched nothing, looked non-factual, skipped rule 1 and went out.
+    #
+    #     In real estate this is not an embarrassment, it is a commitment a buyer may
+    #     act on. So it is enforced here rather than asked for.
+    possession = _possession_problem(reply)
+    if possession:
+        return _forced_escalation(possession, chunks)
 
     # 4. Visit day. Tuesday is the team's day off and Monday mornings are their
     #    weekly meeting -- a bot that books either sends someone to a locked gate.
