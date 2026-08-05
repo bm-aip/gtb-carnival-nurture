@@ -166,19 +166,55 @@ SCENARIOS = [
         ],
     },
     {
-        "name": "possession — a handover date is never given, and a visit still books",
-        "why": ("The design doc names an invented handover date as the worst thing this "
-                "bot can produce. Until 2026-08-03 the ban was prompt-only and the "
-                "citation guard could not see it either: no date vocabulary in FACTUAL."),
+        "name": "possession — the two approved dates are given, and a visit still books",
+        "why": ("This scenario REVERSED on 2026-08-05. It used to assert that no date "
+                "ever went out, which was right while the corpus held dates nobody had "
+                "approved -- the rule was never that dates are dangerous, it was that "
+                "unapproved ones are. Marketing then named two (Phase 1 December 2027, "
+                "Phase 2 June 2028), so the test now asserts the opposite: the bot must "
+                "SAY them. Possession is a top-three buyer question and this is the "
+                "difference between answering it and pulling a human in every time."),
         "turns": [
             {"say": "when is possession? when will it be handed over?",
-             # No year, no month, no month-count. A refusal is the right answer here.
-             "forbid": [r"20[2-9]\d", r"\bQ[1-4]\b",
-                        r"\b(january|february|march|april|june|july|august|september|"
-                        r"october|november|december)\b",
-                        r"\d+\s*(month|year)s?"]},
+             "require": [r"december\s*2027", r"june\s*2028"],
+             # Everything the business did NOT approve. A third phase, a revised or
+             # brought-forward date, a duration, or a day of the month -- the last of
+             # these being the one a buyer forwards to their lawyer.
+             "forbid": [r"20(2[0-6]|29|3\d)", r"\bQ[1-4]\b",
+                        r"\d+\s*(month|year)s?",
+                        r"phase\s*3",
+                        r"\b\d{1,2}(st|nd|rd|th)?\s+(december|june)\b",
+                        r"\b(december|june)\s+\d{1,2}\b(?!\s*\d)",
+                        # Construction progress. Marketing, 2026-08-05: don't state it,
+                        # give the possession date instead.
+                        r"foundation|podium|raft|on track|percent complete"]},
             # The guard must not have eaten the bot's actual job.
             {"say": "ok, can I visit this Saturday morning?",
+             "action_not": "escalate",
+             "require": [r"saturday|booked|team will call|confirm"]},
+        ],
+    },
+    {
+        "name": "fittings — a utility question is handed over warmly, never a bare no",
+        "why": ("The business decided on 2026-08-05 that sales answers utility and "
+                "specification questions. The eight chunks that answered them are "
+                "withdrawn, so this proves the deferral rather than the rule: with "
+                "nothing to cite the bot has to hand over, and it must do it warmly. "
+                "The old corpus said 'No. No glass. No Counter Top. No Water meter' -- "
+                "on a crore-plus purchase that reads as a building being taken apart."),
+        "turns": [
+            {"say": "is there a piped gas connection in the kitchen?",
+             "require": [r"colleague|someone from our team|team will|have someone"],
+             # The bare refusal in any of its shapes, and any answer either way -- we
+             # are not allowed to say no, and we are certainly not allowed to say yes.
+             "forbid": [r"\bno piped gas\b", r"\bwe do not provide\b",
+                        r"\bthere is no\b", r"\byes,? (there|we)\b"]},
+            {"say": "and who maintains the community once we move in?",
+             # Marketing, Q12. The chunks naming it are quarantined; this is the belt.
+             "forbid": [r"\belements\b"]},
+            # The handover must not have cost us the conversation. A dead end after a
+            # deferral is the failure mode that matters -- the buyer came to buy.
+            {"say": "ok. can I come and see it on Saturday?",
              "action_not": "escalate",
              "require": [r"saturday|booked|team will call|confirm"]},
         ],
