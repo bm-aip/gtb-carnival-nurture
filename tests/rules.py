@@ -660,6 +660,77 @@ def test_the_approved_answers_are_in_the_corpus_file():
             and "confident the water" not in blob)
 
 
+def test_no_rupee_sign_leaves_the_building():
+    """Outbound text is ASCII money; inbound still understands the symbol.
+
+    Free session text reaches Wati as a URL QUERY PARAMETER, not a JSON body, so a
+    non-ASCII character goes out percent-encoded and we are trusting their decoder
+    to put it back. The same character also breaks every place a human reads the
+    text afterwards -- Excel opens a CSV export as cp1252, and so does the Windows
+    console, which raised UnicodeEncodeError on this exact character while this
+    change was being written.
+
+    Both halves matter. Dropping the symbol from OUTBOUND is the fix; keeping it on
+    INBOUND is what stops the fix costing us a buyer's stated budget.
+    """
+    R_SIGN = chr(0x20B9)
+
+    # -- outbound: the reply is normalised before any guard reads it -----------
+    R.eq("rupee sign becomes Rs", q._clean_reply(f"Villas from {R_SIGN}3.94 Cr."),
+         "Villas from Rs 3.94 Cr.")
+    R.eq("a space after the sign does not double up",
+         q._clean_reply(f"Apartments from {R_SIGN} 1.28 Cr."),
+         "Apartments from Rs 1.28 Cr.")
+    R.check("the one quotable price carries no symbol",
+            R_SIGN not in config.VILLA_PRICE_TEXT, config.VILLA_PRICE_TEXT)
+
+    # -- inbound: a buyer typing the symbol must still be understood -----------
+    R.eq("buyer's budget in rupee sign still parses",
+         q.budget_from_text(f"my budget is {R_SIGN}1.5 cr"), 15 * CR // 10)
+    R.eq("buyer's budget in Rs still parses",
+         q.budget_from_text("my budget is Rs 1.5 cr"), 15 * CR // 10)
+    R.check("a figure written Rs is still a figure to the price guard",
+            q._money_figures("Villas from Rs 3.94 Cr.") == {"3.94"})
+
+    # -- the guards did not soften when the currency changed ------------------
+    def problem(reply, cited=(423,), msg="what is the price"):
+        return q._price_problem(reply, CHUNKS, list(cited), msg)
+
+    R.check("flat Rs price still escalates", problem("A villa is Rs 3.94 Cr.") is not None)
+    R.check("invented Rs figure still escalates",
+            problem("Villas start from Rs 2.75 Cr.") is not None)
+    R.check("Rs range with a top still escalates",
+            problem("Villas run from Rs 3.94 Cr to Rs 5.5 Cr.") is not None)
+    R.check("cited + framed Rs price passes",
+            problem("Villas start from Rs 3.94 Cr.") is None)
+
+    # -- the corpus itself, as CHUNKS and not as files ------------------------
+    #
+    # Asserting on the file would have missed the real risk. chunk_pricing matches
+    # table rows on the currency marker: change the document without the pattern and
+    # it returns ZERO chunks, silently withdrawing the only price the bot may say.
+    import importlib.util
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    spec = importlib.util.spec_from_file_location(
+        "ingest_kb", os.path.join(root, "scripts", "ingest_kb.py"))
+    ing = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ing)
+
+    priced = ing.chunk_pricing(
+        open(os.path.join(root, "kb/RON/pricing.md"), encoding="utf-8").read())
+    R.check("the pricing document still yields a chunk", len(priced) == 1,
+            f"{len(priced)} chunks -- a silent zero withdraws the only sayable price")
+    for cfg in ("Compact 2BHK", "3 bed villa", "4 bed villa"):
+        R.check(f"{cfg} survived the rewrite", cfg in priced[0]["content"])
+
+    approved = ing.chunk_approved(
+        open(os.path.join(root, "kb/RON/approved-answers.md"), encoding="utf-8").read())
+    carrying = [c for c in priced + approved
+                if R_SIGN in c["content"] or R_SIGN in (c.get("guardrail") or "")]
+    R.check("no ingested chunk carries the symbol", not carrying,
+            f"{len(carrying)} chunks still do")
+
+
 def main():
     for fn in (test_qualification, test_configuration_classifier, test_price_guard,
                test_say_a_price_once, test_affordability_is_decided_for_the_model,
@@ -679,6 +750,7 @@ def main():
                test_the_factual_net_catches_plurals,
                test_the_voice_is_plain_and_the_examples_survive,
                test_the_approved_answers_are_in_the_corpus_file,
+               test_no_rupee_sign_leaves_the_building,
                test_qualified_card_is_sent_once):
         fn()
     return R.report("RULES  (no database, no API)")

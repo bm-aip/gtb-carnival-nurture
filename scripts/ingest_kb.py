@@ -177,7 +177,14 @@ def chunk_pricing(text):
     figure was retrieved alone, and the wrong number reached a buyer. Here the
     guardrail rides on the same chunk as the figures.
     """
-    rows = re.findall(r"^\|\s*([^|]+?)\s*\|\s*(₹[^|]+?)\s*\|\s*$", text, re.M)
+    # Accepts BOTH "Rs" and the rupee sign. The document was rewritten to "Rs" on
+    # 2026-08-05 (free text reaches Wati as a URL query parameter, so a non-ASCII
+    # character depends on their decoder); the symbol stays in the pattern so an
+    # older or hand-edited copy of the file cannot silently produce zero rows. Zero
+    # rows here returns zero chunks, which would withdraw the only price the bot is
+    # allowed to say without anything reporting an error.
+    rows = re.findall(r"^\|\s*([^|]+?)\s*\|\s*((?:₹|Rs\.?)\s*[^|]+?)\s*\|\s*$",
+                      text, re.M)
     rows = [(c.strip(), p.strip()) for c, p in rows
             if c.strip().lower() not in ("configuration", "---")]
     if not rows:

@@ -125,7 +125,7 @@ comfort one. A person answers it.
 provider and marketing said not to.
 
 **The 1BHK is out of the plan** (marketing, 5 August). It stays off-category, so the
-entry price remains the compact 2BHK at ₹1.28 Cr and nothing about who reaches the
+entry price remains the compact 2BHK at Rs 1.28 Cr and nothing about who reaches the
 sales team changes.
 
 Source: `RON-QUESTIONS-FOR-MARKETING answered.md` and
