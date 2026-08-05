@@ -498,6 +498,42 @@ def test_the_below_entry_rules_are_editable_english():
                 forbidden not in rules, rules[:120])
 
 
+def test_the_voice_is_plain_and_the_examples_survive():
+    """The register the owner chose on 2026-08-05, and the examples that carry it.
+
+    "Keep it simple. Short sentences." was already in this document and the bot still
+    wrote "this is really where the place comes into its own". Description alone did
+    not move it; the before/after pairs did. So the pairs are the asset -- a future
+    tidy-up that deletes them as clutter would quietly restore the brochure voice,
+    and nothing else in the system would notice.
+    """
+    lang = answering.RULES["language"]
+    voice = answering.RULES["voice"]
+
+    R.check("the language rules are substantial", len(lang) > 900, lang[:80])
+    # Counted on the PARSED text, not the file. `>` lines are notes to the editor and
+    # are stripped by design -- these examples were written as blockquotes first and
+    # reached the model as four blank lines. The document looked right and the bot was
+    # told nothing. Anything meant for the model has to be asserted after parsing.
+    R.check("...and show real before/after pairs", lang.count("TOO MUCH:") >= 4
+            and lang.count("BETTER:") >= 4,
+            f"{lang.count('TOO MUCH:')} bad, {lang.count('BETTER:')} good")
+
+    # The specific tics seen in live replies. Each one must stay named: a banned
+    # phrase list that loses its entries is a list that bans nothing.
+    for tic in ("comes into its own", "resort-style", "world-class", "nestled",
+                "boasts", "an array of"):
+        R.check(f"language rules still ban {tic!r}", tic in lang, lang[:120])
+
+    R.check("contractions are encouraged", "contraction" in lang.lower(), lang[:120])
+    R.check("voice says talk like a person", "like a person" in voice.lower(), voice[:120])
+
+    # Casual was the owner's choice; careless was not. Without this the register
+    # drifts to flippant, which on a crore-plus purchase reads as not caring.
+    R.check("voice keeps the floor under casual",
+            "not careless" in voice.lower() or "not cold" in voice.lower(), voice[:160])
+
+
 def test_the_approved_answers_are_in_the_corpus_file():
     """Marketing's answers reached the corpus intact, with their rules attached.
 
@@ -555,6 +591,7 @@ def main():
                test_the_two_approved_possession_dates_are_sayable,
                test_unapproved_possession_dates_are_still_refused,
                test_the_maintenance_provider_is_never_named,
+               test_the_voice_is_plain_and_the_examples_survive,
                test_the_approved_answers_are_in_the_corpus_file,
                test_qualified_card_is_sent_once):
         fn()

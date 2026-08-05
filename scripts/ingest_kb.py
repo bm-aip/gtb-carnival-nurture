@@ -225,9 +225,20 @@ APPROVED_GUARDRAILS = {
            "what the common areas do have. Never list AC tonnage, brands or specs."),
     "Q7": ("One clubhouse, 60,000 sqft. Not one per phase. This is the only amenity "
            "for which a size may be stated."),
-    "Q13": ("This list is COMPLETE as written and is the approved wording. Do not add "
-            "an amenity to it, and do not give a size, brand, count, floor or "
-            "location for any item except the 60,000 sqft clubhouse."),
+    # SAY THE SAME THINGS, IN PLAIN WORDS. Marketing's paragraph is the approved
+    # CONTENT, not approved phrasing -- it opens "an extensive range of resort-style
+    # amenities designed around recreation, wellness, nature and convenient living",
+    # and the model mirrors whatever register it reads. Quoted verbatim it was the
+    # most brochure-like sentence the bot produced (owner, 2026-08-05).
+    #
+    # The list is a fence, not a script: every item may be said, nothing may be added.
+    "Q13": ("This list is COMPLETE. Never add an amenity to it and never give a size, "
+            "brand, count, floor or location for any item except the 60,000 sqft "
+            "clubhouse. SAY IT IN YOUR OWN PLAIN WORDS -- do not read this paragraph "
+            "out. Group them the way a person would ('there's a 60,000 sqft clubhouse "
+            "- pool, gym, courts, mini theatre, spa and sauna'), and name a handful "
+            "rather than all of them unless they ask for the full list. Never say "
+            "'extensive range', 'resort-style', 'designed around' or 'world-class'."),
     "Q14": "The RERA number may be stated to a buyer.",
     # Marketing's first answer here kept the clause "we are confident the water won't
     # flood". We asked them to reconsider it -- a written prediction about a coastal
