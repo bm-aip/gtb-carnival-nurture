@@ -184,7 +184,11 @@ def _looks_factual(text):
 # --- possession / handover timeline (rulebook: never state one) ---------------
 # Words that mean "when will it be finished".
 _POSSESSION = re.compile(
-    r"\b(possession|handover|hand(ing|ed)?\s+over|completion|"
+    # `hand(s|ing|ed)?` -- the bare plural was missing until 2026-08-05, so "Phase 1
+    # hands over in December 2027" matched nothing and the whole possession guard was
+    # skipped for the most natural way to write the sentence. Found by a test that
+    # appeared to pass for the right reason and was passing for no reason at all.
+    r"\b(possession|handover|hand(s|ing|ed)?\s+over|completion|"
     r"occupancy\s+certificate|completion\s+certificate|"
     r"ready\s+(to\s+move|for\s+(possession|occupancy))|move[-\s]?in)\b", re.I)
 
@@ -205,17 +209,88 @@ _WHEN = re.compile(
     r"|mid[-\s]?20\d\d)\b", re.I)
 
 
-def _possession_problem(reply):
-    """A completion timeline in the reply, or None.
+# THE TWO DATES THE BUSINESS HAS AUTHORISED. Marketing, 2026-08-05, answering audit
+# questions 10 and 11: Phase 1 December 2027, Phase 2 June 2028 -- and "don't state
+# progress, just say the possession date".
+#
+# This reverses the standing rule, so it is worth being precise about what changed.
+# The old rule was "never state a completion timeline", written when the corpus held
+# dates nobody had approved. It was never a claim that dates are dangerous; it was a
+# claim that UNAPPROVED dates are. Two of them now have a name behind them, so the
+# guard narrows from "no date" to "these two, exactly".
+#
+# Everything else still escalates: a third phase, a revised date, a day of the month,
+# "should be ready sooner", "in about 18 months".
+_APPROVED_DATES = (
+    re.compile(r"\bdec(ember)?\.?\s*,?\s*20\s?27\b", re.I),   # Phase 1
+    re.compile(r"\bjun(e)?\.?\s*,?\s*20\s?28\b", re.I),       # Phase 2
+)
 
-    Requires BOTH a possession word and a time expression. Either alone is
-    legitimate -- "ready to move" appears in general marketing copy, and a date
-    appears whenever a visit is booked -- so it is the combination that commits us
-    to something nobody has authorised.
+# A day of the month pinned to any month name. Checked BEFORE the approved dates are
+# scrubbed out, because "15 December 2027" would otherwise pass: removing the approved
+# "December 2027" leaves a bare "15", which no time pattern matches.
+#
+# A precise handover day is a different promise from a month, and it is the shape a
+# buyer forwards to their lawyer.
+_DAY_OF_MONTH = re.compile(
+    r"\b\d{1,2}(st|nd|rd|th)?\s+"
+    r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b"
+    r"|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+"
+    r"\d{1,2}(st|nd|rd|th)?\b(?!\s*\d)", re.I)
+
+
+def _possession_problem(reply):
+    """An UNAPPROVED completion timeline in the reply, or None.
+
+    Requires a possession word before anything is judged. A date on its own is
+    legitimate -- one appears whenever a visit is booked, which is the bot's whole
+    job -- so it is the combination that commits us to something.
+
+    The two approved dates are scrubbed out and whatever time expression is LEFT is
+    the problem. Scrubbing rather than allow-listing the whole sentence matters: it
+    means "Phase 1 is December 2027, and Phase 3 should be ready by 2030" is caught
+    on the part that is not approved instead of being waved through on the part that
+    is.
     """
-    if _POSSESSION.search(reply or "") and _WHEN.search(reply or ""):
-        return "reply stated a possession/handover timeline"
+    text = reply or ""
+    if not _POSSESSION.search(text):
+        return None
+    if _DAY_OF_MONTH.search(text):
+        return "reply pinned possession to a specific day of the month"
+    scrubbed = text
+    for rx in _APPROVED_DATES:
+        scrubbed = rx.sub(" ", scrubbed)
+    if _WHEN.search(scrubbed):
+        return "reply stated a possession timeline that is not one of the two approved"
     return None
+
+
+# --- naming the maintenance provider (marketing 2026-08-05, audit Q12) -------
+_MAINTENANCE = re.compile(
+    r"maintain|maintenance|upkeep|facility manage|facilities manage|"
+    r"managed\s+by|service\s+provider|housekeep|common\s+area", re.I)
+_PROVIDER = re.compile(r"\belements\b", re.I)
+
+
+def _maintenance_naming(reply):
+    """True when the reply names the maintenance provider.
+
+    Proximity, not presence. "Elements" alone is ordinary English and this brand
+    writes about nature constantly, so banning the token outright would escalate good
+    replies.
+
+    The window is 60 characters. It started at 120 and a legitimate reply tripped it
+    at a gap of 97 -- "the community is professionally maintained" in one sentence and
+    "the elements the masterplan was drawn around" two clauses later. Naming a company
+    is tight by construction ("maintained by Elements", "managed by Elements"), so 60
+    catches every real form and leaves the prose alone.
+    """
+    text = reply or ""
+    for m in _PROVIDER.finditer(text):
+        window = text[max(0, m.start() - 60):m.end() + 60]
+        if _MAINTENANCE.search(window):
+            return True
+    return False
 
 
 def run_turn(lead, message, history=None, conv=None):
@@ -815,6 +890,20 @@ def _enforce(d, chunks, lead, message=None, history=None):
     possession = _possession_problem(reply)
     if possession:
         return _forced_escalation(possession, chunks)
+
+    # 3c. NAMING THE MAINTENANCE PROVIDER. Marketing, 2026-08-05 (audit Q12): no.
+    #
+    #     The two chunks that named it are quarantined, so in the ordinary case the
+    #     name is not in the context window at all and this never fires. This is the
+    #     belt: the name is also the sister brand's, it appears in this codebase, and
+    #     a model that has seen it once can produce it unprompted.
+    #
+    #     Deliberately NOT a bare word ban. "Elements" is ordinary English and this
+    #     project's own copy is nature-led -- "the elements", "natural elements" are
+    #     sentences we want to send. So it fires only when the word sits next to
+    #     maintenance vocabulary, which is the only context in which it is a company.
+    if _maintenance_naming(reply):
+        return _forced_escalation("reply named the maintenance provider", chunks)
 
     # 4. Visit day. Tuesday is the team's day off and Monday mornings are their
     #    weekly meeting -- a bot that books either sends someone to a locked gate.

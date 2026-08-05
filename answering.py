@@ -54,6 +54,7 @@ SECTIONS = {
     "When their budget does not reach": "pivot_wording",
     "When their budget is below anything we sell": "below_entry",
     "When they ask about the GTB Carnival": "carnival",
+    "When they ask about a fitting or a utility": "utility_ask",
     "When they ask vaguely for information": "vague_ask",
     "When their reply says nothing": "empty_reply",
     "Saying a price more than once": "repetition",
@@ -72,6 +73,7 @@ MIN_CHARS = {
     "location_wording": 40, "no_apology": 60, "price_wording": 120,
     "value_question": 80, "pivot_wording": 80, "below_entry": 200, "carnival": 150, "vague_ask": 60,
     "empty_reply": 60, "repetition": 40, "visits": 60, "never_say": 80,
+    "utility_ask": 250,
     "actions": 120, "handover_qualified": 80, "handover_escalated": 80,
     "escalation_reply": 20,
 }
@@ -80,7 +82,7 @@ MIN_CHARS = {
 # rather than derived from SECTIONS, so adding a heading to the document cannot
 # silently change what the model is told -- the wiring stays a deliberate act.
 PROMPT_ORDER = ("identity", "turn", "gates", "price_wording", "value_question",
-                "pivot_wording", "below_entry", "carnival", "vague_ask",
+                "pivot_wording", "below_entry", "carnival", "utility_ask", "vague_ask",
                 "location_wording", "visits",
                 "never_say", "voice", "language", "no_apology", "empty_reply",
                 "repetition", "actions")

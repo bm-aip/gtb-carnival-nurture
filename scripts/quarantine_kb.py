@@ -86,6 +86,51 @@ QUARANTINE = {
          "It goes stale silently and it is the closest thing in the corpus to a "
          "progress commitment, which is the one subject the bot must never commit on. "
          "Q10.",
+
+    # =====================================================================
+    # 2026-08-05 -- MARKETING ANSWERED. These are decisions, not open questions.
+    # =====================================================================
+    #
+    # The eight utility answers below are the "bare No" pattern the audit named. Asked
+    # whether to soften them or hand them to a person, marketing replied "answer all
+    # these as a Yes" -- which, read literally, tells the bot to confirm we provide
+    # piped gas, water meters, intercoms, balcony glass and a lease guarantee. We did
+    # not ship that. Put back item by item, the business's decision was: SALES ANSWERS
+    # THESE.
+    #
+    # So they leave the corpus. Not because the answers are wrong -- because a
+    # one-word "No" on a crore-plus purchase is worse than a warm "let me get you a
+    # proper answer on that", and because these are specification questions where the
+    # detail changes and a salesperson has the current sheet in front of them.
+    #
+    # answering-rules.md carries the deferral wording. Withdrawing the chunk is what
+    # makes the deferral happen: with nothing to cite, the bot cannot answer.
+    386: "Bare 'No piped gas'. Business decision 2026-08-05: sales answers utility and "
+         "specification questions. Withdrawn so the bot defers instead of stonewalling.",
+    400: "Bare 'No glass' to a balcony specification question. Sales answers these "
+         "(2026-08-05). Also a spec that can change between phases.",
+    401: "Bare 'No Glass' to a brand question. Sales answers these (2026-08-05).",
+    405: "Bare 'No Counter Top' on a premium kitchen. Was given a guardrail on "
+         "2026-08-03; the business decided on 2026-08-05 that sales answers kitchen "
+         "specification questions, so it is withdrawn instead.",
+    409: "Bare 'No' to an intercom question. Sales answers these (2026-08-05).",
+    413: "Bare 'No' to a lease-guarantee question. This one is a COMMITMENT question "
+         "-- rental assurance is a financial undertaking and must never be answered by "
+         "a bot in either direction. Sales answers it (2026-08-05).",
+    417: "Bare 'No High tension line'. Sales answers these (2026-08-05).",
+    420: "Bare 'No Water meter'. Sales answers these (2026-08-05).",
+
+    # Naming the maintenance provider -- marketing said no (Q12).
+    #
+    # A guardrail cannot fix these two, and that distinction matters: a guardrail
+    # constrains what the model DOES with a chunk, but the forbidden word is in the
+    # chunk's own text, so retrieving it puts "elements" in front of the model. The
+    # only way to make a name unsayable is to keep it out of the context window.
+    366: "Names the sister company as the maintenance provider. Marketing 2026-08-05 "
+         "(Q12): do not name it. The name is in the chunk text, so a guardrail cannot "
+         "hold -- it has to leave the pool. Maintenance questions go to sales.",
+    367: "Same as 366, and it also fails to answer its own question ('for how many "
+         "years'). Marketing 2026-08-05 (Q12): do not name the provider.",
 }
 
 # Facts worth keeping, but which need a guard travelling with them. Quarantine would
@@ -95,14 +140,10 @@ GUARDRAILS = {
          "also asks how many clubhouses there are per phase -- that is NOT answered "
          "here, so never state a per-phase clubhouse count. The bioswale depth and "
          "landscape buffer are internal engineering detail: do not volunteer them.",
-    366: "Say the developer is responsible for maintaining the amenities and common "
-         "areas. Do not name the service provider.",
-    367: "Say the developer is responsible for maintaining the amenities and common "
-         "areas. Do not name the service provider, and never state a number of years "
-         "-- the question asks 'for how many years' and this does not answer it.",
-    405: "Do not answer a kitchen question with a bare 'No Counter Top'. State plainly "
-         "that the kitchen is handed over without a countertop, and hand any "
-         "specification or customisation question to a colleague.",
+    # 366, 367 and 405 lived here until 2026-08-05. All three moved to QUARANTINE when
+    # marketing answered -- see the notes there. A guardrail was the right holding
+    # position while the question was open; it is the wrong answer once the business
+    # has said the fact itself must not be stated.
 }
 
 

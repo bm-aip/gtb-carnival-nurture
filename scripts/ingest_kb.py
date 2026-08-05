@@ -184,8 +184,106 @@ def chunk_pricing(text):
     }]
 
 
+# --- approved answers (2026-08-05) -------------------------------------------
+#
+# Marketing answered the KB audit questions on 2026-08-05. Their wording goes in as
+# its own document rather than as edits to faqs.md, for three reasons:
+#
+#   1. The FAQ is an internal engineering review sheet. It will keep drifting, and
+#      merging approved copy into it loses the distinction between "the business
+#      signed this" and "an engineer typed this in a spreadsheet".
+#   2. §10's audit guardrail asks which document was live when the bot said a thing.
+#      A separate versioned document answers that in one row.
+#   3. A correction becomes one edit in one file, not a hunt through 64 chunks.
+#
+# Where this file answers something the FAQ also answers differently, the FAQ chunk
+# is QUARANTINED -- see scripts/quarantine_kb.py. Retrieval is plain cosine distance
+# with no document ranking, so "outranks the FAQ" cannot be a preference: the losing
+# chunk has to be out of the pool. Adding a priority score would be a second
+# mechanism doing the same job as the one we already built and proved.
+APPROVED_GUARDRAILS = {
+    "Q1": ("32 acres is the approved figure. Any other acreage in any other source "
+           "is wrong. Never break it down by phase."),
+    "Q2": ("343 homes is the approved figure. Any other count in any other source is "
+           "wrong. Never break it down by phase, and never name Phase 3, island "
+           "villas, beachfront villas or villaments."),
+    "Q5": ("The pool is a shared community amenity. Never imply a private pool, a "
+           "per-home pool or a pool per tower. No dimensions."),
+    "Q6": ("Homes are not centrally air-conditioned -- say so plainly and move to "
+           "what the common areas do have. Never list AC tonnage, brands or specs."),
+    "Q7": ("One clubhouse, 60,000 sqft. Not one per phase. This is the only amenity "
+           "for which a size may be stated."),
+    "Q13": ("This list is COMPLETE as written and is the approved wording. Do not add "
+            "an amenity to it, and do not give a size, brand, count, floor or "
+            "location for any item except the 60,000 sqft clubhouse."),
+    "Q14": "The RERA number may be stated to a buyer.",
+    # Marketing's first answer here kept the clause "we are confident the water won't
+    # flood". We asked them to reconsider it -- a written prediction about a coastal
+    # site, from the developer, that the buyer keeps on their phone -- and on
+    # 2026-08-05 they adopted the facts-only version. The guardrail exists so the
+    # prediction cannot come back through the model's own phrasing.
+    "Q8": ("State these two facts and stop. NEVER predict that the site will not "
+           "flood, never say we are confident it will not, never call it safe and "
+           "never compare it to anywhere else on ECR. Any question beyond these two "
+           "facts -- history, risk, insurance, monsoon -- goes to a colleague."),
+    "Q15": ("Approved developer copy. Never name a past project, a completed unit "
+            "count or an award -- none is approved."),
+    # The one that reverses a standing rule, so it says why.
+    "Q11": ("State ONLY these two dates and only as scheduled: Phase 1 December 2027, "
+            "Phase 2 June 2028. Never a day of the month, never a date for any other "
+            "phase, never a revised, hedged or 'expected earlier' date. NEVER state "
+            "construction progress -- no foundation, no podium, no percentage, no 'on "
+            "track'. Marketing's instruction on 2026-08-05 was to give the possession "
+            "date instead of a progress update, so progress questions get the date."),
+}
+
+# Applied to every approved chunk on top of its own. Two rules the business gave us
+# that have no chunk of their own, because both are things NOT to say -- and a chunk
+# whose content is "never mention villaments" is a chunk that puts the word
+# "villaments" into the retrieved context.
+APPROVED_ALWAYS = (
+    "Never name the maintenance provider. If asked who maintains the community: it "
+    "is managed by a professional service provider, and a colleague can confirm the "
+    "details. "
+    "Only 2BHK and 3BHK apartments and 3-bed and 4-bed villas are on sale.")
+
+
+def chunk_approved(text):
+    """One chunk per `## question`, with the guardrail keyed to marketing's own
+    question number.
+
+    Everything from the `## Rules that travel with these answers` heading onward is
+    addressed to us, not to a buyer, and is excluded -- the rules reach the model
+    attached to chunks, which is the only way they cannot drift away from the fact
+    they govern. A bot that ingests its own instruction table reads it aloud.
+    """
+    body = text.split("## Rules that travel with these answers")[0]
+    chunks = []
+    for m in re.finditer(r"^## (.+?)\n(.*?)(?=^## |\Z)", body, re.S | re.M):
+        question = m.group(1).strip()
+        raw = m.group(2)
+        tags = re.findall(r"approved:([^>]*)", raw)
+        keys = re.findall(r"Q\d+", " ".join(tags))
+        answer = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
+        answer = re.sub(r"\n\s*-{3,}\s*$", "", answer).strip()
+        if not answer:
+            continue
+        rules = [APPROVED_GUARDRAILS[k] for k in keys if k in APPROVED_GUARDRAILS]
+        rules.append(APPROVED_ALWAYS)
+        chunks.append({
+            "content": f"Q: {question}\nA: {answer}",
+            "guardrail": " ".join(rules),
+        })
+    return chunks
+
+
 SOURCES = {
     "RON": [
+        # First in the list so a fresh ingest loads the approved answers before the
+        # FAQ. Ordering does not affect retrieval -- it affects what a human reads
+        # first when they open the corpus.
+        {"path": "kb/RON/approved-answers.md", "title": "RON approved answers",
+         "doc_type": "approved", "chunker": chunk_approved},
         {"path": "kb/RON/faqs.md", "title": "RON FAQ (curated)",
          "doc_type": "faq", "chunker": chunk_faqs},
         {"path": "kb/RON/location.md", "title": "RON location and distances",
