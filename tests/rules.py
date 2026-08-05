@@ -498,6 +498,90 @@ def test_the_below_entry_rules_are_editable_english():
                 forbidden not in rules, rules[:120])
 
 
+def test_a_question_is_not_a_claim():
+    """The citation floor must not fire on the bot asking something.
+
+    2026-08-05, live: a buyer had given configuration, purpose and location. The bot
+    asked for the last one -- "the budget band you have in mind for the villa - just
+    a rough figure is fine" -- and the floor saw the word `villa`, found no citation
+    (correctly: a question about someone's wallet cites nothing), binned the reply
+    and handed the conversation to a human. One gate from qualified.
+    """
+    asking = [
+        "Sorry, I meant the budget band you have in mind for the villa - just a "
+        "rough figure is fine, only so I show you homes that are genuinely in range.",
+        "Would you prefer a villa or an apartment?",
+        "Is the apartment for you or for family?",
+        "Which floor were you hoping for?",
+        "Are you looking at 3 bedroom or 4 bedroom villas?",   # config names, not sizes
+        "Got it, a villa. Is this for weekends or to live in full-time?",
+        "Nice. Which area are you looking to buy around?",
+    ]
+    for reply in asking:
+        R.check(f"no citation needed: {reply[:46]!r}", q._needs_citation(reply) is False)
+
+    # AND THE GUARD MUST STILL DO ITS JOB. Every one of these is the failure it was
+    # built for: a value, or a thing that does not exist in the corpus at all.
+    claiming = [
+        "The 3 bedroom villas are 2552 sqft.",
+        "Villas start from ₹3.94 Cr onwards.",
+        "There is a good school about 10 minutes away.",
+        "The nearest hospital is 4 km away.",           # no corpus entry exists
+        "It is a 32-acre community with 343 homes.",
+        "Phase 1 is scheduled for possession in December 2027.",
+        "The clubhouse is 60,000 sqft.",
+        "The RERA number is TN/35/Building/0523/2024.",
+        # A school with no number is still an invented school -- this is why the
+        # test is not "does it contain a digit".
+        "There is a school right next to the community.",
+        # Our claims rule forbids implying a beach. Even as a question it implies
+        # one, so it must not go out uncited.
+        "Are you thinking beach side or inland?",
+    ]
+    for reply in claiming:
+        R.check(f"citation required: {reply[:46]!r}", q._needs_citation(reply) is True)
+
+    # The possession belt reads _looks_factual, NOT _needs_citation, and must keep
+    # its wide net -- narrowing that one would reopen the uncited-date hole.
+    R.check("possession belt keeps the wide net",
+            q._looks_factual("It's ready to move whenever you are.") is True)
+
+
+def test_the_factual_net_catches_plurals():
+    """Found 2026-08-05 while narrowing the citation floor, and older than it.
+
+    Every noun in FACTUAL sat between two word boundaries in the singular. Property
+    copy is written in the plural almost throughout, so the net had a hole exactly
+    where claims get made: "the villa is lovely" was factual, "villas start from
+    ₹3.94 Cr onwards" was not factual at all.
+
+    `amenit` and `kilomet` were worse -- a prefix inside \\b...\\b needs a word
+    boundary after it, which "amenities" and "kilometres" do not have. Neither entry
+    could ever match anything.
+    """
+    for text in ("Villas start from ₹3.94 Cr onwards.",
+                 "Our apartments are lovely.",
+                 "It spans 32 acres.",
+                 "What are the amenities?",
+                 "It is 5 kilometres away.",
+                 "There are two clubhouses.",
+                 "Both phases are on the same road.",
+                 "Which floors are available?",
+                 "The nearest schools are close by.",
+                 "There are two hospitals nearby."):
+        R.check(f"plural is factual: {text[:42]!r}", q._looks_factual(text) is True)
+
+    # The singulars must not have been lost in the process.
+    for text in ("The villa is lovely.", "It spans one acre.",
+                 "The apartment is ready.", "The clubhouse is open."):
+        R.check(f"singular still factual: {text[:42]!r}", q._looks_factual(text) is True)
+
+    # And the net must not have widened into ordinary words.
+    for text in ("Thanks, that helps.", "Which area are you looking around?",
+                 "Saturday works well.", "Let me get someone to call you."):
+        R.check(f"not factual: {text[:42]!r}", q._looks_factual(text) is False)
+
+
 def test_the_voice_is_plain_and_the_examples_survive():
     """The register the owner chose on 2026-08-05, and the examples that carry it.
 
@@ -591,6 +675,8 @@ def main():
                test_the_two_approved_possession_dates_are_sayable,
                test_unapproved_possession_dates_are_still_refused,
                test_the_maintenance_provider_is_never_named,
+               test_a_question_is_not_a_claim,
+               test_the_factual_net_catches_plurals,
                test_the_voice_is_plain_and_the_examples_survive,
                test_the_approved_answers_are_in_the_corpus_file,
                test_qualified_card_is_sent_once):

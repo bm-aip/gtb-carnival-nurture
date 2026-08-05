@@ -166,9 +166,22 @@ def _history(turns):
     return msgs
 
 
+# PLURALS AND PREFIXES, fixed 2026-08-05. Every noun below sat between two word
+# boundaries in the singular, so the guard read "the villa is lovely" as factual and
+# "villas start from ₹3.94 Cr onwards" as not factual at all -- and property copy is
+# written in the plural almost throughout.
+#
+# Worse, `amenit` and `kilomet` could never match ANYTHING: a prefix inside \b...\b
+# requires a word boundary after "amenit", which "amenities" does not have. Two
+# entries doing nothing since the day they were written.
+#
+# So the citation floor was loose exactly where claims are made and tight exactly
+# where questions are asked. Both halves are fixed here: `\w*` for the prefixes,
+# `s?` for the countable nouns.
 FACTUAL = re.compile(
-    r"\b(km|kilomet|sqft|sq ft|acre|bhk|villa|apartment|amenit|school|hospital|"
-    r"metro|beach|lagoon|clubhouse|parking|floor|phase|"
+    r"\b(km|kilomet\w*|sq\s?ft|acres?|bhk|villas?|apartments?|amenit\w*|"
+    r"schools?|hospitals?|metro|beach(es)?|lagoons?|clubhouses?|parking|"
+    r"floors?|phases?|rera|"
     # Date vocabulary, added 2026-08-03. Without it "Handover is expected by
     # December 2027" matched nothing here, so _looks_factual said False, the
     # citation requirement never ran, and a fabricated completion date could be
@@ -179,6 +192,62 @@ FACTUAL = re.compile(
 
 def _looks_factual(text):
     return bool(FACTUAL.search(text or ""))
+
+
+# --- does this reply actually CLAIM anything? (2026-08-05) --------------------
+#
+# `_looks_factual` asks "is this about the project", by vocabulary. That is the
+# right question for the possession belt, which wants a wide net. It is the WRONG
+# question for the citation floor, which was using it too -- and a bare noun is not
+# a claim.
+#
+# What it cost: a real buyer, one gate from qualified. The bot asked "the budget
+# band you have in mind for the villa - just a rough figure is fine". The word
+# `villa` matched, nothing was cited (correctly -- a question about someone's wallet
+# cites nothing), and the reply was thrown away and the conversation handed to a
+# human. Four more of the bot's ordinary questions do the same: "villa or
+# apartment?", "is the apartment for you or family?", "which floor?".
+#
+# So the floor now asks a narrower question: does the sentence carry a VALUE, or name
+# a thing we are prone to inventing? Everything the guard was built to stop -- an
+# invented school, an invented hospital, a made-up size, a made-up date -- does one
+# or the other.
+
+# Things that exist in the world and that a model will happily invent because they
+# are plausible near any Chennai project. The corpus contains NO school, hospital,
+# office campus or metro (see LOCATION_GAPS in the ingest), so naming one is
+# invention by definition. `beach` is here deliberately: our claims rule forbids
+# implying a private or natural beach, so "beach" in an uncited reply should stop --
+# including in a question like "beach side or inland?", which implies it too.
+_HARD_FACT = re.compile(
+    r"\b(school|college|hospital|clinic|pharmacy|metro|railway station|"
+    r"airport|mall|highway|temple|beach|lagoon|clubhouse|acre|sqft|sq ft|"
+    r"km|kilomet|rera)\b", re.I)
+
+# "3 bedroom" and "4BHK" are the NAMES of our products, not measurements. Stripped
+# before looking for digits, so "are you looking at 3 bedroom or 4 bedroom villas?"
+# is read as the question it is rather than as a claim carrying two numbers.
+_CONFIG_TOKEN = re.compile(r"\b\d\s*(bed(room)?s?|bhk)\b", re.I)
+
+
+def _needs_citation(reply):
+    """True when the reply asserts something it must be able to point at.
+
+    Three gates, cheapest first. It has to be about the project at all; then either
+    it names something we are prone to inventing, or it carries a number -- a size,
+    a price, a distance, a year. A sentence with neither is conversation, and
+    conversation cites nothing because there is nothing to cite.
+    """
+    text = reply or ""
+    # Hard facts stand alone. They are checked FIRST and independently of the
+    # vocabulary net, because the thing they catch -- an invented school, an invented
+    # hospital, a RERA number nobody approved -- is invention whether or not a number
+    # comes with it, and it must not depend on the wider list being complete.
+    if _HARD_FACT.search(text):
+        return True
+    if not _looks_factual(text):
+        return False
+    return bool(re.search(r"\d", _CONFIG_TOKEN.sub(" ", text)))
 
 
 # --- possession / handover timeline (rulebook: never state one) ---------------
@@ -855,10 +924,16 @@ def _enforce(d, chunks, lead, message=None, history=None):
         if d.get("visit_venue") == "experience_centre":
             d["visit_venue"] = "site"
 
-    # 1. CONFIDENCE FLOOR. A factual-sounding claim with no chunk behind it is
-    #    exactly how invented schools and possession dates reach a buyer.
+    # 1. CONFIDENCE FLOOR. A factual CLAIM with no chunk behind it is exactly how
+    #    invented schools and possession dates reach a buyer.
+    #
+    #    `_needs_citation`, not `_looks_factual`, since 2026-08-05. The wide test
+    #    fired on any reply containing a product noun, so the bot asking "what budget
+    #    band did you have in mind for the villa?" was treated as an uncited claim,
+    #    binned, and escalated -- one gate short of a qualified buyer. A question
+    #    asserts nothing and has nothing to cite.
     cited = [s for s in (d.get("sources") or []) if s in valid_ids]
-    if _looks_factual(reply) and not cited:
+    if _needs_citation(reply) and not cited:
         out = _forced_escalation("factual claim with no supporting chunk", chunks)
         out["internal_note"] += f" | suppressed reply: {reply[:160]}"
         return out
