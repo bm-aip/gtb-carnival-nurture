@@ -669,6 +669,19 @@ _PUNCT = {
     "‘": "'", "’": "'",              # curly single quotes
     "“": '"', "”": '"',              # curly double quotes
     "…": "...",                           # ellipsis
+    # The rupee sign is here for a harder reason than looks. Free session text is
+    # sent to Wati as a URL QUERY PARAMETER (`wati.send_text` ->
+    # params={"messageText": ...}), not as a JSON body the way templates are. A
+    # non-ASCII character therefore leaves us percent-encoded and we are trusting
+    # someone else's decoder to put it back. It also breaks in every place a human
+    # later reads the same text: Excel opens a CSV export as cp1252, and so does
+    # the Windows console.
+    #
+    # "Rs 3.94 Cr" is ordinary Indian property language, so nothing is lost with
+    # the buyer, and a whole class of encoding failure stops being possible.
+    # INBOUND is deliberately untouched: buyers do type the symbol, and _MONEY /
+    # _BARE_RUPEE still read it when working out their budget.
+    "₹": "Rs ",                           # rupee sign -- outbound only
     " ": " ",                             # non-breaking space
 }
 
@@ -727,18 +740,30 @@ def _strip_empty_affirmation(reply, message):
     return stripped[0].upper() + stripped[1:]
 
 
+# Every currency marker these guards must read. Outbound text is normalised to "Rs"
+# by _clean_reply, but a BUYER still types the symbol, and older corpus chunks and
+# conversation history still hold it -- so each of these patterns has to accept both
+# forms. Writing it once stops them drifting apart: the range guard below was
+# symbol-only, and quietly stopped catching "Rs 3.94 Cr to Rs 5.5 Cr" the moment the
+# currency changed. The test suite caught that; a buyer would have been the
+# alternative.
+_CUR = r"(?:₹|\brs\.?)"
+
 # Any money-shaped figure, and the number inside it.
-_MONEY = re.compile(r"(?:₹|\brs\.?\s*)?\s*(\d+(?:[.,]\d+)?)\s*"
+_MONEY = re.compile(_CUR + r"?\s*(\d+(?:[.,]\d+)?)\s*"
                     r"(cr\b|crore|lakh|lac|l\b)", re.I)
-_BARE_RUPEE = re.compile(r"₹\s*(\d+(?:[.,]\d+)?)")
+# A figure carrying a currency marker but NO unit -- "Rs 12000 per sq ft". _MONEY
+# cannot see these because it requires cr/lakh, and an untraceable figure is the
+# thing rule 1 exists to stop.
+_BARE_RUPEE = re.compile(_CUR + r"\s*(\d+(?:[.,]\d+)?)", re.I)
 _STARTING = re.compile(r"\b(from|starting|onwards|starts? at|begins? at)\b", re.I)
 _PER_SQFT = re.compile(r"per\s*(sq|square)\s*(ft|foot|feet)|/\s*sq", re.I)
-# "₹3.94 Cr to ₹5.5 Cr" -- a range has a TOP, and a top reads as a cap we have not
-# agreed to. Two separate starting prices ("apartments from X, villas from Y") are
-# fine and deliberately do not match this.
+# "Rs 3.94 Cr to Rs 5.5 Cr" -- a range has a TOP, and a top reads as a cap we have
+# not agreed to. Two separate starting prices ("apartments from X, villas from Y")
+# are fine and deliberately do not match this.
 _PRICE_RANGE = re.compile(
     r"\d[\d.,]*\s*(?:cr\b|crore|lakh|lac)?\s*(?:to|up\s*to|until|[-–—])\s*"
-    r"₹?\s*\d[\d.,]*\s*(?:cr\b|crore|lakh|lac)", re.I)
+    + _CUR + r"?\s*\d[\d.,]*\s*(?:cr\b|crore|lakh|lac)", re.I)
 
 
 def _money_figures(text):

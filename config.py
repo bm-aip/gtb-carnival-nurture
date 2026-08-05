@@ -76,11 +76,17 @@ RON_FORMS = [f.strip() for f in os.environ.get(
 # It matches the price sheet, which rounds the cheapest villa to ₹3.9 Cr. The ad
 # figure is the precise one and the one the buyer saw, so it is the one we quote.
 #
-# NOTHING ELSE. Apartment prices, the ₹5.5 Cr four-bed, per-unit figures: still a
-# human's job. The guard in _enforce removes this phrase and then rejects any
-# money that remains, so the carve-out cannot widen by accident.
-VILLA_PRICE_TEXT = os.environ.get("VILLA_PRICE_TEXT", "₹3.94 Cr")
-VILLA_FLOOR = int(os.environ.get("VILLA_FLOOR", "39400000"))     # ₹3.94 crore
+# NOTHING ELSE. Apartment prices, the Rs 5.5 Cr four-bed, per-unit figures: still a
+# human's job. _price_problem requires every figure to be traceable to a cited
+# chunk, so the carve-out cannot widen by accident.
+#
+# Written "Rs", not the rupee sign: free session text reaches Wati as a URL query
+# parameter rather than a JSON body, so a non-ASCII character is percent-encoded
+# and depends on their decoder. The env override is stripped the same way, because
+# the value set in Railway predates this rule. See _PUNCT in qualifier.py.
+VILLA_PRICE_TEXT = os.environ.get(
+    "VILLA_PRICE_TEXT", "Rs 3.94 Cr").replace("₹", "Rs ").replace("  ", " ").strip()
+VILLA_FLOOR = int(os.environ.get("VILLA_FLOOR", "39400000"))     # Rs 3.94 crore
 
 # --- price and configuration qualify TOGETHER (owner, 2026-08-02) -------------
 #
