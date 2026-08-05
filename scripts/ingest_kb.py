@@ -40,6 +40,18 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# `railway run` injects the SERVICE's environment, in which DATABASE_URL points at
+# postgres.railway.internal -- a hostname that only resolves inside Railway's private
+# network. Run from a laptop it fails to resolve, which reads as "the database is
+# down" rather than "you are not on that network".
+#
+# DATABASE_PUBLIC_URL is the same database over the public proxy. Swapping here means
+# a maintenance script works from either side of the fence with no flag to remember.
+# quarantine_kb.py has carried this since 2026-08-03; the ingest did not, and found
+# out the first time it ran after a deploy.
+if os.environ.get("DATABASE_PUBLIC_URL"):
+    os.environ["DATABASE_URL"] = os.environ["DATABASE_PUBLIC_URL"]
+
 import config          # noqa: E402
 import db              # noqa: E402
 import kb              # noqa: E402
