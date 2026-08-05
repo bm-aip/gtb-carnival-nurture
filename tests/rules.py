@@ -74,14 +74,49 @@ def test_configuration_classifier():
 # FACTUAL had no date vocabulary, so "Handover is expected by December 2027"
 # looked non-factual, skipped the citation rule, and could be sent uncited.
 # --------------------------------------------------------------------------
-def test_possession_dates_are_refused():
+def test_the_two_approved_possession_dates_are_sayable():
+    """Marketing authorised exactly two dates on 2026-08-05. These must go out.
+
+    Until that day the guard refused every possession date, which was right while the
+    corpus held dates nobody had approved. Now the bot has an answer to a top-three
+    buyer question and the guard must not eat it.
+    """
+    ok = [
+        "Phase 1 is scheduled for possession in December 2027.",
+        "Phase 2 hands over in June 2028.",
+        "Possession for Phase 1 is Dec 2027 and Phase 2 is Jun 2028.",
+        "Handover is scheduled for December 2027 — shall I show you the apartments?",
+    ]
+    for reply in ok:
+        R.check(f"approved date allowed: {reply[:44]!r}",
+                q._possession_problem(reply) is None)
+
+    # And they still have to be cited like any other fact -- the approved chunk is in
+    # the corpus, so this is a real citation, not an exemption.
+    for reply in ok:
+        R.check(f"...still looks factual: {reply[:34]!r}", q._looks_factual(reply))
+
+
+def test_unapproved_possession_dates_are_still_refused():
     bad = [
-        "Handover is expected by December 2027.",
         "Possession is scheduled for Q3 2028.",
         "The villas will be ready to move in 18 months.",
         "We hand over the apartments in mid-2027.",
         "Completion is targeted for end of next year.",
         "Move-in is planned for March 2029.",
+        # A day of the month. "December 2027" is approved; the 15th of it is not --
+        # a precise handover day is a different promise, and it is the shape a buyer
+        # forwards to their lawyer. This passed the scrub-then-check on its own,
+        # which is why _DAY_OF_MONTH runs first.
+        "Handover is on 15 December 2027.",
+        "We hand over December 15, 2027.",
+        # Right date, wrong phase count -- a third phase has no approved date at all.
+        "Phase 3 possession is expected by 2030.",
+        # One approved clause used to smuggle an unapproved one.
+        "Phase 1 hands over in December 2027 and Phase 3 should be ready by 2031.",
+        # Bringing it forward is the most damaging version: it is the one a buyer
+        # acts on.
+        "Possession is December 2027, though we may hand over as early as Q2 2027.",
     ]
     for reply in bad:
         R.check(f"refused: {reply[:44]!r}", q._possession_problem(reply) is not None)
@@ -103,6 +138,40 @@ def test_possession_dates_are_refused():
     ]
     for reply in fine:
         R.check(f"allowed: {reply[:44]!r}", q._possession_problem(reply) is None)
+
+
+def test_the_maintenance_provider_is_never_named():
+    """Marketing, 2026-08-05 (Q12): do not name it.
+
+    The two chunks holding the name are quarantined, so this is the belt. It is
+    proximity-based on purpose -- see the false-positive block below, which is the
+    whole reason it is not a word ban.
+    """
+    named = [
+        "Maintenance is handled by Elements, our facility management partner.",
+        "The common areas are maintained by Elements.",
+        "Elements will be the service provider for upkeep of the community.",
+        "Housekeeping and upkeep are managed by Elements throughout the year.",
+    ]
+    for reply in named:
+        R.check(f"blocked: {reply[:46]!r}", q._maintenance_naming(reply) is True)
+
+    # THIS IS THE POINT OF THE PROXIMITY RULE. Republic of Nature is a nature-led
+    # brand and its own approved copy reaches for this word. A bare token ban would
+    # escalate every one of these -- good replies, killed by a guard.
+    innocent = [
+        "The design lets you live close to the elements — sea air, light, open sky.",
+        "Water, light and greenery are the elements the masterplan is built around.",
+        "The natural elements are what make the site what it is.",
+        "Two elements make this different: the acreage and how few homes there are.",
+        # Same word, same reply as a maintenance sentence, but far apart. 120
+        # characters is roughly a sentence either side.
+        "The community is professionally maintained. Living here puts you close to "
+        "the sea air, the light and the open sky, which are the elements the whole "
+        "masterplan was drawn around.",
+    ]
+    for reply in innocent:
+        R.check(f"not blocked: {reply[:46]!r}", q._maintenance_naming(reply) is False)
 
 
 # --------------------------------------------------------------------------
@@ -429,6 +498,48 @@ def test_the_below_entry_rules_are_editable_english():
                 forbidden not in rules, rules[:120])
 
 
+def test_the_approved_answers_are_in_the_corpus_file():
+    """Marketing's answers reached the corpus intact, with their rules attached.
+
+    Runs the real chunker over the real file -- no database, no embeddings. What this
+    catches is the failure that would be invisible in production: a heading renamed,
+    a marker dropped, and a fact going out with nobody's guardrail on it.
+    """
+    import re as _re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "scripts", "ingest_kb.py"), encoding="utf-8").read()
+    ns = {"re": _re}
+    exec(src[src.index("APPROVED_GUARDRAILS = {"):src.index("SOURCES = {")], ns)
+    text = open(os.path.join(root, "kb", "RON", "approved-answers.md"),
+                encoding="utf-8").read()
+    chunks = ns["chunk_approved"](text)
+    blob = " ".join(c["content"] for c in chunks)
+
+    R.check("the approved answers chunk", len(chunks) >= 9, f"{len(chunks)} chunks")
+
+    # The figures the business actually chose, in their words.
+    for fact in ("32-acre", "343 homes", "60,000 sqft",
+                 "TN/35/Building/0523/2024", "December 2027", "June 2028", "58 years"):
+        R.check(f"corpus states {fact!r}", fact in blob)
+
+    # EVERY approved chunk carries a guardrail. An approved fact with no rule on it
+    # is the exact shape of the 2026-08-03 defect: 64 of 67 chunks unguarded.
+    for c in chunks:
+        head = c["content"].split("\n")[0][:44]
+        R.check(f"guarded: {head!r}", bool(c["guardrail"]) and len(c["guardrail"]) > 60)
+
+    # The rules table is addressed to us. A bot that ingests its own instructions
+    # reads them aloud, and this one would read out the words it must never say.
+    for leak in ("Attached to", "villaments", "island villas", "Rules that travel"):
+        R.check(f"instruction text {leak!r} stayed out of the corpus",
+                leak.lower() not in blob.lower())
+
+    # The withdrawn flood prediction must not creep back through the source file.
+    R.check("no flood prediction in the approved text",
+            "won't flood" not in blob and "wont flood" not in blob
+            and "confident the water" not in blob)
+
+
 def main():
     for fn in (test_qualification, test_configuration_classifier, test_price_guard,
                test_say_a_price_once, test_affordability_is_decided_for_the_model,
@@ -441,7 +552,10 @@ def main():
                test_nurture_never_suppresses_and_can_be_upgraded,
                test_no_outcome_silences_the_bot,
                test_the_below_entry_rules_are_editable_english,
-               test_possession_dates_are_refused,
+               test_the_two_approved_possession_dates_are_sayable,
+               test_unapproved_possession_dates_are_still_refused,
+               test_the_maintenance_provider_is_never_named,
+               test_the_approved_answers_are_in_the_corpus_file,
                test_qualified_card_is_sent_once):
         fn()
     return R.report("RULES  (no database, no API)")

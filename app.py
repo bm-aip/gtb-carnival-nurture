@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-03-kb-quarantine"
+CODE_VERSION = "2026-08-05-approved-answers"
 import db
 import selldo
 import meta
