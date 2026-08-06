@@ -491,6 +491,35 @@ FRAMINGS = {
 # the wrong read.
 UNRECIPROCATED_LIMIT = int(os.environ.get("UNRECIPROCATED_LIMIT", "3"))
 
+# --- The buyer who will not name a budget (owner, 2026-08-06) ---
+#
+# "if someone is not giving budget - we should ask them - if they want to speak to
+# sales team and take it forward - that is good enough test of their seriousness".
+#
+# A buyer who gives purpose, location and configuration but keeps stepping around
+# the money question used to sit forever: budget is a HARD gate in
+# clears_the_bar(), so no budget meant no card, ever. Agreeing to meet a
+# salesperson is the owner's substitute signal -- harder to fake than a number
+# typed into WhatsApp in ten seconds.
+#
+# ⚠️ THIS DOES NOT LOOSEN THE BUDGET GATE. It is a separate exit with its own
+# outcome (`wants_sales`) and its own card headline, so the qualified queue still
+# means what it meant last week and the salesperson knows before dialling that
+# there is no figure. Anyone who STATES a low number is captured and nurtured
+# instead -- this path only opens when the number is genuinely absent.
+#
+# Two asks, not three: the budget gate has three framings, and the owner's read is
+# that a buyer who has stepped around it twice has already decided not to answer.
+SALES_OFFER_AFTER_ASKS = int(os.environ.get("SALES_OFFER_AFTER_ASKS", "2"))
+
+# ⚠️ SALES OWNS THIS WORDING, like FRAMINGS above. Chosen by the owner 2026-08-06
+# from three drafts: offer the call, not the site visit. The visit is a bigger ask
+# of somebody who is still guarding what they will spend.
+SALES_OFFER_FRAMING = os.environ.get(
+    "SALES_OFFER_FRAMING",
+    "would it be easier if someone from our team gave you a call and took this "
+    "forward")
+
 # --- Handoff (design §8, task 24) ---
 #
 # ⚠️ THE DESIGN SAYS "WhatsApp group ping". THE OFFICIAL WHATSAPP CLOUD API CANNOT

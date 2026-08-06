@@ -59,6 +59,39 @@ def unused_framings(conv, gate):
     return [f for i, f in enumerate(config.FRAMINGS.get(gate, [])) if i not in used]
 
 
+SALES_OFFER = "sales_offer"
+
+
+def sales_offer_state(conv):
+    """Where this conversation stands on "shall someone call you?".
+
+    Returns "due" (make the offer now), "answered" (it was made, read their
+    reply), or None (not relevant).
+
+    THE TRIGGER IS ARITHMETIC, NOT JUDGEMENT -- the same choice as the
+    affordability verdict and the below-entry nurture. The model is told when to
+    offer; it is not asked to decide whether the moment is right. What it does
+    judge is the yes or no that comes back, which is unavoidable and about as
+    simple as language classification gets.
+
+    Requires location AND configuration because the offer has to be worth taking:
+    a salesperson ringing someone we cannot even say wants a villa in Chennai is
+    the unqualified handover this whole system exists to prevent. Purpose is not
+    required -- it is the softest gate and its absence does not waste the call.
+    """
+    c = conv.get("checklist") or {}
+    if c.get("budget"):
+        return None
+    if not (c.get("location") and c.get("configuration")):
+        return None
+    asked = conv.get("asked") or {}
+    if asked.get(SALES_OFFER):
+        return "answered"
+    if len(asked.get("budget") or []) >= config.SALES_OFFER_AFTER_ASKS:
+        return "due"
+    return None
+
+
 def record_turn(conv, decision, gate_asked, framing_index):
     """Fold one turn's outcome into the conversation state.
 
@@ -92,10 +125,21 @@ def record_turn(conv, decision, gate_asked, framing_index):
         learned = True
 
     asked = {k: list(v) for k, v in (conv["asked"] or {}).items()}
-    if gate_asked and framing_index is not None:
+    if gate_asked == SALES_OFFER:
+        # Recorded WITHOUT a framing index, because there is only one wording and
+        # it comes from the owner. Its presence is the whole state: it says the
+        # offer has been made, so it is never made twice.
+        asked.setdefault(SALES_OFFER, [0])
+    elif gate_asked and framing_index is not None:
         asked.setdefault(gate_asked, [])
         if framing_index not in asked[gate_asked]:
             asked[gate_asked].append(framing_index)
+
+    # Answering the sales offer IS engagement, either way. Without this a buyer who
+    # politely says "not yet" would have that counted as another silence and could
+    # trip the no-answers card for replying to us.
+    if decision.get("action") in ("connect_sales", "nurture"):
+        learned = True
 
     # Reset on ANY new information, increment only when we asked and got nothing.
     if learned:
@@ -183,10 +227,12 @@ def clears_the_bar(conv):
 # the thing that buried them. Owner: "when the jump may happen in their thought
 # process - so give that room".
 #
-# Two transitions are NOT here and stay explicit, via upgrade_from, because each is
-# a specific "this lead got better" case rather than a general permission:
-#   qualified -> visit_booked   (handoff.py, the second success exit)
-#   escalated -> qualified      (handoff.py, a lead who has since cleared every gate)
+# These transitions are NOT here and stay explicit, via upgrade_from, because each
+# is a specific "this lead got better" case rather than a general permission:
+#   qualified    -> visit_booked   (handoff.py, the second success exit)
+#   escalated    -> qualified      (a lead who has since cleared every gate)
+#   wants_sales  -> qualified      (they agreed to a call, then named a budget too)
+#   wants_sales  -> visit_booked   (same person, now with a day in the diary)
 UPGRADABLE = ("nurture",)
 
 

@@ -78,7 +78,10 @@ def _facts(c):
         c.get("purpose") or "purpose not given",
         c.get("location") or "location not given",
         c.get("configuration") or "config not given",
-        _money(c.get("budget")),
+        # Spelled out when it is absent. On a card that exists precisely BECAUSE
+        # there is no figure, a bare "not given" sitting between two other facts
+        # is the one thing the salesperson must not have to work out.
+        _money(c.get("budget")) if c.get("budget") else "budget not given",
         c.get("timeline") or "timeline not given",
     ]
     if c.get("flags"):
@@ -106,6 +109,25 @@ def build_card(lead, conv, reason=""):
         _slot(lead.get("phone")),
         _slot(_facts(c)),
         _slot(action),
+    ]
+
+
+def build_sales_request(lead, conv):
+    """The five slots for a buyer who would not name a budget but said yes to a call.
+
+    THE HEADLINE IS THE POINT. This person has NOT cleared the budget gate and
+    never will on this card, so it must not look like a qualified lead. Sales
+    being surprised by who is in their queue is the failure that costs this system
+    its licence to hand anybody over -- so the missing figure is said twice, in
+    the headline and again in the facts line.
+    """
+    c = conv["checklist"] or {}
+    return [
+        _slot(f"Wants to speak to sales — {lead.get('project')}"),
+        _slot(lead.get("name"), "name not given"),
+        _slot(lead.get("phone")),
+        _slot(_facts(c)),
+        _slot("Asked twice, would not say. Said yes to speaking with the team."),
     ]
 
 
@@ -197,6 +219,22 @@ def route(lead, conv, decision):
     """
     action = decision.get("action")
 
+    # A "qualified" WITH NO BUDGET, from someone who has been offered the call, is
+    # describing exactly the person connect_sales exists for. Seen live: the buyer
+    # said "yes please, ask them to call me", the model reported qualified, and the
+    # arithmetic below correctly refused it -- so the lead cleared nothing, no card
+    # went anywhere, and the one signal we had asked for was thrown away.
+    #
+    # Relabel rather than reject. The bar itself does not move: they still reach
+    # sales on a card headed "Wants to speak to sales", with the missing figure
+    # said out loud. Rejecting was the safe-looking option and it lost the buyer.
+    if (action == "qualified"
+            and not (conv.get("checklist") or {}).get("budget")
+            and conversation.sales_offer_state(conv) == "answered"):
+        log.info("lead %s reported qualified with no budget after the call offer "
+                 "-- routing as wants_sales", lead["id"])
+        action = "connect_sales"
+
     # NURTURE. Deliberately the shortest branch in this file: no card, no
     # suppression, no state change on the lead. Recording it is the whole job -- it
     # tells the admin view who is one number away, and it lets the bot keep going.
@@ -237,6 +275,29 @@ def route(lead, conv, decision):
         conversation.mark_handed_off(conv["id"])
         return "escalated"
 
+    # THE THIRD SUCCESS EXIT (owner, 2026-08-06). A buyer who gives location and
+    # configuration but keeps stepping around the money, and then agrees to have
+    # somebody call them: "that is good enough test of their seriousness".
+    #
+    # Deliberately NOT routed through clears_the_bar. That function is the political
+    # mechanism the whole system rests on -- "sales receives nobody unqualified" --
+    # and quietly letting a missing budget through it would spend that credibility
+    # invisibly. This is a different door with a different label on the card.
+    if action == "connect_sales":
+        if conv.get("outcome") == "wants_sales" and conv.get("handoff_sent_at"):
+            db.x("UPDATE conversations SET updated_at=now() WHERE id=%s", (conv["id"],))
+            log.info("lead %s already sent as wants_sales; not re-notifying",
+                     lead["id"])
+            return "wants_sales"
+        conversation.set_outcome(conv["id"], "wants_sales")
+        db.x("UPDATE leads SET wa_state='wants_sales', updated_at=now() WHERE id=%s",
+             (lead["id"],))
+        _notify(config.STAFF_PHONES, build_sales_request(lead, conv), "wants_sales",
+                lead_id=lead["id"])
+        conversation.mark_handed_off(conv["id"])
+        log.info("lead %s -> WANTS SALES (no budget given)", lead["id"])
+        return "wants_sales"
+
     # THE SECOND SUCCESS EXIT. Owner 2026-08-01: "our job is to book the site visit
     # - not just qualified ... two exits - qualified without date, and booked site
     # visit - both are good to escalate."
@@ -246,8 +307,9 @@ def route(lead, conv, decision):
     # the `qualified` branch because such a conversation already carries that
     # outcome and would otherwise fall through to nothing.
     booked = (conv.get("checklist") or {}).get("visit_day")
-    if booked and conv.get("outcome") == "qualified":
-        conversation.set_outcome(conv["id"], "visit_booked", upgrade_from="qualified")
+    if booked and conv.get("outcome") in ("qualified", "wants_sales"):
+        conversation.set_outcome(conv["id"], "visit_booked",
+                                 upgrade_from=conv["outcome"])
         db.x("UPDATE leads SET wa_state='visit_booked', updated_at=now() WHERE id=%s",
              (lead["id"],))
         conv = conversation.get_or_create(lead)
@@ -283,7 +345,7 @@ def route(lead, conv, decision):
                      lead["id"])
             return prior
 
-        if prior == "escalated":
+        if prior in ("escalated", "wants_sales"):
             # A SECOND NAMED TRANSITION, for the same reason visit_booked exists:
             # this lead has got BETTER. They were escalated for something the bot
             # could not answer, have since cleared every gate, and `escalated` is
@@ -293,7 +355,13 @@ def route(lead, conv, decision):
             #
             # The escalation card was already sent, so nothing is lost by relabelling
             # -- the human who needed to know already knows.
-            conversation.set_outcome(conv["id"], "qualified", upgrade_from="escalated")
+            #
+            # `wants_sales` joins it 2026-08-06 for the same reason. That person
+            # reached sales WITHOUT a budget; if they later name one and it
+            # reaches, they are qualified in the ordinary sense and the column
+            # should say so. A second card is correct here -- it carries the
+            # figure the first one could not.
+            conversation.set_outcome(conv["id"], "qualified", upgrade_from=prior)
         else:
             conversation.set_outcome(conv["id"], "qualified")
 
@@ -314,10 +382,16 @@ def notify_human_flagged(lead, conv):
 
     Distinct from an escalation: the conversation is NOT handed over, and no
     outcome is set. This is a nudge, and it fires once per conversation.
+
+    The card used to be headed "Stalling". Owner, 2026-08-06: use something
+    simpler. It is also a fairer description — a buyer asking good questions while
+    dodging the checklist is engaged, not stalling. Only the words a human reads
+    changed; `msg_type` stays `handoff_stalling` so the delivery history in
+    message_log still compares against itself.
     """
     c = conv["checklist"] or {}
     slots = [
-        _slot(f"Stalling — {lead.get('project')}"),
+        _slot(f"No answers yet — {lead.get('project')}"),
         _slot(lead.get("name"), "name not given"),
         _slot(lead.get("phone")),
         _slot(_facts(c)),
