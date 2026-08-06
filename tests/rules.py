@@ -731,6 +731,125 @@ def test_no_rupee_sign_leaves_the_building():
             f"{len(carrying)} chunks still do")
 
 
+def test_the_account_move_did_not_cross_two_templates():
+    """The number stayed; the Facebook business under it changed 2026-08-06, so
+    every template was resubmitted with a `_newac` suffix.
+
+    All five names were compared against their predecessors on the live account:
+    body, variable count and buttons identical.
+
+    The case that matters is the crossing. The first attempt at the new visit
+    template carried the GHOST RE-OPENER's copy under the visit template's name.
+    Wiring T6 to that would have sent someone who has never replied "we were
+    talking about {{2}} — shall I pick up where we left off?", and would have
+    failed on arity too: the schedule sends T6 with no variables, that template
+    declares two. It was deleted and both were resubmitted correctly.
+
+    Names are asserted EXACTLY rather than by suffix, because the suffixes do not
+    agree -- three are `_newac`, the visit invitation is `_new_acc`. A rule like
+    "ends with _newac" would pass on a name Meta has never heard of.
+    """
+    T = config.KNOCK_TEMPLATES
+    expected = {
+        "t1_lifestyle":   "ron_nurture_01_lifestyle_newac",
+        "t2_location":    "ron_nurture_02_location_newac",
+        "t3_low_density": "ron_nurture_03_low_density_newac",
+        "t6_visit":       "ron_nurture_06_visit_new_acc",
+    }
+    for key, name in expected.items():
+        R.eq(f"{key} points at the approved new-business template", T[key], name)
+    R.eq("the re-opener moved too", config.REOPENER_TEMPLATE, "t7_reopener_newac")
+    R.check("the visit invitation and the re-opener are not the same template",
+            T["t6_visit"] != config.REOPENER_TEMPLATE
+            and "visit" not in config.REOPENER_TEMPLATE,
+            "one carries a stranger's greeting, the other continues a conversation")
+    R.check("no step is left on a pre-move name",
+            not any(v in ("ron_nurture_01_lifestyle", "ron_nurture_02_location",
+                          "ron_nurture_03_low_density", "ron_nurture_06_visit",
+                          "t7_reopener")
+                    for v in list(T.values()) + [config.REOPENER_TEMPLATE]),
+            "the old Facebook business no longer owns these")
+    R.check("every scheduled step still has a template",
+            all(k in T for _, k in knocks.KNOCK_SCHEDULE),
+            "a step with no template is a send that fails at day 25")
+    R.check("the variable count per template is still declared",
+            set(knocks.TEMPLATE_TAKES_NAME) == set(T),
+            "a wrong parameter count is a failed send, not a wrong-looking one")
+
+
+def test_staff_cards_go_by_template():
+    """The card that fetches a human must not depend on that human's 24h window.
+
+    Staff cards went as free session text until 2026-08-06, so they only reached a
+    salesperson who had messaged the business number in the previous 24 hours.
+    Salespeople do not do that. Measured over 30 days: 5 of 24 (21%) came back
+    "Ticket has been expired." -- four of them escalations, discarded silently.
+
+    The slot rules are the fragile part and they fail LOUDLY on WhatsApp's side but
+    SILENTLY on ours: a newline inside any parameter makes Meta reject the entire
+    message, so one salesperson with a two-line name in the CRM would take the card
+    down for everybody.
+    """
+    import handoff as h
+
+    lead = {"id": 91, "name": "Ramesh\nK", "phone": "919876543210",
+            "project": "Republic of Nature"}
+    booked = {"checklist": {"purpose": "buy to live", "location": "Adyar",
+                            "configuration": "3BHK", "budget": 39400000,
+                            "timeline": "3-6 months", "visit_day": "Saturday",
+                            "visit_time": "11am", "visit_venue": "site"}}
+    plain = {"checklist": {"purpose": "buy to live", "location": "Adyar",
+                           "configuration": "3BHK", "budget": 39400000}}
+
+    for name, slots in (
+            ("visit booked", h.build_card(lead, booked)),
+            ("qualified", h.build_card(lead, plain, "Cleared on budget")),
+            ("escalation", h.build_escalation(lead, plain,
+                                              {"internal_note": "asked about the beach",
+                                               "flags": ["wants_human"]})),
+    ):
+        R.eq(f"{name} card fills exactly five slots", len(slots), 5)
+        for i, v in enumerate(slots, 1):
+            R.check(f"{name} slot {i} is on one line", "\n" not in v and "\t" not in v,
+                    "a newline in ANY parameter makes WhatsApp reject the whole send")
+            R.check(f"{name} slot {i} is not empty", bool(v.strip()),
+                    "an empty parameter is rejected too")
+            R.check(f"{name} slot {i} carries no rupee sign", chr(0x20B9) not in v)
+
+    R.check("the headline says which card this is",
+            h.build_card(lead, booked)[0].startswith("SITE VISIT BOOKED"),
+            h.build_card(lead, booked)[0])
+    R.check("a booked visit still asks somebody to confirm the time",
+            "CONFIRM THE TIME" in h.build_card(lead, booked)[4])
+    R.check("budget reaches sales in the same currency as everything else",
+            "Rs 3.94 cr" in h.build_card(lead, plain)[3], h.build_card(lead, plain)[3])
+    R.check("the escalation reason survives into the action line",
+            "beach" in h.build_escalation(lead, plain, {"internal_note":
+                                                        "asked about the beach"})[4])
+
+    # -- the wiring, read as source: these are the parts a rename would break ---
+    src = open(os.path.join(os.path.dirname(__file__), "..", "handoff.py"),
+               encoding="utf-8").read()
+    R.check("every card is sent as the approved template",
+            src.count("template=config.STAFF_TEMPLATE") == 1
+            and "_notify(config.HANDOFF_PHONES" not in src
+            and "_notify(config.ESCALATION_PHONES" not in src,
+            "a card still going out as free text is a card that may not arrive")
+    R.check("a failed template still falls back to session text",
+            'f"handoff_{kind}_text"' in src,
+            "79% of cards got through the old way -- never send nothing instead")
+    R.check("the card is filed against the buyer, not the salesperson",
+            src.count("lead_id=lead[\"id\"]") == 4,
+            "message_log recorded lead_id NULL on all 24 cards, so the audit trail "
+            "went blank at the exact moment that decides who gets paid")
+    R.check("the staff template name is env-overridable",
+            config.STAFF_TEMPLATE and "WATI_TPL_STAFF" in
+            open(os.path.join(os.path.dirname(__file__), "..", "config.py"),
+                 encoding="utf-8").read(),
+            "the account move renames templates; that must not need a deploy")
+    R.check("staff recipients are one list", bool(config.STAFF_PHONES))
+
+
 def main():
     for fn in (test_qualification, test_configuration_classifier, test_price_guard,
                test_say_a_price_once, test_affordability_is_decided_for_the_model,
@@ -751,6 +870,8 @@ def main():
                test_the_voice_is_plain_and_the_examples_survive,
                test_the_approved_answers_are_in_the_corpus_file,
                test_no_rupee_sign_leaves_the_building,
+               test_the_account_move_did_not_cross_two_templates,
+               test_staff_cards_go_by_template,
                test_qualified_card_is_sent_once):
         fn()
     return R.report("RULES  (no database, no API)")

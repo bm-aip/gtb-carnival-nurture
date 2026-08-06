@@ -237,11 +237,30 @@ WATI_WEBHOOK_SECRET = os.environ.get("WATI_WEBHOOK_SECRET", "")
 # Verified against the live Wati account 2026-07-31: all four are APPROVED.
 # Defaults are the real approved names, so the knock engine needs no env config to
 # work; override only if a template is replaced.
+#
+# --- THE FACEBOOK BUSINESS MOVE, 2026-08-06 -------------------------------
+# The WhatsApp number did NOT change; the Facebook business it sits under did.
+# Templates are approved per business, so every one was resubmitted under a new
+# name. All four below were compared against their predecessors on the live
+# account -- body, variable count and quick-reply buttons identical -- so this is
+# a rename and nothing else. That check is not optional: a template whose
+# variable count differs is a send that fails outright, and the day-25 message
+# declares no variables at all.
+#
+# ⚠️ THE SUFFIX IS NOT CONSISTENT. Three are `_newac`, the visit invitation is
+# `_new_acc`. Do not "correct" one to match the others and do not pattern-match
+# on the suffix -- these are the exact strings Meta approved, and a name that is
+# nearly right is a name that does not exist.
+#
+# The first attempt at the visit template carried the GHOST RE-OPENER's copy
+# under the visit template's name. It has since been deleted and both were
+# resubmitted correctly; tests/rules.py keeps the two apart so the crossing
+# cannot come back quietly.
 KNOCK_TEMPLATES = {
-    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", "ron_nurture_01_lifestyle"),
-    "t2_location":    os.environ.get("WATI_TPL_T2", "ron_nurture_02_location"),
-    "t3_low_density": os.environ.get("WATI_TPL_T3", "ron_nurture_03_low_density"),
-    "t6_visit":       os.environ.get("WATI_TPL_T6", "ron_nurture_06_visit"),
+    "t1_lifestyle":   os.environ.get("WATI_TPL_T1", "ron_nurture_01_lifestyle_newac"),
+    "t2_location":    os.environ.get("WATI_TPL_T2", "ron_nurture_02_location_newac"),
+    "t3_low_density": os.environ.get("WATI_TPL_T3", "ron_nurture_03_low_density_newac"),
+    "t6_visit":       os.environ.get("WATI_TPL_T6", "ron_nurture_06_visit_new_acc"),
 }
 
 # Ghost re-opener (task 18/19). Someone who talked and then went quiet cannot be
@@ -253,7 +272,27 @@ KNOCK_TEMPLATES = {
 # UTILITY. Marketing carries the category gate that blocked ~44% of the carnival's
 # cold sends, so re-opener delivery will be worse than it needs to be. Worth
 # resubmitting as utility later -- it continues a conversation the customer started.
-REOPENER_TEMPLATE = os.environ.get("WATI_TPL_T7", "t7_reopener")
+#
+# Moved to the new Facebook business 2026-08-06 along with the knock set. Verified
+# on the live account: two variables (name, topic), no buttons, body unchanged.
+REOPENER_TEMPLATE = os.environ.get("WATI_TPL_T7", "t7_reopener_newac")
+
+# --- Staff card template (2026-08-06) ---
+# Staff notifications went out as free session text until this existed, so they
+# only delivered to a salesperson who happened to have messaged the business
+# number in the previous 24 hours. Measured over 30 days: 5 of 24 cards (21%)
+# were rejected by WhatsApp with "Ticket has been expired." -- four of them
+# escalations, where a buyer had asked for a human. Nothing reported it.
+#
+# A template ignores the 24h window; that is what templates are for. Submitted
+# as UTILITY: it is an internal operational notice, not marketing. If Meta
+# reclassifies it to MARKETING it still delivers outside the window -- marketing
+# only adds a per-recipient frequency cap, which a handful of cards a day to
+# four staff phones will not reach.
+#
+# Five numbered slots, and NONE of them may contain a newline: WhatsApp rejects
+# the whole send if a parameter carries one. handoff._slot() enforces that.
+STAFF_TEMPLATE = os.environ.get("WATI_TPL_STAFF", "ron_staff_card_01")
 
 # The `topic` variable is filled from a CLOSED LIST, never from the agent's own
 # words. An approved template plus a freely-generated variable is still a message we
@@ -488,6 +527,15 @@ def _phones(raw):
 
 HANDOFF_PHONES = _phones(os.environ.get("HANDOFF_PHONES", _DEFAULT_RECIPIENTS))
 ESCALATION_PHONES = _phones(os.environ.get("ESCALATION_PHONES", _DEFAULT_RECIPIENTS))
+
+# ONE STAFF LIST, not two. Owner 2026-08-06: the same people receive qualified
+# cards and escalations, so the split above was a distinction nobody was making.
+# The two old variables remain as the FALLBACK because they are already set in
+# Railway -- deleting them here would empty the recipient list on deploy and the
+# only symptom would be silence, which is exactly the failure mode this whole
+# change exists to remove.
+STAFF_PHONES = _phones(os.environ.get(
+    "STAFF_PHONES", ",".join(HANDOFF_PHONES + ESCALATION_PHONES)))
 
 # --- Budget gate (design §2) ---
 # The bot compares what a buyer says against these privately. It never quotes them,
