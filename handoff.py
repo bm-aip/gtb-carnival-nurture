@@ -41,84 +41,147 @@ CRORE = 10000000
 
 
 def _money(v):
-    """Internal-only. This never reaches a buyer — the card goes to sales."""
+    """Internal-only. This never reaches a buyer — the card goes to sales.
+
+    Written `Rs`, not the rupee sign, for the same reason every other outbound
+    figure is (PR #31): the symbol survives our database fine but depends on
+    somebody else's decoder once it leaves, and it breaks every CSV and console a
+    human reads it in afterwards. Staff cards never pass through the qualifier's
+    normaliser, so this is the only place that rule can be applied to them.
+    """
     if not isinstance(v, int) or v <= 0:
         return "not given"
-    return f"₹{v / CRORE:.2f} cr"
+    return f"Rs {v / CRORE:.2f} cr"
+
+
+def _slot(text, fallback="—"):
+    """One template parameter. Flattened, because WhatsApp will not take it otherwise.
+
+    A newline, a tab, or four consecutive spaces inside a parameter makes Meta
+    reject the ENTIRE send — not the character, the message. Empty values are
+    rejected too. So a card that renders perfectly in a test and carries one
+    stray line break in a salesperson's name delivers nothing at all, which is
+    the failure we are here to end rather than reshape.
+    """
+    s = " ".join(str(text or "").split())
+    return s if s else fallback
+
+
+def _facts(c):
+    """The one-line summary that fills slot 4. Order is decision order.
+
+    Purpose and budget first because they are what decides call-now-or-later;
+    the owner asked for a doorbell, not a lead page. The full conversation is in
+    the Wati Team Inbox, which the template's closing line points at.
+    """
+    bits = [
+        c.get("purpose") or "purpose not given",
+        c.get("location") or "location not given",
+        c.get("configuration") or "config not given",
+        _money(c.get("budget")),
+        c.get("timeline") or "timeline not given",
+    ]
+    if c.get("flags"):
+        bits.append("flags: " + ", ".join(c["flags"]))
+    return " · ".join(bits)
 
 
 def build_card(lead, conv, reason=""):
-    """What a salesperson needs to make the call, and nothing else.
+    """The five template slots for a qualified lead or a booked visit.
 
-    Deliberately not a lead page: the owner chose a message because a page is
-    something you have to remember to go and look at.
+    Returns a list, not a string: this is a template now, and each slot is filled
+    separately. See config.STAFF_TEMPLATE for why.
     """
     c = conv["checklist"] or {}
-    lines = [
-        (f"*SITE VISIT BOOKED — {lead.get('project')}*" if c.get("visit_day")
-         else f"*Qualified lead — {lead.get('project')}*"),
-        f"Name: {lead.get('name') or 'not given'}",
-        f"Phone: {lead.get('phone')}",
-        "",
-        f"Purpose: {c.get('purpose') or 'not given'}",
-        f"Location: {c.get('location') or 'not given'}",
-        f"Configuration: {c.get('configuration') or 'not given'}",
-        f"Budget: {_money(c.get('budget'))}",
-        f"Timeline: {c.get('timeline') or 'not given'}",
+    booked = c.get("visit_day")
+    if booked:
+        action = (f"{booked} {c.get('visit_time') or ''} at "
+                  f"{c.get('visit_venue') or 'site'} — CONFIRM THE TIME")
+    else:
+        action = reason or "Cleared every gate — call today."
+    return [
+        _slot(f"{'SITE VISIT BOOKED' if booked else 'Qualified lead'} — "
+              f"{lead.get('project')}"),
+        _slot(lead.get("name"), "name not given"),
+        _slot(lead.get("phone")),
+        _slot(_facts(c)),
+        _slot(action),
     ]
-    if c.get("visit_day"):
-        lines.append(f"Visit: {c.get('visit_day')} {c.get('visit_time') or ''} "
-                     f"at {c.get('visit_venue') or 'site'} — CONFIRM THE TIME")
-    if c.get("flags"):
-        lines.append(f"Flags: {', '.join(c['flags'])}")
-    if reason:
-        lines.append(f"\n{reason}")
-    lines.append(f"\nSource: {lead.get('selldo_status') or 'unknown'}")
-    return "\n".join(lines)
 
 
 def build_escalation(lead, conv, decision):
-    c = conv["checklist"] or {}
-    return "\n".join([
-        f"*Escalation — {lead.get('project')}*",
-        f"Phone: {lead.get('phone')}",
-        f"Reason: {decision.get('internal_note') or 'bot could not answer'}",
-        f"Flags: {', '.join(decision.get('flags') or []) or 'none'}",
-        "",
-        f"Known so far — purpose: {c.get('purpose') or '?'} · "
-        f"location: {c.get('location') or '?'} · "
-        f"config: {c.get('configuration') or '?'} · "
-        f"budget: {_money(c.get('budget'))}",
-        "",
-        "The bot has stopped and told them a person will come back.",
-    ])
+    """The five template slots for an escalation. Same shape, different headline."""
+    c = dict(conv["checklist"] or {})
+    # The decision's own flags matter more here than anywhere else -- they are the
+    # reason a human is being called -- so they ride in the same facts line rather
+    # than being dropped for the sake of a tidier slot.
+    c["flags"] = list(c.get("flags") or []) + list(decision.get("flags") or [])
+    return [
+        _slot(f"Escalation — {lead.get('project')}"),
+        _slot(lead.get("name"), "name not given"),
+        _slot(lead.get("phone")),
+        _slot(_facts(c)),
+        _slot(f"{decision.get('internal_note') or 'the bot could not answer'}. "
+              f"It has told them a person will come back."),
+    ]
 
 
-def _notify(phones, body, kind):
+def _readable(slots):
+    """The card as a human reads it. Goes to message_log, never to WhatsApp.
+
+    A template send carries only five loose parameter values, so without this the
+    audit trail would record that a qualified card went out and not what it said.
+    """
+    return "\n".join([slots[0], f"{slots[1]} — {slots[2]}", slots[3], slots[4]])
+
+
+def _notify(phones, slots, kind, lead_id=None):
     """Send a card to every recipient. Same send gate as everything else.
 
     A notification to our own salesperson is still an outbound WhatsApp message —
     it is not exempt from the master switch, and pretending otherwise would put a
     second door in a system whose whole design is one door.
 
-    Each recipient is attempted independently: one salesperson whose 24h window is
-    shut must not stop the other from hearing about a qualified lead.
+    Each recipient is attempted independently: one bad number must not stop the
+    other from hearing about a qualified lead.
 
-    ⚠️ THE 24-HOUR WINDOW APPLIES TO STAFF TOO. Free session text only delivers if
-    that person messaged the business number within the last 24 hours. A card sent
-    to a quiet handset is accepted by us and dropped by WhatsApp — silently, from
-    our side. Watch `message_delivery` (task 5) for it; the durable fix is a
-    utility template, noted in docs/BUILD-PLAN.md.
+    ⚠️ THE 24-HOUR WINDOW USED TO EAT THESE. Until 2026-08-06 the card went as
+    free session text, which WhatsApp delivers only to someone who messaged the
+    business number in the previous 24 hours. Salespeople do not message their own
+    business number, so delivery was luck: 5 of 24 cards over 30 days came back
+    "Ticket has been expired." — four of them escalations, where a buyer had
+    asked for a human and the request was thrown away with nothing reporting it.
+    An approved template ignores the window, which is what templates are for.
+
+    THE FREE-TEXT FALLBACK IS DELIBERATE. If the template send fails — it is not
+    approved yet, the name changed with the account move, Meta rejected a
+    parameter — we retry the old way rather than give up. That path is unreliable,
+    but it is the path that delivered 79% of cards last month, so falling back to
+    it can only ever be better than sending nothing. Both attempts are logged, so
+    "the template is failing" stays visible instead of being papered over.
     """
     if not phones:
         log.warning("%s card not sent: no destination configured", kind)
         return False
+    body = _readable(slots)
     ok_any = False
     for phone in phones:
+        # `id` is the STAFF pseudo-lead's, and stays None on purpose: sequencer
+        # bumps send_attempts and can suppress by that id, and a salesperson's dead
+        # handset must never mark the BUYER invalid. `log_lead_id` carries who the
+        # card is about, which is the thing the audit trail was missing.
         pseudo = {"id": None, "phone": phone, "project": None, "send_attempts": 0}
         # msg_type is NOT prefixed 'knock' -- a card to our own team must never
         # consume the buyer-facing messaging tier or count toward anyone's fatigue.
-        if sequencer._send(pseudo, f"handoff_{kind}", body=body):
+        ok = sequencer._send(pseudo, f"handoff_{kind}", body=body,
+                             template=config.STAFF_TEMPLATE, params=slots,
+                             log_lead_id=lead_id)
+        if not ok:
+            log.warning("%s card to %s: template send failed, trying session text",
+                        kind, phone)
+            ok = sequencer._send(pseudo, f"handoff_{kind}_text", body=body,
+                                 log_lead_id=lead_id)
+        if ok:
             ok_any = True
         else:
             log.warning("%s card to %s not delivered", kind, phone)
@@ -169,8 +232,8 @@ def route(lead, conv, decision):
                      lead["id"])
             return "escalated"
         conversation.set_outcome(conv["id"], "escalated")
-        _notify(config.ESCALATION_PHONES, build_escalation(lead, conv, decision),
-                "escalation")
+        _notify(config.STAFF_PHONES, build_escalation(lead, conv, decision),
+                "escalation", lead_id=lead["id"])
         conversation.mark_handed_off(conv["id"])
         return "escalated"
 
@@ -188,8 +251,8 @@ def route(lead, conv, decision):
         db.x("UPDATE leads SET wa_state='visit_booked', updated_at=now() WHERE id=%s",
              (lead["id"],))
         conv = conversation.get_or_create(lead)
-        _notify(config.HANDOFF_PHONES, build_card(lead, conv, "SITE VISIT BOOKED"),
-                "visit_booked")
+        _notify(config.STAFF_PHONES, build_card(lead, conv, "SITE VISIT BOOKED"),
+                "visit_booked", lead_id=lead["id"])
         conversation.mark_handed_off(conv["id"])
         log.info("lead %s -> VISIT BOOKED (%s)", lead["id"], booked)
         return "visit_booked"
@@ -236,7 +299,8 @@ def route(lead, conv, decision):
 
         db.x("UPDATE leads SET wa_state='qualified', updated_at=now() WHERE id=%s",
              (lead["id"],))
-        _notify(config.HANDOFF_PHONES, build_card(lead, conv, reason), "qualified")
+        _notify(config.STAFF_PHONES, build_card(lead, conv, reason), "qualified",
+                lead_id=lead["id"])
         conversation.mark_handed_off(conv["id"])
         log.info("lead %s -> QUALIFIED%s", lead["id"],
                  " (was escalated)" if prior == "escalated" else "")
@@ -252,15 +316,12 @@ def notify_human_flagged(lead, conv):
     outcome is set. This is a nudge, and it fires once per conversation.
     """
     c = conv["checklist"] or {}
-    body = "\n".join([
-        f"*Stalling — {lead.get('project')}*",
-        f"Phone: {lead.get('phone')}",
-        f"Asked {conv['unreciprocated']} times with no answer. The bot is still "
-        f"replying to their questions.",
-        "",
-        f"Known — purpose: {c.get('purpose') or '?'} · "
-        f"location: {c.get('location') or '?'} · "
-        f"config: {c.get('configuration') or '?'} · "
-        f"budget: {_money(c.get('budget'))}",
-    ])
-    _notify(config.ESCALATION_PHONES, body, "stalling")
+    slots = [
+        _slot(f"Stalling — {lead.get('project')}"),
+        _slot(lead.get("name"), "name not given"),
+        _slot(lead.get("phone")),
+        _slot(_facts(c)),
+        _slot(f"Asked {conv['unreciprocated']} times with no answer. The bot is "
+              f"still replying to their questions."),
+    ]
+    _notify(config.STAFF_PHONES, slots, "stalling", lead_id=lead["id"])

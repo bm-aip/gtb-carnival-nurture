@@ -91,14 +91,24 @@ def daily_budget():
     return max(0, left)
 
 
-def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
+def _send(lead, msg_type, body=None, template=None, params=None, sources=None,
+          log_lead_id=None):
     """THE one door. Every outbound message in the system leaves through here.
 
-    Exactly one of:
+    What goes on the wire:
       * `template` + `params` -> approved WhatsApp template. Required for any
         cold/proactive send; WhatsApp forbids cold free text.
-      * `body`                -> free session text. Only delivers inside the 24h
+      * `body` alone          -> free session text. Only delivers inside the 24h
         window the customer opened by messaging us.
+
+    Passing BOTH sends the template and files `body` as the readable record of it.
+    A template send is five loose parameter values, so without that the log would
+    say a message went out and not what it said. Used by the staff handoff card.
+
+    `log_lead_id` decides WHO THE MESSAGE IS ABOUT, which is not always who it is
+    sent to. A staff card is addressed to a salesperson but concerns a buyer; it
+    must be filed under the buyer, while `lead["id"]` stays the recipient's so the
+    failure handling below cannot suppress the wrong person.
 
     The template NAME is now passed in by the caller rather than looked up from a
     hardcoded map. The old code resolved `msg_type` against six carnival template
@@ -114,7 +124,8 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
     if not allowed:
         # Logged, not silently dropped: a blocked send is a fact worth counting.
         # ok=False keeps it out of the rate/tier arithmetic, which sums ok=TRUE.
-        db.log_msg(lead["id"], "out", msg_type, body, ok=False, detail=f"blocked:{reason}")
+        db.log_msg(log_lead_id or lead["id"], "out", msg_type, body, ok=False,
+                   detail=f"blocked:{reason}")
         return False
     if not wati.rate_ok():
         db.set_setting("rate_capped_at", now_ist().isoformat())
@@ -139,7 +150,7 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None):
     # Store the provider's message id alongside the send so a delivery callback
     # (task 5) can be joined back to the message that caused it. Best-effort: if
     # the id is absent the callback still lands, matched on phone instead.
-    db.log_msg(lead["id"], "out", msg_type, body, ok=ok, detail=detail,
+    db.log_msg(log_lead_id or lead["id"], "out", msg_type, body, ok=ok, detail=detail,
                provider_msg_id=wati.extract_msg_id(detail),
                fail_class=fail_class, sources=sources)
 
