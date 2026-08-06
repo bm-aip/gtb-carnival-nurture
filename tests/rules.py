@@ -26,6 +26,11 @@ R = Results()
 CR = 10000000
 
 
+def q_src():
+    return open(os.path.join(os.path.dirname(__file__), "..", "qualifier.py"),
+                encoding="utf-8").read()
+
+
 # --------------------------------------------------------------------------
 # Configuration and price qualify TOGETHER
 # --------------------------------------------------------------------------
@@ -189,7 +194,8 @@ def test_qualified_card_is_sent_once():
             "no re-fire guard: the bot keeps talking after qualifying, so the model "
             "can report `qualified` again and sales gets the same card every turn")
     R.check("...and relabels a previously-escalated lead instead of re-firing",
-            'upgrade_from="escalated"' in branch,
+            'prior in ("escalated", "wants_sales")' in branch
+            and "upgrade_from=prior" in branch,
             "escalated is write-once, so without this the outcome column keeps "
             "saying escalated and every later turn falls through and sends a card")
     R.check("escalated -> qualified is a NAMED transition, not a general permission",
@@ -450,10 +456,22 @@ def test_below_entry_is_nurtured_not_killed():
              q._enforce(d, (), {"id": 1, "project": "RON"}, message="", history=[])["action"],
              better)
 
-    # The model must never pick this itself -- it is arithmetic, not judgement.
+    # BELOW-ENTRY nurture is arithmetic and the model never gets a say in it --
+    # that is what the four cases above prove, and it is unchanged.
+    #
+    # From 2026-08-06 the model MAY report nurture, for exactly one situation: a
+    # buyer declining the offer of a call. Without it the decline could not be
+    # recorded at all -- the model returned "answer" with the word nurture in its
+    # note, the outcome column stayed empty, and /admin/nurture could not see the
+    # people it exists to show. Observed live before the enum changed.
     actions = q.DECISION_SCHEMA["properties"]["action"]["enum"]
-    R.check("nurture is NOT offered to the model", "nurture" not in actions,
+    R.check("nurture is available for the declined-call case", "nurture" in actions,
             f"schema enum is {actions}")
+    R.check("...and the model is only invited to use it there",
+            q_src().count("action='nurture'") == 1
+            and "DECLINED" in q_src(),
+            "nurture must not become a general permission; below-entry stays "
+            "arithmetic")
 
 
 def test_nurture_never_suppresses_and_can_be_upgraded():
@@ -777,6 +795,91 @@ def test_the_account_move_did_not_cross_two_templates():
             "a wrong parameter count is a failed send, not a wrong-looking one")
 
 
+def test_the_budget_refuser_can_still_reach_sales():
+    """Owner, 2026-08-06: "if someone is not giving budget - we should ask them - if
+    they want to speak to sales team and take it forward - that is good enough test
+    of their seriousness".
+
+    The danger in this feature is not that it fails to fire. It is that it fires as
+    a QUALIFIED lead, because that would quietly spend the one promise the system
+    rests on -- sales receives nobody unqualified. So the cases below check the
+    trigger, and then check just as hard that the budget gate did not move.
+    """
+    import conversation as c
+
+    def conv(checklist, asked, outcome=None):
+        return {"id": -1, "checklist": checklist, "asked": asked, "outcome": outcome,
+                "unreciprocated": 0}
+
+    known = {"location": "Adyar", "configuration": "3BHK"}
+
+    R.eq("one budget ask is not enough",
+         c.sales_offer_state(conv(known, {"budget": [0]})), None)
+    R.eq("two is", c.sales_offer_state(conv(known, {"budget": [0, 1]})), "due")
+    R.eq("no location, no offer -- the call would be worthless",
+         c.sales_offer_state(conv({"configuration": "3BHK"}, {"budget": [0, 1]})), None)
+    R.eq("no configuration, no offer",
+         c.sales_offer_state(conv({"location": "Adyar"}, {"budget": [0, 1]})), None)
+    R.eq("a budget on file means this never runs",
+         c.sales_offer_state(conv(dict(known, budget=21000000), {"budget": [0, 1]})),
+         None)
+    R.eq("once offered, we read the answer instead of offering again",
+         c.sales_offer_state(conv(known, {"budget": [0, 1], "sales_offer": [0]})),
+         "answered")
+
+    # -- THE GATE DID NOT MOVE --------------------------------------------------
+    R.check("no budget still fails the bar",
+            cv.clears_the_bar({"checklist": known})[0] is False,
+            "a missing budget must never become a passing budget")
+    R.eq("...and says why", cv.clears_the_bar({"checklist": known})[1],
+         "budget not captured")
+
+    # -- the card cannot be mistaken for a qualified lead -----------------------
+    import handoff as h
+    lead = {"id": 91, "name": "Ramesh K", "phone": "919876543210",
+            "project": "Republic of Nature"}
+    slots = h.build_sales_request(lead, conv(dict(known, purpose="buy to live"), {}))
+    R.check("the headline says they only agreed to talk",
+            slots[0].startswith("Wants to speak to sales"), slots[0])
+    R.check("the missing figure is spelled out, not left blank",
+            "budget not given" in slots[3], slots[3])
+    R.check("no slot claims they are qualified",
+            not any("ualified" in s for s in slots), slots)
+    for i, v in enumerate(slots, 1):
+        R.check(f"sales-request slot {i} is one line and filled",
+                "\n" not in v and bool(v.strip()))
+
+    # -- the wiring ------------------------------------------------------------
+    src = open(os.path.join(os.path.dirname(__file__), "..", "handoff.py"),
+               encoding="utf-8").read()
+    branch = src.split('if action == "connect_sales":')[1].split("if action ==")[0]
+    R.check("this exit does NOT go through clears_the_bar",
+            "clears_the_bar" not in branch,
+            "routing it through the bar would either fail always or loosen the bar")
+    R.check("...and it still only fires once",
+            "handoff_sent_at" in branch,
+            "a repeated card trains sales to ignore the channel")
+    R.check("a wants_sales lead who later names a budget can still qualify",
+            'prior in ("escalated", "wants_sales")' in src)
+    R.check("connect_sales is a choice the model is allowed to make",
+            "connect_sales" in q.DECISION_SCHEMA["properties"]["action"]["enum"])
+    R.check("a 'qualified' with no budget after the offer is relabelled, not binned",
+            'action = "connect_sales"' in src,
+            "seen live: the buyer said yes, the model said qualified, the bar "
+            "correctly refused it, and the accepted call was thrown away")
+    R.check("the offer wording belongs to sales, not to code",
+            "SALES_OFFER_FRAMING" in open(
+                os.path.join(os.path.dirname(__file__), "..", "config.py"),
+                encoding="utf-8").read())
+    R.check("declining the offer counts as engagement",
+            '("connect_sales", "nurture")' in open(
+                os.path.join(os.path.dirname(__file__), "..", "conversation.py"),
+                encoding="utf-8").read(),
+            "otherwise a polite 'not yet' is counted as another silence")
+    R.check("the card nobody understood is not called stalling any more",
+            "Stalling —" not in src and "No answers yet" in src)
+
+
 def test_staff_cards_go_by_template():
     """The card that fetches a human must not depend on that human's 24h window.
 
@@ -839,7 +942,7 @@ def test_staff_cards_go_by_template():
             'f"handoff_{kind}_text"' in src,
             "79% of cards got through the old way -- never send nothing instead")
     R.check("the card is filed against the buyer, not the salesperson",
-            src.count("lead_id=lead[\"id\"]") == 4,
+            src.count("lead_id=lead[\"id\"]") == 5,
             "message_log recorded lead_id NULL on all 24 cards, so the audit trail "
             "went blank at the exact moment that decides who gets paid")
     R.check("the staff template name is env-overridable",
@@ -871,6 +974,7 @@ def main():
                test_the_approved_answers_are_in_the_corpus_file,
                test_no_rupee_sign_leaves_the_building,
                test_the_account_move_did_not_cross_two_templates,
+               test_the_budget_refuser_can_still_reach_sales,
                test_staff_cards_go_by_template,
                test_qualified_card_is_sent_once):
         fn()

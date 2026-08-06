@@ -49,7 +49,11 @@ def _fold(conv, decision):
         checklist[key] = val
     asked = {k: list(v) for k, v in conv["asked"].items()}
     gate, fr = decision.get("gate_asked"), decision.get("framing_used")
-    if gate and fr is not None:
+    # The sales offer has one wording and no framing index, so it is recorded on
+    # the gate alone -- mirroring record_turn, where its presence is the state.
+    if gate == cv.SALES_OFFER:
+        asked.setdefault(cv.SALES_OFFER, [0])
+    elif gate and fr is not None:
         asked.setdefault(gate, [])
         if fr not in asked[gate]:
             asked[gate].append(fr)
@@ -220,6 +224,59 @@ SCENARIOS = [
         ],
     },
     {
+        "name": "the budget refuser — offered a call, and says yes",
+        "why": ("Owner, 2026-08-06: agreeing to speak to sales is a good enough test "
+                "of seriousness when someone will not name a number. This is the only "
+                "way to know the model actually MAKES the offer at the right moment "
+                "and reads the yes -- the rule cases can only prove the trigger."),
+        # THE FIRST TURN MUST CLEAR THREE GATES. Gates are asked in a locked order,
+        # purpose -> location -> configuration -> budget, so a buyer who never says
+        # what they want or where never REACHES the budget question and this feature
+        # can never fire. The first version of this scenario got that wrong and
+        # proved nothing; the failure looked like a broken trigger.
+        "turns": [
+            {"say": "hi, want a 3BHK to live in full time, looking around ECR",
+             "forbid": [r"per sq"]},
+            # First budget ask, stepped around.
+            {"say": "what are the amenities like?"},
+            # Second. Still nothing -- and after this the offer is due.
+            {"say": "I'd rather not discuss numbers over whatsapp"},
+            {"say": "how far is it from the beach?",
+             # Never a third budget ask once the offer is due.
+             "forbid": [r"your budget", r"how much.{0,20}(spend|looking)"]},
+            {"say": "yes please, ask them to call me",
+             "action_is": "connect_sales",
+             # And still no budget, which is the entire point.
+             "qualifies": False},
+        ],
+        # The owner chose the CALL over the site visit: a visit is a bigger ask of
+        # someone still guarding what they will spend. Left to itself the model
+        # reached for the visit instead, which is why the instruction says so twice.
+        "require_anywhere": [r"(call|speak to|get in touch)",
+                             r"(someone|colleague|a member) (from |of )?(our )?team|"
+                             r"our team|a colleague"],
+    },
+    {
+        "name": "the budget refuser — offered a call, and says no",
+        "why": ("A no must not close them. It goes to nurture, the one reversible "
+                "outcome, so a budget arriving three messages later still qualifies "
+                "them the ordinary way."),
+        # Seeded at the exact moment the offer falls due: three gates known, budget
+        # asked twice, nothing given.
+        "start": {"checklist": {"purpose": "live in full time", "location": "ECR",
+                                "configuration": "3BHK"},
+                  "asked": {"budget": [0, 1]}},
+        "turns": [
+            {"say": "and is it gated?"},
+            {"say": "no, not yet. still just looking",
+             "action_not": "dead",
+             # Nothing may suggest the conversation is over.
+             "forbid": [r"all the best|good luck|do reach out when|thank you for your "
+                        r"time"]},
+        ],
+        "require_anywhere": [r"(call|speak to|get in touch)"],
+    },
+    {
         "name": "refusals — no per-square-foot rate, no Tuesday visit",
         "turns": [
             {"say": "what is the per square foot rate?", "forbid": [r"per sq"]},
@@ -230,9 +287,20 @@ SCENARIOS = [
 
 
 def run_scenario(sc, verbose):
+    # A scenario may START mid-conversation. Reaching a late state organically
+    # costs several turns and depends on the model taking one exact route: the
+    # "declines the call" scenario failed once because the bot spent a turn
+    # escalating and so never got its second budget ask. That tests the model's
+    # mood, not the rule. Seeding the state tests the thing the scenario is named
+    # after, and the organic path is still covered by the scenario above it.
     conv = {"id": -1, "checklist": {}, "asked": {}, "unreciprocated": 0,
-            "outcome": None, "brand_id": "RON"}
+            "outcome": None, "brand_id": "RON", **(sc.get("start") or {})}
     history = []
+    # Some things must happen, but not on a turn we can name in advance. The bot
+    # decides when it has answered enough to ask for something, so pinning "offer
+    # them a call" to turn 4 tests the model's pacing rather than the rule. These
+    # are asserted over the whole conversation instead.
+    said_all = []
     print(f"\n  {sc['name']}")
     if sc.get("why"):
         print(f"    ({sc['why']})")
@@ -244,6 +312,7 @@ def run_scenario(sc, verbose):
             R.check(f"{sc['name']} turn {i}", False, f"run_turn raised: {e}")
             return
         reply = d.get("reply") or ""
+        said_all.append(reply)
         history.append({"direction": "in", "body": said})
         history.append({"direction": "out", "body": reply})
         conv = _fold(conv, d)
@@ -264,10 +333,19 @@ def run_scenario(sc, verbose):
             R.check(f"{sc['name']} t{i}: action must not be {turn['action_not']}",
                     d.get("action") != turn["action_not"],
                     f"action={d.get('action')} note={d.get('internal_note')}")
+        if "action_is" in turn:
+            R.check(f"{sc['name']} t{i}: action must be {turn['action_is']}",
+                    d.get("action") == turn["action_is"],
+                    f"action={d.get('action')} note={d.get('internal_note')}")
         if "qualifies" in turn:
             got = cv.clears_the_bar(conv)
             R.check(f"{sc['name']} t{i}: qualifies == {turn['qualifies']}",
                     got[0] == turn["qualifies"], f"{got} checklist={conv['checklist']}")
+
+    whole = "\n".join(said_all)
+    for pat in sc.get("require_anywhere", []):
+        R.check(f"{sc['name']}: somewhere in the conversation, /{pat}/",
+                bool(re.search(pat, whole, re.I)), whole[-400:])
 
 
 def main():

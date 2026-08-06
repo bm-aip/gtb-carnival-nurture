@@ -62,8 +62,17 @@ DECISION_SCHEMA = {
     "properties": {
         "reply": {"type": "string",
                   "description": "The WhatsApp message to send. Plain text."},
+        # `nurture` is in this list for ONE case only: a buyer who declines the
+        # offer of a call. Everywhere else nurture stays arithmetic, decided in
+        # _enforce from the budget, and the rulebook never invites the model to
+        # choose it. Without it here the model has no way to report the decline --
+        # it returns "answer" with the word nurture in its note, the outcome column
+        # stays empty, and the /admin/nurture view cannot see the very people it
+        # exists to show. A wrong nurture is also the cheapest mistake available:
+        # it is the one provisional outcome, suppresses nothing, and upgrades.
         "action": {"type": "string",
-                   "enum": ["answer", "ask", "escalate", "qualified", "dead"]},
+                   "enum": ["answer", "ask", "escalate", "qualified", "dead",
+                            "connect_sales", "nurture"]},
         "sources": {"type": "array", "items": {"type": "integer"},
                     "description": "chunk ids that support any factual claim in "
                                    "the reply. Empty only for pure greetings or "
@@ -93,7 +102,7 @@ DECISION_SCHEMA = {
                           "description": "one line for the salesperson. Never sent."},
         "gate_asked": {"anyOf": [{"type": "string",
                                   "enum": ["purpose", "location", "configuration",
-                                           "budget"]},
+                                           "budget", "sales_offer"]},
                                  {"type": "null"}],
                        "description": "which gate you asked about in this reply, "
                                       "if any"},
@@ -611,6 +620,34 @@ def _ladder(conv):
     lines = ["ALREADY KNOWN (never ask for these again):"]
     lines.append("  " + (", ".join(f"{k}={v}" for k, v in known.items()) or "nothing yet"))
     lines.extend(_affordability_verdict(known))
+
+    # THE BUYER WHO WILL NOT NAME A BUDGET. Decided in code, not by the model --
+    # see conversation.sales_offer_state. The model is told the moment has arrived
+    # and given the owner's wording; it never picks the moment itself.
+    offer = convmod.sales_offer_state(conv)
+    if offer == "due":
+        lines.append(
+            "\nTHEY HAVE STEPPED AROUND THE BUDGET QUESTION TWICE. Do NOT ask for "
+            "it again this turn. Answer whatever they asked, then offer them A "
+            "PHONE CALL FROM OUR TEAM, in these words in spirit:\n"
+            f"  {config.SALES_OFFER_FRAMING}\n"
+            "It must be the CALL. Not a site visit -- a visit is a far bigger ask "
+            "of somebody who is still guarding what they will spend, and offering "
+            "it here loses the smaller yes we can actually get. Set "
+            "gate_asked='sales_offer'. Keep it light: they are allowed to say no, "
+            "and if they do we simply carry on.")
+        return "\n".join(lines)
+    if offer == "answered":
+        lines.append(
+            "\nYOU HAVE ALREADY OFFERED TO HAVE SOMEONE CALL THEM, and they still "
+            "have not named a budget. Do NOT offer again and do NOT ask for the "
+            "budget again.\n"
+            "  If they have now ACCEPTED that offer, set action='connect_sales'.\n"
+            "  If they have DECLINED it, set action='nurture' and simply carry on "
+            "answering their questions warmly.\n"
+            "  If they said neither, carry on as normal.")
+        return "\n".join(lines)
+
     if not gate:
         lines.append("The checklist is COMPLETE. Do not ask another gate question.")
         return "\n".join(lines)
