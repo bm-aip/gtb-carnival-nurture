@@ -252,9 +252,13 @@ SCENARIOS = [
         # The owner chose the CALL over the site visit: a visit is a bigger ask of
         # someone still guarding what they will spend. Left to itself the model
         # reached for the visit instead, which is why the instruction says so twice.
+        # "the team" as well as "our team": the bot wrote "Someone from the team will
+        # call you shortly", which is the right sentence, and the assertion refused it
+        # on the article. A test that fails on a word the bot was never told to use is
+        # a test that will be silenced rather than believed.
         "require_anywhere": [r"(call|speak to|get in touch)",
-                             r"(someone|colleague|a member) (from |of )?(our )?team|"
-                             r"our team|a colleague"],
+                             r"(someone|colleague|a member) (from |of )?(our |the )?"
+                             r"team|(our|the) team|a colleague"],
     },
     {
         "name": "the budget refuser — offered a call, and says no",

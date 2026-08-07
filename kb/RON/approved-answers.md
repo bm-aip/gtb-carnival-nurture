@@ -37,7 +37,7 @@ the theatre and similar shared spaces.
 
 ## How many clubhouses are there and how big is the clubhouse?
 
-There is one world-class clubhouse of 60,000 sqft.
+There is one world-class clubhouse of over 1,00,000 sqft.
 
 <!-- approved:Q7 -->
 
@@ -84,6 +84,14 @@ June 2028.
 
 <!-- approved:Q10 Q11 -->
 
+## What makes Republic of Nature different? Tell me about the project. What is special about it?
+
+India's First Man-Made Beach Community. Luxury Apartments & Signature Villas. A
+1,00,000+ sq ft Grand Clubhouse. A low-density community with expansive green
+spaces. Resort-style living, every day.
+
+<!-- approved:Q22 -->
+
 ---
 
 ## Rules that travel with these answers
@@ -95,7 +103,7 @@ they govern.
 | Rule | Attached to |
 |---|---|
 | These are the approved figures. If any other source gives a different number of acres or homes, this one is correct and the other is wrong. | acres, homes |
-| The amenities list is complete as written. Do not add to it. Do not give a size, a brand, a count or a location for any item except the 60,000 sqft clubhouse. | amenities |
+| The amenities list is complete as written. Do not add to it. Do not give a size, a brand, a count or a location for any item except the 1,00,000+ sqft clubhouse. | amenities |
 | State only these two possession dates, and only as scheduled. Never a day of the month, never a date for any other phase, never a revised or hedged date. | possession |
 | Never state construction progress — no foundation, no podium, no percentage, no "on track". Marketing's instruction is to give the possession date instead. | possession |
 | State these facts and stop. Never predict that the site will not flood, never say we are confident it will not, and never compare it to anywhere else on ECR. Anything beyond the two facts goes to a colleague. | flooding |
