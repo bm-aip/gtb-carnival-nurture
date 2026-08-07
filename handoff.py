@@ -228,11 +228,26 @@ def route(lead, conv, decision):
     # Relabel rather than reject. The bar itself does not move: they still reach
     # sales on a card headed "Wants to speak to sales", with the missing figure
     # said out loud. Rejecting was the safe-looking option and it lost the buyer.
-    if (action == "qualified"
+    # `escalate` joined `qualified` here on 2026-08-07, for the same reason and from
+    # the same test: the buyer said "yes please, ask them to call me" and the model
+    # reported escalate, with a perfectly sensible note. It has several ways to say
+    # "hand this to a human" and it picks between them freely.
+    #
+    # WHICH IS THE POINT. Whether the offer was made and answered is ARITHMETIC --
+    # conversation.sales_offer_state computes it. The model's only job is reading the
+    # yes or the no. So the label it chooses does not get to override the fact, and
+    # the card is headed by what actually happened rather than by which synonym came
+    # back this time.
+    #
+    # A FORCED escalation is exempt and must stay exempt. That is not the model
+    # choosing a label -- it is a guard refusing to send a reply at all, and turning
+    # it into a sales card would hide a suppressed answer behind a good-news headline.
+    if (action in ("qualified", "escalate")
+            and not decision.get("_forced")
             and not (conv.get("checklist") or {}).get("budget")
             and conversation.sales_offer_state(conv) == "answered"):
-        log.info("lead %s reported qualified with no budget after the call offer "
-                 "-- routing as wants_sales", lead["id"])
+        log.info("lead %s reported %s with no budget after the call offer "
+                 "-- routing as wants_sales", lead["id"], action)
         action = "connect_sales"
 
     # NURTURE. Deliberately the shortest branch in this file: no card, no

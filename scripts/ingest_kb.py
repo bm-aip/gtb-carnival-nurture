@@ -230,8 +230,17 @@ APPROVED_GUARDRAILS = {
            "per-home pool or a pool per tower. No dimensions."),
     "Q6": ("Homes are not centrally air-conditioned -- say so plainly and move to "
            "what the common areas do have. Never list AC tonnage, brands or specs."),
-    "Q7": ("One clubhouse, 60,000 sqft. Not one per phase. This is the only amenity "
-           "for which a size may be stated."),
+    # 2026-08-07: 60,000 -> 1,00,000+. The owner confirmed the larger figure is the
+    # right one when the new campaign copy contradicted the 5 August answer. Both
+    # numbers were live for two days; a bot that quotes 60,000 and 1,00,000 in one
+    # conversation is the "204 units in an 8 acre property" defect all over again, so
+    # the old figure is gone from every file rather than merely superseded in one.
+    # The guardrail does NOT name the superseded figure. Same reasoning as
+    # APPROVED_ALWAYS: a rule reading "the old number is wrong" puts the old number
+    # into the retrieved context, and the model mirrors what it reads. The old figure
+    # is deleted from the corpus instead, which is the only fix that cannot leak.
+    "Q7": ("One clubhouse, over 1,00,000 sqft. Not one per phase. This is the only "
+           "amenity for which a size may be stated."),
     # SAY THE SAME THINGS, IN PLAIN WORDS. Marketing's paragraph is the approved
     # CONTENT, not approved phrasing -- it opens "an extensive range of resort-style
     # amenities designed around recreation, wellness, nature and convenient living",
@@ -240,12 +249,29 @@ APPROVED_GUARDRAILS = {
     #
     # The list is a fence, not a script: every item may be said, nothing may be added.
     "Q13": ("This list is COMPLETE. Never add an amenity to it and never give a size, "
-            "brand, count, floor or location for any item except the 60,000 sqft "
+            "brand, count, floor or location for any item except the 1,00,000+ sqft "
             "clubhouse. SAY IT IN YOUR OWN PLAIN WORDS -- do not read this paragraph "
-            "out. Group them the way a person would ('there's a 60,000 sqft clubhouse "
-            "- pool, gym, courts, mini theatre, spa and sauna'), and name a handful "
-            "rather than all of them unless they ask for the full list. Never say "
-            "'extensive range', 'resort-style', 'designed around' or 'world-class'."),
+            "out. Group them the way a person would ('there's a 1,00,000 sqft "
+            "clubhouse - pool, gym, courts, mini theatre, spa and sauna'), and name a "
+            "handful rather than all of them unless they ask for the full list. Never "
+            "say 'extensive range' or 'designed around'."),
+    # THE POSITIONING LINE. Owner-approved 2026-08-07, and approved AS WRITTEN -- the
+    # owner was asked whether the bot should speak these words or only know the facts
+    # behind them, and chose the wording. So this is the one place the brochure
+    # register is allowed, and 'resort-style' had to come off the banned-tics list in
+    # answering-rules.md for it to survive.
+    #
+    # It stays a fence like every other approved chunk: the five claims may be said,
+    # nothing may be added to them, and none of them may be enlarged into a promise.
+    "Q22": ("Approved campaign positioning, sayable as written. Say at most two of "
+            "these in one message -- all five at once is an advertisement, not a "
+            "reply. NEVER extend a claim: not which beach is 'first', no clubhouse "
+            "facility that is not in the approved amenities list, no density figure, "
+            "no acreage of green. 'Signature Villas' is the campaign name for the "
+            "3-bed and 4-bed villas we already sell -- it is NOT a new product, and "
+            "sizes and prices stay exactly as they are. The man-made beach is WITHIN "
+            "the community; this line never implies access to a natural or private "
+            "beach."),
     "Q14": "The RERA number may be stated to a buyer.",
     # Marketing's first answer here kept the clause "we are confident the water won't
     # flood". We asked them to reconsider it -- a written prediction about a coastal
@@ -393,15 +419,65 @@ def load(brand, docs, dry_run):
                     "ingest_kb.py", d["hash"]), one=True)
         doc_id = row["id"]
 
+        # QUARANTINE MUST SURVIVE A NEW VERSION. quarantine_kb.py withdraws chunks by
+        # absolute chunk id, and every version mints fresh ids -- so before this,
+        # editing one line of faqs.md and re-ingesting would have silently restored
+        # all 26 withdrawn chunks: the flood promise, the fire-safety line, the
+        # maintenance provider's name, the villaments, the wrong 204-units figure.
+        # No error, no warning, and nobody would have looked until a buyer was told.
+        #
+        # Carried forward by ORDINAL, which is stable for an edited file: chunk 33 of
+        # the FAQ is the same question before and after a typo fix. It is NOT stable
+        # if questions are inserted or deleted, so the count is compared and the
+        # carry-forward is refused outright when it changes -- re-quarantining by hand
+        # is a bad afternoon; restoring the flood promise to a live corpus is worse.
+        # GUARDRAILS CARRY FORWARD ON THE SAME TERMS, and for the same reason. The
+        # FAQ's guardrails are not written by this script -- quarantine_kb.py attaches
+        # them by chunk id after the fact. The first run of this carry-forward saved
+        # the 26 withdrawals and still dropped four guardrails, one of them on a LIVE
+        # chunk: the water-bodies answer, whose rule is "never state a per-phase
+        # clubhouse count". A fact whose rule has fallen off is worse than a
+        # withdrawn one, because nothing about it looks wrong.
+        #
+        # The file's own guardrail wins where it has one; this only fills a gap.
+        held, rails = {}, {}
+        if prior:
+            for r in db.q("""SELECT ordinal, guardrail, quarantined,
+                                    quarantine_reason, quarantined_at
+                             FROM kb_chunks WHERE document_id=%s""",
+                          (prior["id"],)) or []:
+                if r["quarantined"]:
+                    held[r["ordinal"]] = (r["quarantine_reason"], r["quarantined_at"])
+                if r["guardrail"]:
+                    rails[r["ordinal"]] = r["guardrail"]
+            prior_n = db.q("SELECT count(*) n FROM kb_chunks WHERE document_id=%s",
+                           (prior["id"],), one=True)["n"]
+            if held and prior_n != len(d["chunks"]):
+                print(f"  REFUSED: {d['title']} has {len(d['chunks'])} chunks but v"
+                      f"{prior['version']} had {prior_n}, and {len(held)} are "
+                      f"quarantined. Ordinals no longer line up, so the withdrawals "
+                      f"cannot be carried over safely. Re-run quarantine_kb.py "
+                      f"against the new ids by hand, or split this edit so the "
+                      f"chunk count is unchanged. Nothing written.")
+                db.x("UPDATE kb_documents SET active=TRUE WHERE id=%s", (prior["id"],))
+                db.x("DELETE FROM kb_documents WHERE id=%s", (doc_id,))
+                continue
+
         for i, (c, v) in enumerate(zip(d["chunks"], vectors)):
+            reason, at = held.get(i, (None, None))
             db.x("""INSERT INTO kb_chunks
                       (brand_id, document_id, ordinal, content, guardrail,
-                       embed_model, embedding)
-                    VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-                 (brand, doc_id, i, c["content"], c["guardrail"],
-                  config.EMBED_MODEL, v))
+                       embed_model, embedding, quarantined, quarantine_reason,
+                       quarantined_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                 (brand, doc_id, i, c["content"], c["guardrail"] or rails.get(i),
+                  config.EMBED_MODEL, v, reason is not None, reason, at))
         total += len(d["chunks"])
-        print(f"  loaded: {d['title']} v{version}, {len(d['chunks'])} chunks")
+        carried = ", ".join(
+            p for p in (f"{len(held)} withdrawals" if held else "",
+                        f"{len(rails)} guardrails" if rails else "") if p)
+        print(f"  loaded: {d['title']} v{version}, {len(d['chunks'])} chunks"
+              + (f", {carried} carried forward" if carried else ""))
 
     print(f"\nchunks written: {total}")
     return 0

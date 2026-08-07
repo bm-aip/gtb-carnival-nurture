@@ -136,7 +136,7 @@ def test_unapproved_possession_dates_are_still_refused():
         "Any day from Wednesday to Sunday works. Which suits you?",
         "You may visit whenever suits you.",                 # bare 'may' is not a month
         "The 3 bedroom villas are 2552 sqft and start from ₹3.94 Cr onwards.",
-        "The clubhouse is 60,000 sqft with a mini theatre.",
+        "The clubhouse is 1,00,000 sqft with a mini theatre.",
         "Phase 2 sits closer to the lagoon.",
         "It's ready to move whenever you are.",              # no time expression
         "We're open Wednesday to Sunday, 10am to 6pm.",
@@ -547,7 +547,7 @@ def test_a_question_is_not_a_claim():
         "The nearest hospital is 4 km away.",           # no corpus entry exists
         "It is a 32-acre community with 343 homes.",
         "Phase 1 is scheduled for possession in December 2027.",
-        "The clubhouse is 60,000 sqft.",
+        "The clubhouse is 1,00,000 sqft.",
         "The RERA number is TN/35/Building/0523/2024.",
         # A school with no number is still an invented school -- this is why the
         # test is not "does it contain a digit".
@@ -623,8 +623,12 @@ def test_the_voice_is_plain_and_the_examples_survive():
 
     # The specific tics seen in live replies. Each one must stay named: a banned
     # phrase list that loses its entries is a list that bans nothing.
-    for tic in ("comes into its own", "resort-style", "world-class", "nestled",
-                "boasts", "an array of"):
+    # 'resort-style' and 'world-class' were on this list until 2026-08-07. They are in
+    # the campaign line the owner approved AS WRITTEN, so banning them would have the
+    # bot rewriting the business's own words. The rest stay: a banned-phrase list that
+    # loses its entries is a list that bans nothing.
+    for tic in ("comes into its own", "nestled", "boasts", "an array of",
+                "designed around", "a range of"):
         R.check(f"language rules still ban {tic!r}", tic in lang, lang[:120])
 
     R.check("contractions are encouraged", "contraction" in lang.lower(), lang[:120])
@@ -656,9 +660,28 @@ def test_the_approved_answers_are_in_the_corpus_file():
     R.check("the approved answers chunk", len(chunks) >= 9, f"{len(chunks)} chunks")
 
     # The figures the business actually chose, in their words.
-    for fact in ("32-acre", "343 homes", "60,000 sqft",
-                 "TN/35/Building/0523/2024", "December 2027", "June 2028", "58 years"):
+    for fact in ("32-acre", "343 homes", "1,00,000 sqft",
+                 "TN/35/Building/0523/2024", "December 2027", "June 2028", "58 years",
+                 "Man-Made Beach", "Signature Villas"):
         R.check(f"corpus states {fact!r}", fact in blob)
+
+    # THE SUPERSEDED FIGURE MUST BE GONE, not merely outranked. It was in the approved
+    # answer, in the amenities guardrail, in the FAQ chunk's own text and in the
+    # answering rules; a bot that retrieved two of those in one turn would quote both
+    # sizes to the same buyer -- which is precisely the "204 units in an 8 acre
+    # property" defect that started the corpus audit.
+    root_files = [os.path.join(root, p) for p in (
+        "kb/RON/approved-answers.md", "kb/RON/faqs.md",
+        "content/answering-rules.md", "scripts/ingest_kb.py",
+        "scripts/quarantine_kb.py")]
+    for path in root_files:
+        # Comments and `>` editor notes record WHY the figure changed and may name it.
+        # What must be clean is everything that can actually reach a buyer.
+        live = "\n".join(ln for ln in open(path, encoding="utf-8").read().splitlines()
+                         if not ln.lstrip().startswith(("#", ">")))
+        R.check(f"the old clubhouse size is gone from {os.path.basename(path)}",
+                "60,000" not in live and "60000" not in live,
+                "two clubhouse sizes in one corpus is the 204-units defect again")
 
     # EVERY approved chunk carries a guardrail. An approved fact with no rule on it
     # is the exact shape of the 2026-08-03 defect: 64 of 67 chunks unguarded.
@@ -867,6 +890,19 @@ def test_the_budget_refuser_can_still_reach_sales():
             'action = "connect_sales"' in src,
             "seen live: the buyer said yes, the model said qualified, the bar "
             "correctly refused it, and the accepted call was thrown away")
+
+    # 2026-08-07: the same buyer, the same "yes please, ask them to call me", and the
+    # model reported ESCALATE instead. It has several ways to say "hand this to a
+    # human" and picks between them freely, so the relabel has to cover the synonyms.
+    # Whether the offer was answered is arithmetic; only the yes/no is judged.
+    R.check("...and so is an 'escalate' in the same position",
+            'action in ("qualified", "escalate")' in src,
+            "one accepted call reported as escalate is a lead filed under the wrong "
+            "headline, on a card sales reads differently")
+    R.check("...but a FORCED escalation is never relabelled",
+            'not decision.get("_forced")' in src,
+            "a guard refusing to send is not the model choosing a label -- "
+            "relabelling it would hide a suppressed reply behind a good headline")
     R.check("the offer wording belongs to sales, not to code",
             "SALES_OFFER_FRAMING" in open(
                 os.path.join(os.path.dirname(__file__), "..", "config.py"),
@@ -951,6 +987,52 @@ def test_staff_cards_go_by_template():
                  encoding="utf-8").read(),
             "the account move renames templates; that must not need a deploy")
     R.check("staff recipients are one list", bool(config.STAFF_PHONES))
+
+
+def test_quarantine_survives_a_re_ingest():
+    """2026-08-07: found while changing the clubhouse figure, before it fired.
+
+    quarantine_kb.py withdraws chunks by ABSOLUTE chunk id. ingest_kb.py mints fresh
+    ids for every new document version. So editing one line of faqs.md and re-running
+    the ingest would have silently restored all 26 withdrawn chunks -- the flood
+    promise, the fire-safety line, the maintenance provider's name, the villaments,
+    the wrong 204-units figure -- with no error and nothing to look at.
+
+    Read as source, because the alternative is a live re-ingest to find out.
+    """
+    src = _src("scripts/ingest_kb.py")
+
+    R.check("the ingest carries quarantine forward",
+            "quarantined" in src and "quarantine_reason" in src,
+            "a new version that forgets the withdrawals restores every unsafe chunk")
+    R.check("...keyed on ordinal, not on the id that changes",
+            "held.get(i" in src and "r[\"ordinal\"]" in src, src[:120])
+    R.check("...and the reason travels with it",
+            "quarantine_reason, quarantined_at" in src,
+            "a withdrawal with no reason cannot be reviewed or reversed")
+
+    # THE CASE ORDINALS CANNOT SURVIVE. Insert a question in the middle of the FAQ and
+    # every ordinal after it shifts by one, so the carry-forward would withdraw the
+    # wrong chunks and restore the dangerous ones. Refusing is the only safe answer.
+    R.check("a changed chunk count refuses rather than guesses",
+            "REFUSED" in src and "prior_n != len(d[\"chunks\"])" in src,
+            "shifted ordinals would quarantine the wrong chunks AND free the unsafe ones")
+    R.check("...and leaves the old version live when it refuses",
+            "SET active=TRUE WHERE id=%s" in src,
+            "a refusal that deactivates the good version empties the corpus")
+
+    # The withdrawal list is the safety record. If it shrinks, someone should have
+    # said why.
+    import re as _re
+    qsrc = _src("scripts/quarantine_kb.py")
+    block = qsrc[qsrc.index("QUARANTINE = {"):qsrc.index("# Facts worth keeping")]
+    held = _re.findall(r"^\s{4}(\d+):", block, _re.M)
+    R.check("all 26 withdrawals are still listed", len(held) == 26,
+            f"{len(held)} listed; the audit withdrew 26 and a shorter list needs a reason")
+    R.check("...each with a reason attached",
+            all(len(r.strip()) > 40 for r in
+                _re.findall(r"^\s{4}\d+:\s*(.+?)(?=^\s{4}\d+:|\Z)", block, _re.M | _re.S)),
+            "a withdrawal with no reason cannot be reviewed or reversed")
 
 
 def test_only_live_forms_are_polled():
@@ -1078,6 +1160,7 @@ def main():
                test_the_account_move_did_not_cross_two_templates,
                test_the_budget_refuser_can_still_reach_sales,
                test_staff_cards_go_by_template,
+               test_quarantine_survives_a_re_ingest,
                test_only_live_forms_are_polled,
                test_qualified_card_is_sent_once):
         fn()

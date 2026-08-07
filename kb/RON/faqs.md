@@ -127,7 +127,7 @@ Isolated footings for phase 1 & 2
 
 ## How many water bodies are we giving inside the project and what will be the depth of it ?32. How many clubhouse will be provided with respective phases and also what will be their sizes ?
 
-60,000 sft common clubhouse , We have Bioswale and the man made lagoon. Maximum Depth of Bioswale is 1.2 Meters with landscape buffer.
+1,00,000+ sft common clubhouse , We have Bioswale and the man made lagoon. Maximum Depth of Bioswale is 1.2 Meters with landscape buffer.
 
 <!-- faq:31 xlsx:33 -->
 
