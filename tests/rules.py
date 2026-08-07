@@ -989,6 +989,81 @@ def test_staff_cards_go_by_template():
     R.check("staff recipients are one list", bool(config.STAFF_PHONES))
 
 
+def test_the_same_fact_is_not_repeated_every_message():
+    """Owner, 2026-08-07, off a real transcript: "the 32 acre thing is over
+    emphasised - in some chats I see upto 6 mentions of the same thing - bit boring
+    really". Six consecutive replies opened with the size of the site.
+
+    Nothing was malfunctioning. The overview chunk is retrieved on nearly every early
+    turn, because nearly every early question is about the project, and the model
+    restates its headline each time. The price rule already solved this shape once --
+    count what has been said and tell the model, rather than asking it to remember.
+    """
+    def hist(*replies):
+        return [{"role": "assistant", "content": r} for r in replies]
+
+    once = q._already_quoted(hist("It's a 32-acre community on ECR."))
+    R.check("one mention is not nagged about",
+            not any("ALREADY TOLD" in s for s in once), once)
+
+    twice = q._already_quoted(hist("It's a 32-acre community on ECR.",
+                                   "Only a handful of homes across the 32 acres."))
+    told = " ".join(twice)
+    R.check("a fact said twice is reported back", "ALREADY TOLD" in told, told)
+    R.check("...named, so the model knows which one", "the 32 acres" in told, told)
+    R.check("...with the count, because six is different from two",
+            "(2x)" in told, told)
+
+    # The exact transcript. 32 acres in six replies; the guard must see all of them.
+    real = q._already_quoted(hist(
+        "Republic of Nature is a 32-acre community on ECR, near Kovalam Junction.",
+        "It's quiet here - 32 acres, just 343 homes, sea right there.",
+        "Oh good, we're on ECR too - near Kovalam Junction.",
+        "Only a handful of homes across the 32 acres.",
+        "The 2 bedroom sits in the same 32 acres, same clubhouse and beach.",
+        "The 2 bedroom apartment is in the same 32 acres.",
+        "those are real homes in the same 32 acres, same clubhouse"))
+    blob = " ".join(real)
+    R.check("the real transcript is caught", "the 32 acres (6x)" in blob, blob)
+    R.check("...and so is the second-most repeated line",
+            "near Kovalam Junction (2x)" in blob, blob)
+
+    # Prices and facts must not fight: both notices can appear in one turn.
+    both = q._already_quoted(hist("Villas from Rs 3.94 Cr, across 32 acres.",
+                                  "Rs 3.94 Cr onwards, in the same 32 acres."))
+    R.check("prices and repeated facts are both reported",
+            any("ALREADY QUOTED" in s for s in both)
+            and any("ALREADY TOLD" in s for s in both), both)
+
+
+def test_a_yes_to_a_named_place_is_an_answer():
+    """Seen live 2026-08-07. The bot asked "Where are you looking to buy? Just so I
+    know if ECR works for you." The buyer said "Yes". The bot asked again. The buyer
+    said "ECR" -- which is what "yes" had already meant.
+
+    Two defects in one exchange, and the rulebook has to name both: the reply WAS an
+    answer, and the question should never have been answerable that way. The framings
+    in config carry a comment about this exact failure from 2026-08-02, so it has now
+    happened twice from two different directions.
+    """
+    empty = answering.RULES["empty_reply"]
+    R.check("a yes to a question that named a place counts as that place",
+            "yes, ECR" in empty or "yes, ecr" in empty.lower(), empty[:200])
+    R.check("...and the rule says to check what you asked first",
+            "what you actually asked" in empty.lower(), empty[:200])
+    R.check("a gate question must not be answerable yes/no",
+            "yes or no" in empty.lower() or "yes/no" in empty.lower(), empty[:200])
+
+    # The approved framings are the fix's other half: not one of them can be answered
+    # with a yes. The model invented "…if ECR works for you" on its own, so the ones
+    # we DO give it must stay clean or it has a precedent to copy.
+    for f in config.FRAMINGS["location"]:
+        R.check(f"location framing is not a yes/no question: {f[:38]!r}",
+                not f.lower().startswith(("is ", "does ", "do ", "are ", "would "))
+                and "works for you" not in f.lower()
+                and "does that work" not in f.lower(), f)
+
+
 def test_quarantine_survives_a_re_ingest():
     """2026-08-07: found while changing the clubhouse figure, before it fired.
 
@@ -1160,6 +1235,8 @@ def main():
                test_the_account_move_did_not_cross_two_templates,
                test_the_budget_refuser_can_still_reach_sales,
                test_staff_cards_go_by_template,
+               test_the_same_fact_is_not_repeated_every_message,
+               test_a_yes_to_a_named_place_is_an_answer,
                test_quarantine_survives_a_re_ingest,
                test_only_live_forms_are_polled,
                test_qualified_card_is_sent_once):
