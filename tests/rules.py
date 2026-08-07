@@ -293,7 +293,7 @@ def test_corruption_is_refused_not_repaired():
     R.check("ends mid-word",
             q._looks_corrupt("Our villas are three bed and the clubhouse ha") is not None)
     R.check("a clean reply passes",
-            q._looks_corrupt("We're on ECR, near Kovalam Junction. Weekend or full-time?") is None)
+            q._looks_corrupt("We're on ECR, near Kovalam Junction. Weekend or primary home?") is None)
     R.check("a legitimate bullet list passes",
             q._looks_corrupt("Two options:" + NL + "- 3 bed villa" + NL + "- 4 bed villa") is None)
     R.check("a legitimate paragraph break passes",
@@ -532,7 +532,7 @@ def test_a_question_is_not_a_claim():
         "Is the apartment for you or for family?",
         "Which floor were you hoping for?",
         "Are you looking at 3 bedroom or 4 bedroom villas?",   # config names, not sizes
-        "Got it, a villa. Is this for weekends or to live in full-time?",
+        "Got it, a villa. Is this for weekends or a primary home?",
         "Nice. Which area are you looking to buy around?",
     ]
     for reply in asking:
@@ -1036,6 +1036,40 @@ def test_the_same_fact_is_not_repeated_every_message():
             and any("ALREADY TOLD" in s for s in both), both)
 
 
+def test_the_purpose_question_says_primary_home_not_full_time():
+    """Owner, 2026-08-07: "the word fulltime isnt clearly understood - can we try to
+    change it to primary home - or primary residence".
+
+    Purpose is the FIRST thing the bot asks and the one gate that rejects nobody, so
+    it is the question that must be effortless. "Full-time" is not a phrase buyers use
+    about a house; it asks them to decode us before they can answer.
+
+    The bot must still UNDERSTAND a buyer who says it — this only governs our words.
+    """
+    gates = answering.RULES["gates"]
+    R.check("the purpose question offers a primary home",
+            "primary home" in gates.lower(), gates[:200])
+    R.check("...and says not to use 'full-time'",
+            'never "full-time"' in gates.lower()
+            or "never 'full-time'" in gates.lower(), gates[:300])
+
+    # Every section the model is given, checked together -- the phrase was scattered
+    # across five of them, so fixing the gate list alone would have left it in play.
+    spoken = " ".join(answering.RULES[k] for k in answering.PROMPT_ORDER).lower()
+    for bad in ("full-time home", "full time home", "live in full-time",
+                "living here full-time"):
+        R.check(f"the rulebook no longer tells the bot to say {bad!r}",
+                bad not in spoken,
+                "the model mirrors the register it reads; one leftover example is "
+                "enough to keep the phrase alive")
+
+    # The reason clause the model is handed for this gate is in config, not the
+    # rulebook, and it carried the phrase too.
+    for f in config.FRAMINGS["purpose"]:
+        R.check(f"purpose framing avoids 'full-time': {f[:40]!r}",
+                "full-time" not in f.lower() and "full time" not in f.lower(), f)
+
+
 def test_a_yes_to_a_named_place_is_an_answer():
     """Seen live 2026-08-07. The bot asked "Where are you looking to buy? Just so I
     know if ECR works for you." The buyer said "Yes". The bot asked again. The buyer
@@ -1236,6 +1270,7 @@ def main():
                test_the_budget_refuser_can_still_reach_sales,
                test_staff_cards_go_by_template,
                test_the_same_fact_is_not_repeated_every_message,
+               test_the_purpose_question_says_primary_home_not_full_time,
                test_a_yes_to_a_named_place_is_an_answer,
                test_quarantine_survives_a_re_ingest,
                test_only_live_forms_are_polled,

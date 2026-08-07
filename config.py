@@ -454,7 +454,7 @@ VISIT_VENUES = {
 FRAMINGS = {
     "purpose": [
         "so I can show you the homes that suit how you'd actually use the place",
-        "because a weekend home and a full-time home are very different picks here",
+        "because a weekend home and a primary home are very different picks here",
         "so I don't waste your time on the wrong side of the project",
     ],
     # REWRITTEN 2026-08-02. The previous three were "whether this stretch of ECR
