@@ -103,7 +103,7 @@ SCENARIOS = [
         ],
     },
     {
-        "name": "apologetic — full-time living must not be interrogated",
+        "name": "apologetic — a primary home must not be interrogated",
         "why": "Owner: 'we are apologetic ... already defensive if that works out'.",
         "turns": [
             {"say": "Need More Details"},
