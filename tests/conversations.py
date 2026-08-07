@@ -244,17 +244,30 @@ SCENARIOS = [
             {"say": "how far is it from the beach?",
              # Never a third budget ask once the offer is due.
              "forbid": [r"your budget", r"how much.{0,20}(spend|looking)"]},
+            # THE LABEL IS THE MODEL'S OPINION; THE ROUTING IS THE FACT. Asked to
+            # hand a budget-less buyer who just accepted a call to a human, the model
+            # reports "connect_sales", "qualified" or "escalate" depending on the run
+            # -- all three are it saying the same thing. handoff.route() normalises
+            # them, because whether the offer was made and answered is arithmetic and
+            # only the yes/no is judged.
+            #
+            # Pinning this to one word tested the synonym the model happened to pick,
+            # which is how it passed one run and failed the next on identical code.
             {"say": "yes please, ask them to call me",
-             "action_is": "connect_sales",
+             "action_in": ("connect_sales", "qualified", "escalate"),
              # And still no budget, which is the entire point.
              "qualifies": False},
         ],
         # The owner chose the CALL over the site visit: a visit is a bigger ask of
         # someone still guarding what they will spend. Left to itself the model
         # reached for the visit instead, which is why the instruction says so twice.
+        # "the team" as well as "our team": the bot wrote "Someone from the team will
+        # call you shortly", which is the right sentence, and the assertion refused it
+        # on the article. A test that fails on a word the bot was never told to use is
+        # a test that will be silenced rather than believed.
         "require_anywhere": [r"(call|speak to|get in touch)",
-                             r"(someone|colleague|a member) (from |of )?(our )?team|"
-                             r"our team|a colleague"],
+                             r"(someone|colleague|a member) (from |of )?(our |the )?"
+                             r"team|(our|the) team|a colleague"],
     },
     {
         "name": "the budget refuser — offered a call, and says no",
@@ -336,6 +349,12 @@ def run_scenario(sc, verbose):
         if "action_is" in turn:
             R.check(f"{sc['name']} t{i}: action must be {turn['action_is']}",
                     d.get("action") == turn["action_is"],
+                    f"action={d.get('action')} note={d.get('internal_note')}")
+        # For decisions where several labels mean the same thing and the code
+        # normalises between them -- see the budget refuser below.
+        if "action_in" in turn:
+            R.check(f"{sc['name']} t{i}: action in {turn['action_in']}",
+                    d.get("action") in turn["action_in"],
                     f"action={d.get('action')} note={d.get('internal_note')}")
         if "qualifies" in turn:
             got = cv.clears_the_bar(conv)

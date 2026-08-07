@@ -32,6 +32,16 @@ import db  # noqa: E402
 
 # chunk id -> why. The text is stored in the database, so a curator opening the table
 # sees the reason without reading this file.
+#
+# ⚠️ THESE IDS ARE HISTORICAL. They were the FAQ v6 chunk ids; the live version is v7
+# and every re-ingest mints new ones. Do NOT re-run this script expecting it to
+# re-apply the withdrawals -- it would target chunks on a superseded, inactive
+# document and change nothing that a buyer can reach.
+#
+# Withdrawals and guardrails are now carried across versions BY ORDINAL inside
+# ingest_kb.py, which is the only place that knows both versions at once. This file
+# remains the record of WHY each chunk was withdrawn, and the tool for withdrawing
+# something new -- look the current id up first.
 QUARANTINE = {
     # --- Scale: three different answers exist. Waiting on Q1 and Q2. ---
     391: "WRONG AND ALREADY QUOTED TO A BUYER. '204 Units in an 8 Acre property' is a "
@@ -136,10 +146,15 @@ QUARANTINE = {
 # Facts worth keeping, but which need a guard travelling with them. Quarantine would
 # lose the fact; a guardrail keeps it and constrains how it is used.
 GUARDRAILS = {
-    373: "There is ONE common clubhouse of 60,000 sqft. This chunk's question text "
-         "also asks how many clubhouses there are per phase -- that is NOT answered "
-         "here, so never state a per-phase clubhouse count. The bioswale depth and "
-         "landscape buffer are internal engineering detail: do not volunteer them.",
+    # The 60,000 figure lived in this chunk's own TEXT until 2026-08-07, so no
+    # guardrail could have held it -- the same trap as the maintenance provider, and
+    # the same lesson inventory.md records: a caveat next to a wrong figure does not
+    # travel with it. The source line was corrected rather than guarded.
+    373: "There is ONE common clubhouse of over 1,00,000 sqft. This chunk's question "
+         "text also asks how many clubhouses there are per phase -- that is NOT "
+         "answered here, so never state a per-phase clubhouse count. The bioswale "
+         "depth and landscape buffer are internal engineering detail: do not "
+         "volunteer them.",
     # 366, 367 and 405 lived here until 2026-08-05. All three moved to QUARANTINE when
     # marketing answered -- see the notes there. A guardrail was the right holding
     # position while the question was open; it is the wrong answer once the business

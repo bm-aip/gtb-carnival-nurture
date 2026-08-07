@@ -496,20 +496,58 @@ def _already_quoted(history):
     reliable than asking it to remember -- the same approach as the affordability
     verdict, and for the same reason.
     """
-    said = []
+    said, facts = [], []
     for m in history or []:
         if m.get("role") != "assistant":
             continue
-        for fig in sorted(_money_figures(m.get("content") or "")):
+        body = m.get("content") or ""
+        for fig in sorted(_money_figures(body)):
             if fig not in said:
                 said.append(fig)
-    if not said:
-        return []
-    return ["", "ALREADY QUOTED to this buyer: " + ", ".join("Rs " + s for s in said)
+        for name, pat in _SIGNATURE_FACTS:
+            if pat.search(body):
+                facts.append(name)
+
+    out = []
+    if said:
+        out += ["", "ALREADY QUOTED to this buyer: " + ", ".join("Rs " + s for s in said)
                 + ". Do NOT state these figures again -- they have them. Refer back "
                   "briefly if you must ('as I mentioned') and otherwise move on. "
                   "Quote a price again ONLY if they ask again, or for a "
                   "configuration you have not priced yet."]
+
+    # THE SAME DEFECT, ON FACTS RATHER THAN PRICES. Owner, 2026-08-07: "the 32 acre
+    # thing is over emphasised - in some chats I see upto 6 mentions of the same
+    # thing - bit boring really". In the transcript he sent, "32 acres" appears in
+    # SIX consecutive replies.
+    #
+    # Nothing is malfunctioning. The overview chunk is retrieved on almost every
+    # early turn because almost every early question is about the project, and the
+    # model restates its headline each time. A person mentions the size of the place
+    # once and then talks about something else.
+    #
+    # Counted rather than trusted, exactly like the price rule above: telling the
+    # model what it has already said beats asking it to remember.
+    repeated = [f"{n} ({facts.count(n)}x)" for n in dict.fromkeys(facts)
+                if facts.count(n) >= 2]
+    if repeated:
+        out += ["", "ALREADY TOLD this buyer, more than once: " + ", ".join(repeated)
+                + ". They have heard it. Do NOT say it again in this reply -- find "
+                  "something they do not know yet, or just answer the question "
+                  "without the scene-setting. Repeating the same headline every "
+                  "message is the fastest way to sound like an advert."]
+    return out
+
+
+# Facts the bot reaches for as scene-setting, and therefore repeats. Matched loosely
+# because the model rephrases: "32 acres", "32-acre", "the 32 acre community".
+_SIGNATURE_FACTS = (
+    ("the 32 acres",        re.compile(r"\b32[\s-]*acre", re.I)),
+    ("343 homes",           re.compile(r"\b343\b", re.I)),
+    ("the clubhouse size",  re.compile(r"1,?00,?000\+?\s*(sq\s*ft|sqft)", re.I)),
+    ("near Kovalam Junction", re.compile(r"kovalam\s+junction", re.I)),
+    ("the man-made beach/lagoon", re.compile(r"man[\s-]*made\s+beach|lagoon", re.I)),
+)
 
 
 # Messages that carry no searchable content. Embedding "Need More Details" finds
