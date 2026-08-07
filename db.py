@@ -270,6 +270,53 @@ CREATE INDEX IF NOT EXISTS idx_msglog_failclass ON message_log (fail_class, ts);
 -- error. Without classifying it here it would never reach the retry ceiling.
 ALTER TABLE message_delivery ADD COLUMN IF NOT EXISTS fail_class TEXT;
 CREATE INDEX IF NOT EXISTS idx_delivery_failclass ON message_delivery (fail_class);
+
+-- 2026-08-07: which lead forms are worth checking, and when we last looked.
+--
+-- poll_meta_leads walked EVERY form Meta lists -- 103 of them, 94 of which had
+-- produced nothing in a week. With a 0.4s throttle and a Graph call each, one pass
+-- took ~3 minutes against a 1-minute schedule, so the scheduler refused two fires
+-- in every three and logged a skip for each. Leads still arrived; the cost was that
+-- the log became one repeated line, which is the same blindness that let the credit
+-- outage run for eight hours.
+--
+-- THIS TABLE RECORDS WHAT WE LOOKED AT, not what we found. That distinction is the
+-- whole point: `meta_leads` only knows forms that produced a lead, so 66 forms were
+-- indistinguishable from forms we had never checked, and a rule built on it would
+-- have polled them forever.
+--
+-- `last_lead_at` decides the fast lane (META_FORM_ACTIVE_DAYS). `last_polled_at`
+-- exists so a form that yields nothing still counts as known. A form absent from
+-- this table is ALWAYS polled -- the unknown case fails towards doing too much
+-- work, never towards missing a lead.
+--
+-- `leads_seen` is what the MOST RECENT poll returned, not a running total. The poll
+-- re-reads the same window every pass (inserts are ON CONFLICT DO NOTHING), so a
+-- cumulative count would climb without meaning anything.
+CREATE TABLE IF NOT EXISTS meta_form_polls (
+    form_id TEXT PRIMARY KEY,
+    project TEXT,
+    page_id TEXT,
+    form_name TEXT,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_polled_at TIMESTAMPTZ,
+    last_lead_at TIMESTAMPTZ,
+    leads_seen INT NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_formpolls_lead ON meta_form_polls (last_lead_at);
+
+-- Seed from the leads already cached, so the first pass after deploy does not treat
+-- 37 known-good forms as strangers and drag every one of them into the fast lane.
+-- ON CONFLICT DO NOTHING makes this a no-op on every boot after the first, and it
+-- can never overwrite a row the poller has since maintained.
+INSERT INTO meta_form_polls (form_id, project, page_id, form_name,
+                             first_seen_at, last_lead_at)
+SELECT form_id, min(project), min(page_id), min(form_name),
+       min(created_time), max(created_time)
+FROM meta_leads
+WHERE form_id IS NOT NULL
+GROUP BY form_id
+ON CONFLICT (form_id) DO NOTHING;
 """
 
 

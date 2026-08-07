@@ -1,5 +1,6 @@
 import os
 import re
+from datetime import datetime, timedelta, timezone
 import requests
 import config
 import db
@@ -114,22 +115,111 @@ def _form_wanted(form_name):
     return any(k in n for k in FORM_FILTER)
 
 
+# WHICH FORMS ARE WORTH A GRAPH CALL. Added 2026-08-07.
+#
+# Meta lists 103 lead forms across the two pages; 9 produced a lead in the last week
+# and 94 are the back catalogue. Walking all of them cost ~3 minutes against a
+# 1-minute schedule, so APScheduler refused two fires in three and wrote a skip line
+# for each. Nothing was lost -- but the log became one repeated sentence, and a log
+# nobody can read is how the credit outage ran for eight hours unnoticed.
+#
+# A form earns a call if it is UNKNOWN (never polled -- so a form marketing launched
+# five minutes ago is always picked up) or PRODUCTIVE (a lead inside the window).
+FORM_ACTIVE_DAYS = int(os.environ.get("META_FORM_ACTIVE_DAYS", "14"))
+
+# THE SAFETY NET, and it is not optional. The longest real gap between two
+# consecutive leads on a live form in this account's history is 19 DAYS -- longer
+# than the window above. Without a periodic sweep of everything, that form would
+# fall out of the fast lane and its next lead would never be fetched at all. With
+# it, the worst case is an hour late, and one lead puts the form straight back into
+# the fast lane on its own.
+FULL_SWEEP_MIN = int(os.environ.get("META_FULL_SWEEP_MIN", "60"))
+_SWEEP_KEY = "meta_full_sweep_at"
+
+
+def _full_sweep_due(now=None):
+    """True when every form should be polled, not just the active ones."""
+    now = now or datetime.now(timezone.utc)
+    last = db.get_setting(_SWEEP_KEY)
+    if not last:
+        return True                      # never swept -> sweep
+    try:
+        when = datetime.fromisoformat(last)
+    except ValueError:
+        return True                      # unreadable marker -> sweep, don't guess
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (now - when) >= timedelta(minutes=FULL_SWEEP_MIN)
+
+
+def _worth_polling(forms, sweep, now=None):
+    """Filter Meta's form list down to the ones this pass should fetch leads for.
+
+    Unknown forms are ALWAYS kept. That is the direction this must fail in: the
+    mistake it can make is doing too much work, never missing a lead."""
+    if sweep:
+        return list(forms)
+    ids = [f["id"] for f in forms if f.get("id")]
+    if not ids:
+        return []
+    known = db.q("""SELECT form_id, last_lead_at FROM meta_form_polls
+                    WHERE form_id = ANY(%s)""", (ids,)) or []
+    last_lead = {r["form_id"]: r["last_lead_at"] for r in known}
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(days=FORM_ACTIVE_DAYS)
+    keep = []
+    for f in forms:
+        if f.get("id") not in last_lead:
+            keep.append(f)                                   # never polled
+        elif last_lead[f["id"]] and last_lead[f["id"]] >= cutoff:
+            keep.append(f)                                   # productive lately
+    return keep
+
+
+def _record_poll(form, project_key, page_id, leads):
+    """Write down that we looked, and the newest lead we saw if there was one."""
+    newest = max((l.get("created_time") for l in leads if l.get("created_time")),
+                 default=None)
+    db.x("""INSERT INTO meta_form_polls (form_id, project, page_id, form_name,
+                                         last_polled_at, last_lead_at, leads_seen)
+            VALUES (%s,%s,%s,%s, now(), %s::timestamptz, %s)
+            ON CONFLICT (form_id) DO UPDATE SET
+                project        = EXCLUDED.project,
+                page_id        = EXCLUDED.page_id,
+                form_name      = EXCLUDED.form_name,
+                last_polled_at = now(),
+                -- GREATEST ignores NULLs in Postgres, so a poll that found nothing
+                -- leaves the existing date alone instead of erasing it. Erasing it
+                -- would drop a live form out of the fast lane on its first quiet
+                -- pass, which is every pass between leads.
+                last_lead_at   = GREATEST(meta_form_polls.last_lead_at,
+                                          EXCLUDED.last_lead_at),
+                leads_seen     = EXCLUDED.leads_seen""",
+         (form["id"], project_key, page_id, form.get("name"), newest, len(leads)))
+
+
 def poll_meta_leads():
     """Cache lead-form submissions since LEADS_SINCE into meta_leads.
-    FORM_FILTER (comma keywords, case-insensitive substring on form name)
-    limits which forms are pulled; throttled to avoid Meta connection resets."""
+
+    Only forms that are unknown or recently productive are fetched, with a full
+    sweep every FULL_SWEEP_MIN minutes -- see _worth_polling and _full_sweep_due.
+    FORM_FILTER (comma keywords, case-insensitive substring on form name) is a
+    manual override on top of that; throttled to avoid Meta connection resets."""
     since = config.LEADS_SINCE + "T00:00:00+0000"
+    sweep = _full_sweep_due()
+    swept_clean = True
     for pk in config.META_TOKENS:
         try:
             for page in get_pages(pk):
                 ptoken = page.get("access_token")
                 if not ptoken:
                     continue
-                for form in get_forms(page["id"], ptoken):
-                    if not _form_wanted(form.get("name")):
-                        continue
+                forms = [f for f in get_forms(page["id"], ptoken)
+                         if _form_wanted(f.get("name"))]
+                for form in _worth_polling(forms, sweep):
                     time.sleep(0.4)
-                    for lead in fetch_form_leads(form["id"], ptoken, since):
+                    found = fetch_form_leads(form["id"], ptoken, since)
+                    _record_poll(form, pk, page["id"], found)
+                    for lead in found:
                         # preferred_date is no longer derived. It used to parse
                         # the form's free-text answer into one of the three
                         # carnival days (Phase 0 task 1b removed that parser).
@@ -148,7 +238,16 @@ def poll_meta_leads():
                               lead["created_time"], pd))
             db.set_setting(f"meta_leads_error_{pk}", "")
         except Exception as e:
+            swept_clean = False
             db.set_setting(f"meta_leads_error_{pk}", str(e)[:500])
+
+    # The marker moves ONLY when a sweep actually finished every project. The
+    # per-project `except` above deliberately swallows one broken token so the other
+    # project's leads still arrive -- but a swallowed error means forms went
+    # unchecked, and recording a sweep that did not happen would hide exactly the
+    # dormant form the sweep exists to catch. Leave it stale and sweep again.
+    if sweep and swept_clean:
+        db.set_setting(_SWEEP_KEY, datetime.now(timezone.utc).isoformat())
 
 
 def fetch_lead(project_key, leadgen_id):

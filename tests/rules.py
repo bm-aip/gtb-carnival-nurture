@@ -953,6 +953,108 @@ def test_staff_cards_go_by_template():
     R.check("staff recipients are one list", bool(config.STAFF_PHONES))
 
 
+def test_only_live_forms_are_polled():
+    """2026-08-07: poll_meta_leads walked all 103 lead forms Meta lists, of which 9
+    had produced anything in a week. One pass took ~3 minutes against a 1-minute
+    schedule, so APScheduler refused two fires in three and wrote a skip line for
+    each. No lead was lost -- the damage was to the log, which became one repeated
+    sentence. That is the same blindness that let the credit outage run eight hours.
+
+    These cases pin the two ways the fix could quietly start losing leads."""
+    import datetime as _dt
+    import meta as m
+    import db as _db
+
+    now = _dt.datetime(2026, 8, 7, 12, 0, tzinfo=_dt.timezone.utc)
+    fresh = now - _dt.timedelta(days=2)
+    stale = now - _dt.timedelta(days=40)
+
+    def _with_rows(rows, fn):
+        """Run fn with db.q stubbed. No database in this file, by design."""
+        real = _db.q
+        _db.q = lambda sql, params=None, one=False: rows
+        try:
+            return fn()
+        finally:
+            _db.q = real
+
+    forms = [{"id": "live", "name": "RON_Villa_BM"},
+             {"id": "dormant", "name": "Elements Carnival"},
+             {"id": "brand_new", "name": "RON_Aug_Launch"}]
+    rows = [{"form_id": "live", "last_lead_at": fresh},
+            {"form_id": "dormant", "last_lead_at": stale}]
+
+    kept = _with_rows(rows, lambda: [f["id"] for f in
+                                     m._worth_polling(forms, False, now=now)])
+
+    # THE WHOLE POINT. A form nobody has used in six weeks costs three minutes a day
+    # to keep asking about.
+    R.check("a dormant form is skipped on a fast pass", "dormant" not in kept, kept)
+    R.check("a productive form is still polled", "live" in kept, kept)
+
+    # TRAP 1 -- THE ONE THAT LOSES LEADS SILENTLY. A form created this morning has
+    # no history by definition. If "no history" meant "not worth polling", every new
+    # campaign marketing launches would go unread and nothing would say so.
+    R.check("a form we have never polled is ALWAYS polled", "brand_new" in kept,
+            "a new form has no history; treating that as 'inactive' means every "
+            "campaign launch is silently ignored")
+
+    # TRAP 2 -- the safety net. The longest real gap between two consecutive leads on
+    # a live form in this account is 19 DAYS, longer than the 14-day window. Without
+    # the sweep that form leaves the fast lane and its next lead is never fetched.
+    swept = _with_rows(rows, lambda: [f["id"] for f in
+                                      m._worth_polling(forms, True, now=now)])
+    R.check("a full sweep polls everything, dormant included",
+            sorted(swept) == ["brand_new", "dormant", "live"], swept)
+
+    # The window has to be wider than nothing and the sweep has to actually recur.
+    R.check("the active window is at least a fortnight", m.FORM_ACTIVE_DAYS >= 14,
+            f"{m.FORM_ACTIVE_DAYS} days -- real gaps between leads reach 19 days, "
+            "and the sweep is what covers the difference")
+    R.check("a sweep is due at least daily", 0 < m.FULL_SWEEP_MIN <= 24 * 60,
+            m.FULL_SWEEP_MIN)
+    R.check("both are env-overridable without a deploy",
+            "META_FORM_ACTIVE_DAYS" in _src("meta.py")
+            and "META_FULL_SWEEP_MIN" in _src("meta.py"))
+
+    # An unreadable or missing marker must sweep, never assume one just happened.
+    real_get = _db.get_setting
+    try:
+        for marker, want, why in ((None, True, "never swept"),
+                                  ("not-a-date", True, "corrupt marker"),
+                                  (now.isoformat(), False, "swept just now"),
+                                  ((now - _dt.timedelta(hours=3)).isoformat(), True,
+                                   "swept 3 hours ago")):
+            _db.get_setting = lambda k, d=None, _m=marker: _m
+            R.check(f"sweep due when {why}", m._full_sweep_due(now=now) is want)
+    finally:
+        _db.get_setting = real_get
+
+    # A poll that finds nothing must not erase the date that keeps a live form in
+    # the fast lane -- otherwise every quiet pass demotes it, and every pass between
+    # two leads is a quiet one.
+    R.check("a quiet poll does not erase last_lead_at",
+            "GREATEST(meta_form_polls.last_lead_at" in _src("meta.py"),
+            "without GREATEST, one lead-free pass drops a live form out of the "
+            "fast lane until the next hourly sweep")
+
+    # A sweep that half-failed must not be recorded as done, or the dormant form the
+    # sweep exists to catch stays uncaught for another hour.
+    R.check("a sweep is only recorded when every project finished",
+            "if sweep and swept_clean:" in _src("meta.py"))
+
+    R.check("the poller writes down what it looked at, not just what it found",
+            "meta_form_polls" in _src("db.py")
+            and "_record_poll" in _src("meta.py"),
+            "meta_leads only knows forms that PRODUCED a lead, so 66 forms were "
+            "indistinguishable from forms never checked")
+
+
+def _src(name):
+    return open(os.path.join(os.path.dirname(__file__), "..", name),
+                encoding="utf-8").read()
+
+
 def main():
     for fn in (test_qualification, test_configuration_classifier, test_price_guard,
                test_say_a_price_once, test_affordability_is_decided_for_the_model,
@@ -976,6 +1078,7 @@ def main():
                test_the_account_move_did_not_cross_two_templates,
                test_the_budget_refuser_can_still_reach_sales,
                test_staff_cards_go_by_template,
+               test_only_live_forms_are_polled,
                test_qualified_card_is_sent_once):
         fn()
     return R.report("RULES  (no database, no API)")
