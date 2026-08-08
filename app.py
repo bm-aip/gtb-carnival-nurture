@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-07-primary-home"
+CODE_VERSION = "2026-08-08-watchdog"
 import db
 import selldo
 import meta
@@ -31,6 +31,7 @@ import kb
 import embed
 import jobs
 import worker
+import watchdog
 import wasender
 import wati
 import match
@@ -793,6 +794,19 @@ def start_scheduler():
     sched.add_job(_tick_with_matching, "interval", minutes=config.SEQUENCER_TICK_MIN,
                   id="seq", max_instances=1, coalesce=True,
                   next_run_time=soon(90))
+    # THE WIRE THAT WAS NEVER JOINED. Failed jobs, undelivered staff cards and a
+    # stalled queue were all recorded correctly and watched by nobody -- five
+    # buyers once waited eight hours in silence because of it. First run is
+    # deliberately soon after boot: a deploy that breaks something should say so
+    # in minutes, not at the next quarter hour.
+    sched.add_job(watchdog.check, "interval", minutes=config.WATCHDOG_CHECK_MIN,
+                  id="watchdog", max_instances=1, coalesce=True,
+                  next_run_time=soon(120))
+    # The heartbeat. A watchdog that has quietly died looks exactly like a healthy
+    # system, so the daily line is what makes the silence mean something.
+    sched.add_job(watchdog.daily_report, "cron",
+                  hour=config.WATCHDOG_DAILY_HOUR, minute=config.WATCHDOG_DAILY_MIN,
+                  id="watchdog_daily", max_instances=1, coalesce=True)
     sched.start()
 
 

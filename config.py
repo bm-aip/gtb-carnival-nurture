@@ -566,6 +566,27 @@ ESCALATION_PHONES = _phones(os.environ.get("ESCALATION_PHONES", _DEFAULT_RECIPIE
 STAFF_PHONES = _phones(os.environ.get(
     "STAFF_PHONES", ",".join(HANDOFF_PHONES + ESCALATION_PHONES)))
 
+# WHO HEARS THAT THE SYSTEM IS BROKEN -- deliberately NOT STAFF_PHONES.
+# Owner 2026-08-08, asked whose phone should ring when a buyer gets silence:
+# himself only. A salesperson cannot act on "the queue is stalled", and putting
+# it in the channel they rely on for hot leads teaches them to skim that channel.
+# The one number they must always trust stays uncontaminated.
+#
+# Defaults to the owner's number, already present above, so the watchdog works
+# without a Railway change. An alerting system whose default is "nobody" fails
+# exactly like the silence it exists to detect.
+ALERT_PHONES = _phones(os.environ.get("ALERT_PHONES", "9789988124"))
+
+# How often the watchdog looks. Fifteen minutes is the gap between a buyer being
+# ignored and somebody knowing -- the incident that prompted this ran for eight
+# hours. Cheap: three indexed counts.
+WATCHDOG_CHECK_MIN = int(os.environ.get("WATCHDOG_CHECK_MIN", "15"))
+
+# When the daily heartbeat goes out (IST, 24h). Off the hour on purpose -- the
+# scheduler already has four jobs and there is no reason to bunch them.
+WATCHDOG_DAILY_HOUR = int(os.environ.get("WATCHDOG_DAILY_HOUR", "9"))
+WATCHDOG_DAILY_MIN = int(os.environ.get("WATCHDOG_DAILY_MIN", "7"))
+
 # --- Budget gate (design §2) ---
 # The bot compares what a buyer says against these privately. It never quotes them,
 # and no price is in the corpus to quote -- the gate is internal arithmetic.
