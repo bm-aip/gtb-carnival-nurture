@@ -600,6 +600,110 @@ def admin_webhook_status():
     })
 
 
+@app.route("/admin/ads")
+@auth
+def admin_ads():
+    """Which ad brings people who actually talk, and where they stop talking.
+
+    THE QUESTION THIS ANSWERS. When the bot is not getting replies, exactly two
+    things can be wrong: the leads are bad, or the messaging is bad. Those need
+    opposite responses -- one is a media decision, the other is a rewrite -- and
+    guessing between them costs either ad spend or a redesign that fixes nothing.
+
+    They separate cleanly on this data:
+
+      * BAD LEADS shows up as one source answering far worse than another while the
+        questions are identical. Measured 2026-08-10: landing-page arrivals answered
+        at 29%, CTWA ad clicks at 5%. Same bot, same words, six times the result --
+        that difference is the lead, not the message.
+
+      * BAD MESSAGING shows up in `gates`, as a collapse at one question rather than
+        a slope across all of them. Measured the same day: purpose asked 97 times and
+        answered 15, then 42% / 100% / 50% for everything after it. A funnel that
+        holds once people are past the first question is not leaking; one question is
+        turning them away.
+
+    Sends nothing, writes nothing.
+
+    Reads `leads.ctwa_source_id`, which is populated by the capture job and by
+    scripts/backfill_ctwa.py. Ads therefore appear here only once one of those has
+    run -- an ad with no row has no attributed conversation yet, which is not the
+    same as an ad with no conversions, so `unattributed` is reported rather than
+    quietly folded into the landing-page bucket.
+    """
+    GATES = ("purpose", "location", "configuration", "budget")
+
+    # `n_answered` / `n_asked` are counted the way the qualifier itself reads them:
+    # a key present with a null or empty value is NOT an answer (conversation.py
+    # tests `checklist.get(gate)` for truthiness), and a gate listed in `asked` with
+    # an empty framing array was never actually put to anyone. Counting raw key
+    # presence would inflate both and quietly overstate how well the bot is doing.
+    rows = db.q("""
+        WITH conv AS (
+            SELECT c.lead_id, c.outcome,
+                   (SELECT count(*) FROM jsonb_each_text(c.checklist) kv
+                     WHERE kv.key = ANY (%s)
+                       AND kv.value IS NOT NULL AND kv.value NOT IN ('', 'null'))
+                     AS n_answered,
+                   (SELECT count(*) FROM jsonb_each(c.asked) ka
+                     WHERE ka.key = ANY (%s)
+                       AND jsonb_array_length(ka.value) > 0) AS n_asked
+              FROM conversations c
+        )
+        SELECT COALESCE(l.ctwa_source_id, l.inflow, 'unattributed') AS source,
+               max(l.ctwa_headline)   AS headline,
+               max(l.ctwa_source_url) AS url,
+               count(*)                                        AS convs,
+               count(*) FILTER (WHERE conv.n_asked    > 0)      AS asked_any,
+               count(*) FILTER (WHERE conv.n_answered > 0)      AS answered_any,
+               count(*) FILTER (WHERE conv.n_answered >= 3)     AS answered_3_plus,
+               count(*) FILTER (WHERE conv.n_asked > 0
+                                  AND conv.n_answered = 0)      AS asked_but_silent,
+               count(*) FILTER (WHERE conv.outcome IN
+                    ('qualified','visit_booked','escalated'))   AS reached_human
+          FROM leads l
+          JOIN conv ON conv.lead_id = l.id
+         GROUP BY 1
+         ORDER BY count(*) DESC
+    """, (list(GATES), list(GATES))) or []
+
+    for r in rows:
+        # Rates, not counts, are what makes two sources of different sizes
+        # comparable -- and comparing them is the entire purpose of this endpoint.
+        asked = r["asked_any"] or 0
+        r["answer_rate"] = round(100.0 * (r["answered_any"] or 0) / asked, 1) if asked else None
+        r["qualified_rate"] = round(100.0 * (r["answered_3_plus"] or 0) / asked, 1) if asked else None
+
+    # The per-question funnel, across every source. Deliberately NOT split by ad:
+    # a gate that kills conversations kills them everywhere, and splitting it here
+    # would leave every cell too small to read.
+    gates = []
+    for g in GATES:
+        row = db.q("""
+            SELECT count(*) FILTER (WHERE was_asked)               AS asked,
+                   count(*) FILTER (WHERE was_asked AND was_answered) AS answered
+              FROM (SELECT
+                      (asked ? %s
+                        AND jsonb_array_length(asked -> %s) > 0)  AS was_asked,
+                      (checklist ->> %s IS NOT NULL
+                        AND checklist ->> %s NOT IN ('', 'null')) AS was_answered
+                      FROM conversations) t
+        """, (g, g, g, g), one=True) or {}
+        a, got = row.get("asked") or 0, row.get("answered") or 0
+        gates.append({"gate": g, "asked": a, "answered": got,
+                      "answer_rate": round(100.0 * got / a, 1) if a else None})
+
+    return jsonify({
+        "sources": rows,
+        "gates": gates,
+        # Read the gates in order. The first one with a rate far below the rest is
+        # the question to rewrite, and rewriting it lifts everything after it.
+        "note": "answer_rate is of conversations the bot actually asked, not of all "
+                "arrivals -- an arrival that never got a question is not evidence "
+                "about the question.",
+    })
+
+
 @app.route("/admin/nurture")
 @auth
 def admin_nurture():
