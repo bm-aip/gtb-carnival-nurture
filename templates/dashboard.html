@@ -83,6 +83,7 @@
 <nav>
   <button data-tab="funnel" class="active">Where people stop</button>
   <button data-tab="sources">Sources &amp; ads</button>
+  <button data-tab="drip">Follow-ups</button>
   <button data-tab="system">System</button>
 </nav>
 <main>
@@ -138,6 +139,32 @@
     </div>
   </section>
 
+  <!-- ================= FOLLOW-UPS (DRIP) ================= -->
+  <section id="tab-drip" class="hidden">
+    <div class="cards" id="dripCards"></div>
+    <div class="note">
+      These are the messages the bot sends to people who have <b>gone quiet</b> — the
+      other half of the picture, since the funnel only measures people already talking.
+      <b>Reply rate</b> is the share who said anything within 72 hours. A reply is
+      credited to the last follow-up sent before it; an earlier one may have warmed
+      them, and there is no way to separate those.
+    </div>
+    <h2>Each follow-up</h2>
+    <div id="dripSteps"></div>
+
+    <h2>Did they arrive?</h2>
+    <div class="note">
+      <b>Accepted</b> only means Wati took the message. <b>Delivered</b> and <b>read</b>
+      come from WhatsApp's own callbacks. The gap between them matters: treating
+      accepted as delivered is how a 62% failure rate went unnoticed for a day on
+      2 Aug. <i>No callback</i> means we never found out — that is a blind spot, not a zero.
+    </div>
+    <div class="wrap"><table id="dripDelivery">
+      <thead><tr><th>Outcome</th><th class="num">Messages</th>
+        <th class="num">Share</th></tr></thead><tbody></tbody>
+    </table></div>
+  </section>
+
   <!-- ================= SYSTEM ================= -->
   <section id="tab-system" class="hidden">
     <div class="cards" id="sysCards"></div>
@@ -180,13 +207,20 @@ const GATE_LABEL = {
 
 function barClass(r){ return r === null ? "" : (r < 10 ? "low" : (r < 25 ? "mid" : "")); }
 
+const TABS = ["funnel","sources","drip","system"];
 const NAV = document.querySelector("nav");
 NAV.querySelectorAll("button").forEach(b => b.onclick = () => {
   NAV.querySelectorAll("button").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
-  ["funnel","sources","system"].forEach(t =>
-    $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
+  TABS.forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
 });
+
+// "knock_t2_location" is a database key. Marketing reads "Follow-up 2 · location".
+function stepLabel(mt){
+  const m = /^knock_t(\d+)_(.+)$/.exec(mt || "");
+  if (m) return "Follow-up " + m[1] + " · " + m[2].replace(/_/g, " ");
+  return String(mt || "").replace(/^knock_/, "").replace(/_/g, " ");
+}
 
 function card(k, v, sub){
   return `<div class="card"><div class="k">${esc(k)}</div>
@@ -195,12 +229,13 @@ function card(k, v, sub){
 }
 
 async function load(){
-  let ads, sum, queue;
+  let ads, sum, queue, drip;
   try {
-    [ads, sum, queue] = await Promise.all([
+    [ads, sum, queue, drip] = await Promise.all([
       fetch("/admin/ads").then(r => r.json()),
       fetch("/api/summary").then(r => r.json()),
-      fetch("/api/queue").then(r => r.json()).catch(() => ({}))
+      fetch("/api/queue").then(r => r.json()).catch(() => ({})),
+      fetch("/admin/drip").then(r => r.json()).catch(() => ({}))
     ]);
   } catch (e) {
     $("#errbar").style.display = "block";
@@ -273,6 +308,43 @@ async function load(){
       <td class="num">${s.answered_3_plus}</td>
       <td class="num">${s.reached_human}</td></tr>`;
   }).join("") || `<tr><td colspan="7">No attributed sources yet.</td></tr>`;
+
+  // ---- follow-ups ----
+  const steps = drip.steps || [];
+  const sentTot = steps.reduce((a, s) => a + (s.accepted || 0), 0);
+  const repTot  = steps.reduce((a, s) => a + (s.replied  || 0), 0);
+  const optTot  = Object.values(drip.optouts || {}).reduce((a, b) => a + b, 0);
+  $("#dripCards").innerHTML =
+      card("Follow-ups sent", sentTot, "accepted by WhatsApp")
+    + card("Replies earned", repTot,
+           sentTot ? pct(100 * repTot / sentTot) + " of sends" : "")
+    + card("Opt-outs", optTot, optTot ? "people who asked us to stop" : "nobody yet");
+
+  $("#dripSteps").innerHTML = steps.map(s => {
+    const r = s.reply_rate, w = r === null ? 0 : Math.max(r, 1.5);
+    // Scaled against the best step, not against 100% -- an 8% bar next to a 1.7%
+    // bar is the comparison that matters, and both look like nothing against 100.
+    return `<div class="gate">
+      <div class="q">${esc(stepLabel(s.msg_type))}</div>
+      <div class="qsub">${s.accepted} sent${s.attempts > s.accepted
+          ? ` · ${s.attempts - s.accepted} refused before sending` : ""}</div>
+      <div class="row">
+        <span class="lbl">replied within 72h</span>
+        <span class="bar"><i class="${barClass(r)}" style="width:${w * 4}%"></i></span>
+        <span class="n">${s.replied} of ${s.accepted} &nbsp; <b>${pct(r)}</b></span>
+      </div></div>`;
+  }).join("") || `<div class="note">No follow-ups sent in this window.</div>`;
+
+  const dOut = (drip.delivery || {}).by_outcome || {};
+  const dTot = Object.values(dOut).reduce((a, b) => a + b, 0);
+  const ORDER = ["read","delivered","sent","failed","no callback"];
+  const keys = Object.keys(dOut).sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+  $("#dripDelivery tbody").innerHTML = keys.map(k => {
+    const tag = k === "failed" ? "red" : (k === "read" ? "green" : "");
+    return `<tr><td><span class="tag ${tag}">${esc(k)}</span></td>
+      <td class="num">${dOut[k]}</td>
+      <td class="num">${dTot ? pct(100 * dOut[k] / dTot) : "—"}</td></tr>`;
+  }).join("") || `<tr><td colspan="3">No delivery callbacks recorded.</td></tr>`;
 
   // ---- system ----
   // jobs.stats() nests the tallies under `counts`. A failed job is not a statistic:

@@ -784,6 +784,73 @@ def _framing_rates(gate):
             for i in range(len(framings))]
 
 
+@app.route("/admin/drip")
+@auth
+def admin_drip():
+    """Does the follow-up sequence earn replies, and do the messages even arrive?
+
+    The funnel on /admin/ads only measures people who are already talking. This
+    measures the other half -- the proactive knocks sent to people who are not.
+
+    TWO NUMBERS THAT MUST NOT BE CONFLATED.
+      `accepted` is Wati saying it took the send. It is NOT delivery.
+      `delivery` comes from Wati's own callbacks, matched by phone and time because
+      template sends return no message id to match on.
+    Treating the first as the second is how a 62% failure rate went unnoticed for a
+    day on 2026-08-02, and it is why both appear here side by side.
+
+    REPLY IS ATTRIBUTED TO THE LAST KNOCK SENT BEFORE IT, within 72 hours. A person
+    who replies after knock 2 is credited to knock 2 even though knock 1 may have
+    warmed them -- there is no way to separate those, and crediting both would make
+    the sequence look better than it is.
+
+    Measured 2026-08-10: follow-up 1 earned 7 replies from 88 sends (8.0%),
+    follow-up 2 earned 1 from 60 (1.7%). A second knock that buys one reply per
+    sixty sends is a cost question, not a copy question.
+
+    Sends nothing, writes nothing.
+    """
+    hours = int(request.args.get("hours", str(24 * 30)))
+
+    steps = db.q("""
+        WITH k AS (
+            SELECT ml.id, ml.lead_id, ml.msg_type, ml.ts, ml.ok
+              FROM message_log ml
+             WHERE ml.direction = 'out' AND ml.msg_type LIKE 'knock\\_%%'
+               AND ml.ts > now() - (%s || ' hours')::interval
+        )
+        SELECT k.msg_type,
+               count(*)                          AS attempts,
+               count(*) FILTER (WHERE k.ok)      AS accepted,
+               count(*) FILTER (WHERE k.ok AND EXISTS (
+                    SELECT 1 FROM message_log i
+                     WHERE i.lead_id = k.lead_id AND i.direction = 'in'
+                       AND i.msg_type = 'inbound'
+                       AND i.ts > k.ts AND i.ts < k.ts + interval '72 hours'
+               ))                                AS replied
+          FROM k GROUP BY 1 ORDER BY 1
+    """, (hours,)) or []
+    for s in steps:
+        acc = s["accepted"] or 0
+        s["reply_rate"] = round(100.0 * (s["replied"] or 0) / acc, 1) if acc else None
+
+    optouts = {r["scope"]: r["n"] for r in
+               (db.q("SELECT scope, count(*) AS n FROM optouts GROUP BY scope") or [])}
+
+    return jsonify({
+        "window_hours": hours,
+        "steps": steps,
+        "delivery": db.knock_delivery_summary(hours),
+        "rollup": db.delivery_rollup(min(hours, 24 * 7)),
+        # The cost side of knocking. One opt-out against 148 sends is the evidence
+        # that the fatigue cap is set about right; a jump here is the first sign it
+        # is not.
+        "optouts": optouts,
+        "note": "accepted = Wati took the send. delivery = Wati's callbacks. They are "
+                "different numbers and a gap between them is a finding, not noise.",
+    })
+
+
 @app.route("/admin/nurture")
 @auth
 def admin_nurture():
