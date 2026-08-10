@@ -79,6 +79,37 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
 -- so a lead with no campaign is never messaged -- the gate fails closed.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS campaign TEXT;
 CREATE INDEX IF NOT EXISTS idx_leads_campaign ON leads (campaign);
+
+-- 2026-08-10: which door the lead walked through, and Meta's click id.
+--
+-- WHY THESE ARE COLUMNS AND NOT A LOG LINE
+-- parse_source() has been recording ad evidence into message_log.detail as free
+-- text since task 6. That was right for answering "does the field exist at all",
+-- and useless for anything else: the flywheel has to JOIN a lead to its click id
+-- at the moment that lead qualifies, and you cannot join on a sentence.
+--
+-- `ctwa_clid` IS THE ONLY KEY META MATCHES CONVERSIONS ON. It is not in Wati's
+-- webhook -- verified across 90 arrivals on 2026-08-10, all of which carried
+-- sourceType/sourceId/sourceUrl and none of which carried the click id. It IS in
+-- Wati's REST API, at messageReferral.ctwaClid on the FIRST inbound message of the
+-- conversation. So it is fetched, not received; see wati.fetch_referral().
+--
+-- The referral rides that first message only. Miss it and it is gone for that
+-- person permanently, which is why capture is wired to run on every inbound that
+-- looks like an ad click rather than only at lead creation.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS inflow TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_clid TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_source_id TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_source_url TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_headline TEXT;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_captured_at TIMESTAMPTZ;
+-- `ctwa_looked_at` marks "we asked Wati and it had nothing", which is a different
+-- state from "we never asked". Without it the backfill re-asks about the same
+-- landing-page walk-ins on every run, forever.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_looked_at TIMESTAMPTZ;
+-- Per-ad reporting is the whole point of storing source_id, and it is always a
+-- GROUP BY over the full table.
+CREATE INDEX IF NOT EXISTS idx_leads_ctwa_source ON leads (ctwa_source_id);
 CREATE INDEX IF NOT EXISTS idx_meta_leads_proj_time ON meta_leads (project, created_time);
 
 CREATE TABLE IF NOT EXISTS settings (

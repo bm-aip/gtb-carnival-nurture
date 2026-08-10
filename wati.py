@@ -138,6 +138,76 @@ def check_connection():
                 "detail": str(e)}
 
 
+def fetch_referral(phone, max_pages=6):
+    """Ask Wati for the ad referral behind a conversation. Returns a dict or None.
+
+    THIS IS THE ONLY WAY TO GET `ctwa_clid`, and it is a pull, not a push.
+
+    Wati's webhook flattens an ad click to `sourceType=7 sourceId=... sourceUrl=...`
+    and drops the click id. Verified on 2026-08-10 across 90 real arrivals: not one
+    webhook carried it. The REST API keeps the whole object:
+
+        messageReferral: {headline, body, url, sourceId, ctwaClid}
+
+    ...hanging off the FIRST inbound message of the conversation, and only that one.
+    Later messages carry `messageReferral: null`, which is why this walks to the
+    oldest inbound rather than reading the newest.
+
+    Do NOT reach for the MCP `wati_get_messages` tool instead -- it projects the
+    message down to a summary shape and discards messageReferral entirely.
+
+    Returns {ctwa_clid, source_id, source_url, headline} on an ad click, or None for
+    a landing-page walk-in (which genuinely has no referral -- no Meta click ever
+    happened, so None is an answer, not a failure).
+    """
+    if not config.WATI_BASE or not config.WATI_TOKEN or not phone:
+        return None
+
+    referral = None
+    for page in range(1, max_pages + 1):
+        r = requests.get(f"{config.WATI_BASE}/api/v1/getMessages/{phone}",
+                         headers=_auth_headers(),
+                         params={"pageSize": 100, "pageNumber": page}, timeout=30)
+        # Raise, so the job queue retries with backoff instead of writing down
+        # "no referral" because Wati happened to be rate-limiting us.
+        r.raise_for_status()
+        data = r.json() if r.content else {}
+
+        node = data.get("messages") if isinstance(data, dict) else None
+        if isinstance(node, dict):
+            items = node.get("items") or []
+        elif isinstance(node, list):
+            items = node
+        else:
+            items = (data.get("items") or []) if isinstance(data, dict) else []
+        if not items:
+            break
+
+        # Newest-first, so the last referral seen while paging deeper is the oldest.
+        for m in items:
+            if not isinstance(m, dict):
+                continue
+            if m.get("owner") is True or m.get("isOwner") is True:
+                continue
+            ref = m.get("messageReferral")
+            if isinstance(ref, dict) and (ref.get("ctwaClid") or ref.get("sourceId")):
+                referral = ref
+
+        if len(items) < 100:
+            break
+
+    if not referral:
+        return None
+    return {
+        "ctwa_clid": (referral.get("ctwaClid") or None),
+        "source_id": str(referral.get("sourceId") or "") or None,
+        "source_url": (referral.get("url") or None),
+        # The ad's own headline. Kept because it is the only human-readable label we
+        # get -- an ad id tells marketing nothing when they read the report.
+        "headline": (referral.get("headline") or None),
+    }
+
+
 def sends_last_hour():
     r = db.q("""SELECT count(*) AS n FROM message_log
                 WHERE direction='out' AND ok AND ts > now() - interval '1 hour'""",

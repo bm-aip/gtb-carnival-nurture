@@ -35,6 +35,7 @@ import handoff
 import jobs
 import qualifier
 import sequencer
+import wati
 
 log = logging.getLogger("worker")
 
@@ -48,7 +49,55 @@ def handle(job):
     """Dispatch one job. Raising means retry-with-backoff; returning means done."""
     if job["kind"] == jobs.KIND_INBOUND:
         return _handle_inbound(job)
+    if job["kind"] == jobs.KIND_CTWA_CAPTURE:
+        return _handle_ctwa_capture(job)
     raise ValueError(f"unknown job kind: {job['kind']}")
+
+
+def _handle_ctwa_capture(job):
+    """Fetch and store Meta's click id for one ad arrival.
+
+    Sends nothing. Touches only the attribution columns, so it can never interfere
+    with a conversation that is running at the same time.
+
+    Raising here is correct on a transport failure: the queue retries with backoff,
+    and Wati keeps the message history, so a click id is recoverable for as long as
+    Meta's own event window lasts. Writing down "no referral" because Wati was
+    briefly rate-limiting would throw away something still gettable.
+    """
+    payload = job["payload"] or {}
+    lead_id = payload.get("lead_id")
+    phone = payload.get("phone")
+    if not (lead_id and phone):
+        return
+
+    ref = wati.fetch_referral(phone)          # raises -> retry with backoff
+    if not ref or not (ref.get("ctwa_clid") or ref.get("source_id")):
+        # A genuine negative: this conversation did not start from a Meta ad click.
+        # Recorded so the backfill does not keep asking about the same walk-in.
+        db.x("""UPDATE leads SET ctwa_looked_at=now(), updated_at=now()
+                WHERE id=%s""", (lead_id,))
+        return
+
+    db.x("""UPDATE leads
+               SET ctwa_clid       = COALESCE(%s, ctwa_clid),
+                   ctwa_source_id  = COALESCE(%s, ctwa_source_id),
+                   ctwa_source_url = COALESCE(%s, ctwa_source_url),
+                   ctwa_headline   = COALESCE(%s, ctwa_headline),
+                   ctwa_captured_at = now(),
+                   ctwa_looked_at  = now(),
+                   inflow          = 'ctwa',
+                   updated_at      = now()
+             WHERE id = %s""",
+         (ref.get("ctwa_clid"), ref.get("source_id"), ref.get("source_url"),
+          ref.get("headline"), lead_id))
+
+    # COALESCE above, not plain assignment: a second lookup for the same person must
+    # never blank a click id we already hold. The first click is the one Meta will
+    # match, and re-clicking a different ad later must not overwrite it.
+    db.log_msg(lead_id, "in", "ctwa_captured", None,
+               detail=f"ad={ref.get('source_id')} url={ref.get('source_url')} "
+                      f"clid_len={len(ref.get('ctwa_clid') or '')}")
 
 
 HISTORY_TURNS = 20
