@@ -35,6 +35,7 @@ import wati
 import sendgate
 import optout
 import failures
+import jobs
 
 log = logging.getLogger("sequencer")
 
@@ -241,6 +242,43 @@ def _adopt_direct_inbound(phone, sender_name, opted_out=False, source=None):
     return lead
 
 
+def _queue_ctwa_capture(lead, phone, source):
+    """Ask the worker to go and fetch this arrival's click id, if it looks like one.
+
+    Deliberately does NOT call Wati here. This runs inside the webhook request, and
+    the webhook's only job is to answer WhatsApp fast; an HTTP round-trip to Wati on
+    the inbound path is how a working integration starts looking broken.
+
+    THE TRIGGER IS THE WEBHOOK'S OWN EVIDENCE, not a guess from the message text.
+    `sourceId=` in the flattened source string means Meta told Wati this came from an
+    ad. Landing-page walk-ins arrive as `sourceType=7 bsuid=...` with no sourceId and
+    are skipped -- they have no click id to fetch, so asking would burn a call per
+    walk-in to learn nothing.
+
+    Dedup is per phone and permanent, so a chatty buyer produces one lookup, not one
+    per message. The cost of that choice: a lookup that exhausts its retries is never
+    retried automatically. scripts/backfill_ctwa.py exists to sweep those up.
+    """
+    if not lead or not source:
+        return
+    if "sourceId=" not in source:
+        return
+    if lead.get("ctwa_clid"):
+        return
+    try:
+        jobs.enqueue(jobs.KIND_CTWA_CAPTURE,
+                     {"lead_id": lead["id"], "phone": phone},
+                     phone=None,
+                     dedup_key=f"ctwa:{phone}",
+                     # Let the reply go out first, and give Wati a moment to have
+                     # the message queryable through its own API.
+                     delay_seconds=30)
+    except Exception as e:
+        # A missed click id must never cost us the inbound. Losing the message is
+        # unrecoverable; losing the attribution is a row in a report.
+        log.warning("ctwa capture enqueue failed for %s: %s", phone, e)
+
+
 def handle_inbound(phone, text, sender_name=None, allow_create=False, source=None):
     """Called by the webhook. Records an inbound message against its lead.
 
@@ -285,3 +323,15 @@ def handle_inbound(phone, text, sender_name=None, allow_create=False, source=Non
                              updated_at=now() WHERE id=%s""", (text, lead["id"]))
     db.log_msg(lead["id"], "in", "inbound", text,
                detail=(f"optout={scope}:{matched}" if scope else None))
+
+    # THE CLICK ID, and the leak this closes.
+    #
+    # `source` was previously used only inside _adopt_direct_inbound, so it reached
+    # the database for STRANGERS and was silently dropped for anyone who was already
+    # a lead. That is exactly backwards: a retargeting ad is aimed at people we
+    # already know, and the referral rides the first message after the click and no
+    # other. Every dropped one was unrecoverable.
+    #
+    # Placed after the lead is resolved so both paths -- new stranger and returning
+    # lead -- go through the one door.
+    _queue_ctwa_capture(lead, phone, source)

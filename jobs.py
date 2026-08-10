@@ -44,6 +44,10 @@ _TRANSIENT = re.compile(
     r"503|502|connection reset|connection aborted", re.I)
 
 KIND_INBOUND = "inbound_message"
+# Fetch Meta's click id for an ad arrival. Enqueued with phone=None ON PURPOSE: the
+# claim query serialises one job per phone, so giving this a phone would put an HTTP
+# round-trip in front of the buyer's reply. Nobody is waiting on a click id.
+KIND_CTWA_CAPTURE = "ctwa_capture"
 
 QUEUED = "queued"
 RUNNING = "running"
