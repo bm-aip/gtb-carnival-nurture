@@ -674,34 +674,114 @@ def admin_ads():
         r["answer_rate"] = round(100.0 * (r["answered_any"] or 0) / asked, 1) if asked else None
         r["qualified_rate"] = round(100.0 * (r["answered_3_plus"] or 0) / asked, 1) if asked else None
 
-    # The per-question funnel, across every source. Deliberately NOT split by ad:
-    # a gate that kills conversations kills them everywhere, and splitting it here
-    # would leave every cell too small to read.
+    # The per-question funnel, SPLIT BY SOURCE, because a combined rate lies.
+    #
+    # Measured 2026-08-10, purpose gate: 19.2% before the 07 Aug rewording and 13.9%
+    # after, which reads as "the rewrite hurt". Split by source it inverts -- landing
+    # page went 19.0% -> 24.3% (the rewrite HELPED) while CTWA volume went from 5
+    # conversations to 37 at 2.9%. The combined number moved only because the mix
+    # moved. A single funnel would have shown 15% and hidden both facts, and the
+    # decision it invites -- rewrite the question again -- is the wrong one for CTWA,
+    # where 2.9% is not a wording problem at all.
+    #
+    # So: never report a bare gate rate on this page. Only ever per source.
     gates = []
     for g in GATES:
-        row = db.q("""
-            SELECT count(*) FILTER (WHERE was_asked)               AS asked,
-                   count(*) FILTER (WHERE was_asked AND was_answered) AS answered
-              FROM (SELECT
+        by_source = db.q("""
+            SELECT CASE WHEN l.ctwa_source_id IS NOT NULL OR l.inflow = 'ctwa'
+                        THEN 'CTWA' ELSE 'landing page / other' END AS source,
+                   count(*) FILTER (WHERE t.was_asked)                    AS asked,
+                   count(*) FILTER (WHERE t.was_asked AND t.was_answered) AS answered
+              FROM (SELECT lead_id,
                       (asked ? %s
                         AND jsonb_array_length(asked -> %s) > 0)  AS was_asked,
                       (checklist ->> %s IS NOT NULL
                         AND checklist ->> %s NOT IN ('', 'null')) AS was_answered
                       FROM conversations) t
-        """, (g, g, g, g), one=True) or {}
-        a, got = row.get("asked") or 0, row.get("answered") or 0
-        gates.append({"gate": g, "asked": a, "answered": got,
-                      "answer_rate": round(100.0 * got / a, 1) if a else None})
+              JOIN leads l ON l.id = t.lead_id
+             GROUP BY 1 ORDER BY 1
+        """, (g, g, g, g)) or []
+        for s in by_source:
+            a = s["asked"] or 0
+            s["answer_rate"] = round(100.0 * (s["answered"] or 0) / a, 1) if a else None
+        asked = sum(s["asked"] or 0 for s in by_source)
+        got = sum(s["answered"] or 0 for s in by_source)
+        gates.append({"gate": g,
+                      "asked": asked, "answered": got,
+                      # Reported for completeness, but the UI shows by_source instead.
+                      "answer_rate_combined": round(100.0 * got / asked, 1) if asked else None,
+                      "by_source": by_source,
+                      "framings": _framing_rates(g)})
+
+    totals = db.q("""
+        SELECT count(*) AS conversations,
+               count(*) FILTER (WHERE checklist = '{}'::jsonb) AS answered_nothing,
+               count(*) FILTER (WHERE outcome IN
+                    ('qualified','visit_booked','escalated')) AS reached_human
+          FROM conversations""", one=True) or {}
 
     return jsonify({
         "sources": rows,
         "gates": gates,
+        "totals": totals,
         # Read the gates in order. The first one with a rate far below the rest is
         # the question to rewrite, and rewriting it lifts everything after it.
         "note": "answer_rate is of conversations the bot actually asked, not of all "
                 "arrivals -- an arrival that never got a question is not evidence "
                 "about the question.",
     })
+
+
+def _framing_rates(gate):
+    """Answer rate per WORDING, for one gate. Marketing owns this text, so the
+    per-wording number is the one they can act on -- a gate that fails might be the
+    wrong question or merely the wrong words, and only this separates those.
+
+    ATTRIBUTION RULE. `asked` holds the framing indexes spent on a gate, in order.
+    A conversation that heard two framings and then answered is credited to the
+    SECOND one, because that is the wording the person actually responded to.
+    Crediting the first would make an opener look good on an answer it did not earn.
+    A conversation that never answered is charged to the LAST wording tried, for the
+    same reason in reverse -- that is where they walked away.
+
+    Counts are small by design: only the first framing gets real volume, because the
+    bot only rephrases when the first one failed. So `used` is reported alongside
+    every rate; a 100% rate on two attempts is not evidence of anything.
+
+    ⚠️ `config.FRAMINGS` IS NOT VERSIONED. The text below is whatever is deployed
+    right now, while the counts were earned by whatever was deployed at the time --
+    the purpose wording changed on 07 Aug 2026 (#37) and the older counts belong to
+    the previous sentence. Until the wording is stamped at ask time, treat a rate as
+    valid only for asks made since marketing last touched that line.
+    """
+    framings = config.FRAMINGS.get(gate) or []
+    rows = db.q("""SELECT asked -> %s AS idxs,
+                          (checklist ->> %s IS NOT NULL
+                            AND checklist ->> %s NOT IN ('', 'null')) AS answered
+                     FROM conversations
+                    WHERE asked ? %s
+                      AND jsonb_array_length(asked -> %s) > 0""",
+                (gate, gate, gate, gate, gate)) or []
+
+    used = [0] * len(framings)
+    closed = [0] * len(framings)
+    for r in rows:
+        idxs = [int(i) for i in (r["idxs"] or []) if isinstance(i, (int, float))]
+        if not idxs:
+            continue
+        for i in idxs:
+            if 0 <= i < len(framings):
+                used[i] += 1
+        last = max(idxs)
+        if r["answered"] and 0 <= last < len(framings):
+            closed[last] += 1
+
+    return [{"i": i,
+             "text": framings[i],
+             "used": used[i],
+             "closed": closed[i],
+             "close_rate": round(100.0 * closed[i] / used[i], 1) if used[i] else None}
+            for i in range(len(framings))]
 
 
 @app.route("/admin/nurture")
