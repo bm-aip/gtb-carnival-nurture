@@ -154,6 +154,55 @@ def load(path=None):
 
 RULES = load()
 
+# A message that closes a thought rather than saying anything. Matching one after a
+# handoff saves a model call and a paragraph of amenities (worker._handle_inbound).
+#
+# WHAT IS DELIBERATELY ABSENT IS THE POINT.
+#
+#   "yes", "no", "ya", "sure", "please", "done" -- every one of these can be a real
+#   ANSWER. "Yes" to "is this an investment?", "sure" to "would you like a call?",
+#   "no" to "have you seen the site?". Treating those as noise would drop a booking
+#   or a gate answer on the floor, which is far more expensive than the model call it
+#   saves. Anything that could answer a question stays out of this list.
+#
+#   Day names, numbers and dates are absent for the same reason -- "Sunday" is a
+#   booking, not an acknowledgement.
+#
+# What remains is only ever conversational punctuation.
+_ACK = re.compile(
+    r"^[\s\W]*"
+    r"(ok|okay|okey|k+|kk|hm+|hmm+|mm+|"
+    r"thanks?|thank\s*you|thx|tq|ty|"
+    r"bye|by|byee?|gn|good\s*night|"
+    r"noted|got\s*it|understood|alright|"
+    r"nice|great|good|cool|super|"
+    r"welcome|np)"
+    r"[\s\W]*$", re.I)
+
+# Emoji, punctuation or whitespace and nothing else -- a thumbs-up is the same act.
+#
+# DIGITS ARE EXCLUDED. `\d` here let a bare "3" through as "no letters, therefore
+# noise", and "3" is an answer -- to how many bedrooms, to which day, to a budget in
+# crores. Caught by tests/token_waste.py.
+_ACK_SYMBOLS_ONLY = re.compile(r"^[^\w]*$")
+
+
+def is_bare_acknowledgement(text):
+    """True when the message says nothing that needs answering.
+
+    Length-capped before the regex: a long message that merely STARTS with "ok" is
+    not an acknowledgement ("ok so what about the maintenance charges") and must
+    reach the model.
+    """
+    t = (text or "").strip()
+    if not t or len(t) > 24:
+        return False
+    if _ACK.match(t):
+        return True
+    # Pure emoji/punctuation. Guarded on there being no letters at all, so a short
+    # real question like "how far?" cannot slip through on its punctuation.
+    return bool(_ACK_SYMBOLS_ONLY.match(t)) and not re.search(r"[A-Za-zऀ-ॿ]", t)
+
 
 def system_prompt(brand_name):
     """Assemble the system prompt. Stable per brand, so it caches."""

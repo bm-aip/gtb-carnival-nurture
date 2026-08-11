@@ -198,14 +198,18 @@ def _wati_inbound(payload, allow_create):
     # ASYNCHRONOUS: the thinking. An LLM turn takes seconds and WhatsApp wants an
     # immediate 200 -- four slow turns in-process and the webhook stops answering,
     # which Wati reads as a broken integration and retries into.
-    jobs.enqueue(jobs.KIND_INBOUND,
-                 {"text": text, "sender_name": wati.parse_sender_name(payload),
-                  "allow_create": allow_create},
-                 phone=phone,
-                 # Same id the dedup above used, so a Wati retry that slips past
-                 # processed_webhooks still cannot produce two replies.
-                 dedup_key=f"inbound:{_mid}" if _mid else None)
-    return jsonify({"ok": True, "queued": True})
+    # MERGED, not merely queued. Someone still typing sends three fragments in
+    # thirty seconds; answering each one separately costs three model calls and
+    # replies to a third of a thought at a time. 47% of all model calls on
+    # 2026-08-11 fired within 90s of the previous one for the same person.
+    queued = jobs.enqueue_inbound(
+        {"text": text, "sender_name": wati.parse_sender_name(payload),
+         "allow_create": allow_create},
+        phone=phone,
+        # Same id the dedup above used, so a Wati retry that slips past
+        # processed_webhooks still cannot produce two replies.
+        dedup_key=f"inbound:{_mid}" if _mid else None)
+    return jsonify({"ok": True, "queued": queued})
 
 
 def _stash_wati(raw):

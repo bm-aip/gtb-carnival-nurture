@@ -456,6 +456,22 @@ VISIT_VENUES = {
 NRI_AD_IDS = [a.strip() for a in os.environ.get(
     "NRI_AD_IDS", "52553896609352").split(",") if a.strip()]
 
+# --- not spending a model call on the word "Ok" (2026-08-11) -------------------
+#
+# Outcomes where a human already owns the conversation. Only in these does a bare
+# acknowledgement get the fixed reply instead of a model turn: before handoff, "ok"
+# and "sure" are often real answers to "shall I pencil in Sunday?" and must be heard.
+#
+# `nurture` is NOT here. A nurtured buyer is one the bot is still actively working --
+# owner 2026-08-03, probe for room, never kill -- so their "ok" still deserves a turn.
+HANDED_OFF_OUTCOMES = ("qualified", "visit_booked", "escalated", "wants_sales", "dead")
+
+# ⚠️ SALES OWNS THIS WORDING, like FRAMINGS and SALES_OFFER_FRAMING. It is the one
+# sentence a buyer gets when they say "ok" after being handed over, so it has to close
+# warmly without promising a time nobody has committed to.
+ACK_REPLY = os.environ.get(
+    "ACK_REPLY", "Sure - someone from our team will be in touch shortly.")
+
 
 def is_overseas(lead):
     """Is this buyer outside India, so a site visit is the wrong ask?
