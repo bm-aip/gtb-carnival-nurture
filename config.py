@@ -418,6 +418,14 @@ VISIT_DAYS = {
 # The intended ladder: someone worried about the drive sees the miniature model at
 # the Experience Centre during the week, and books the real site visit for the
 # weekend. The EC visit is a milestone, not the outcome.
+# REWRITTEN 2026-08-11. Owner: "stop asking for visit to experience center - we want
+# ppl to visit the site if they are in chennai - if they are outside chennai - like
+# this NRI campaign - we have to push them for a virtual walk thru".
+#
+# The Experience Centre is RETIRED. It was the answer to a distant buyer, and a live
+# video walkthrough is a better one: the mall showed a miniature model, the call shows
+# the actual site, and nobody has to fly. So the venue now follows WHERE THE BUYER IS
+# rather than how strongly they objected to the drive.
 VISIT_VENUES = {
     "site": {
         # Owner 2026-08-01: never say "Vadanemmeli" to a buyer -- it does not help
@@ -425,19 +433,61 @@ VISIT_VENUES = {
         # enforces this on every outbound reply; this is the phrasing it uses.
         "name": "the site on ECR, near Kovalam Junction",
         "priority": 1,
-        "offer": "always",
+        "offer": "in_chennai",
     },
-    "experience_centre": {
-        "name": "the Experience Centre at Express Avenue mall",
-        "priority": 2,
-        # ONLY after the buyer raises distance or travel as a concern.
-        "offer": "on_distance_objection",
-        "note": ("Has a miniature model and a walkthrough of the RON experience. "
-                 "Same day availability rules as the site. Position it as a first "
-                 "look during the week, with the site visit at the weekend -- never "
-                 "as a replacement for seeing the site."),
+    "virtual": {
+        "name": "a live video walkthrough with one of our team",
+        "priority": 1,
+        "offer": "outside_chennai",
+        # Booked exactly like a site visit -- a day and a time -- because it IS an
+        # appointment with a person, not a link. The handoff card must say so, or
+        # sales turns up expecting someone at the gate.
+        "note": ("A salesperson walks them through the site live on a call. Same day "
+                 "rules as the site. Never send directions for this one."),
     },
 }
+
+# The ads that target buyers abroad. Env-driven because ad ids churn every campaign
+# and marketing must be able to add one without a deploy.
+#
+# 52553896609352 is the NRI campaign targeting the Middle East (owner, 2026-08-11).
+# It produced lead 1016 -- a +966 number who asked to be phoned five different ways
+# and was told "just tell me a day and I'll set up the visit" each time.
+NRI_AD_IDS = [a.strip() for a in os.environ.get(
+    "NRI_AD_IDS", "52553896609352").split(",") if a.strip()]
+
+
+def is_overseas(lead):
+    """Is this buyer outside India, so a site visit is the wrong ask?
+
+    TWO SIGNALS, EITHER IS ENOUGH.
+      * the ad they came from targets buyers abroad (NRI_AD_IDS)
+      * their number is not Indian
+
+    WHAT THIS DELIBERATELY DOES NOT DO is guess at "outside Chennai but inside
+    India". A Bangalore buyer should also be offered the walkthrough, but nothing we
+    store tells us where a person IS -- the location gate asks where they want to
+    BUY, which is a different question, and it was rewritten on 2026-08-02 precisely
+    because the model kept merging the two. So the code claims only what it can
+    prove, and the rulebook handles the rest: if a buyer SAYS they are not in
+    Chennai, the model offers the walkthrough on that basis.
+    """
+    if not lead:
+        return False
+    ad = str(lead.get("ctwa_source_id") or "")
+    if ad and ad in NRI_AD_IDS:
+        return True
+    phone = re.sub(r"\D", "", str(lead.get("phone") or ""))
+    if not phone:
+        return False
+    # A bare 10-digit number is Indian -- meta.normalize_phone() adds the 91, but not
+    # every path through the database has been through it, and reading an Indian
+    # mobile as overseas would offer a Chennai buyer a video call instead of the site.
+    # Fails towards "in India", which is the safer error: the site is the better ask
+    # when we are unsure, and the buyer can always say they are abroad.
+    if len(phone) <= 10:
+        return False
+    return not phone.startswith("91")
 
 # --- Persuasion ladder (design §7, task 23) ---
 #

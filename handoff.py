@@ -97,13 +97,20 @@ def build_card(lead, conv, reason=""):
     """
     c = conv["checklist"] or {}
     booked = c.get("visit_day")
+    # A virtual walkthrough is an appointment with a PERSON, not a link, and it is
+    # booked through the same flow as a site visit. So the card has to name which one
+    # it is -- otherwise a salesperson drives to the gate to meet somebody who is in
+    # Dubai expecting a video call.
+    virtual = (c.get("visit_venue") == "virtual")
     if booked:
-        action = (f"{booked} {c.get('visit_time') or ''} at "
-                  f"{c.get('visit_venue') or 'site'} — CONFIRM THE TIME")
+        where = "a VIDEO CALL" if virtual else (c.get("visit_venue") or "site")
+        action = (f"{booked} {c.get('visit_time') or ''} at {where} — "
+                  f"CONFIRM THE TIME"
+                  + (" — DO NOT SEND DIRECTIONS, THEY ARE OVERSEAS" if virtual else ""))
     else:
         action = reason or "Cleared every gate — call today."
     return [
-        _slot(f"{'SITE VISIT BOOKED' if booked else 'Qualified lead'} — "
+        _slot(f"{('VIRTUAL WALKTHROUGH BOOKED' if virtual else 'SITE VISIT BOOKED') if booked else 'Qualified lead'} — "
               f"{lead.get('project')}"),
         _slot(lead.get("name"), "name not given"),
         _slot(lead.get("phone")),
