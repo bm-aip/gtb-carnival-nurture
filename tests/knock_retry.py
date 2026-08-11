@@ -83,4 +83,4 @@ r.check("giving up marks knock_lost_at, never suppressed",
             os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "knocks.py"), encoding="utf-8").read())
 
-sys.exit(r.report("KNOCK RETRY RULES"))
+sys.exit(0 if r.report("KNOCK RETRY RULES") else 1)
