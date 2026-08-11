@@ -151,9 +151,12 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None,
     # Store the provider's message id alongside the send so a delivery callback
     # (task 5) can be joined back to the message that caused it. Best-effort: if
     # the id is absent the callback still lands, matched on phone instead.
+    # `template_name` records WHICH wording went out. A knock now has up to three
+    # approved variants and is retried with the next one when Meta refuses it, so
+    # without this the rotation cannot tell what has already been spent on a person.
     db.log_msg(log_lead_id or lead["id"], "out", msg_type, body, ok=ok, detail=detail,
                provider_msg_id=wati.extract_msg_id(detail),
-               fail_class=fail_class, sources=sources)
+               fail_class=fail_class, sources=sources, template_name=template)
 
     if ok:
         # Reset on success. The ceiling itself counts only failures since the last
