@@ -90,8 +90,12 @@ DECISION_SCHEMA = {
         "timeline": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "visit_day": {"anyOf": [{"type": "string"}, {"type": "null"}]},
         "visit_time": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+        # `experience_centre` is retired (owner 2026-08-11) but stays in the enum:
+        # removing it would make the model's occasional stale answer a SCHEMA
+        # failure, losing the whole turn, where _enforce can quietly normalise it
+        # to "site" instead. `virtual` is the ask for anyone not in Chennai.
         "visit_venue": {"anyOf": [{"type": "string",
-                                   "enum": ["site", "experience_centre"]},
+                                   "enum": ["site", "virtual", "experience_centre"]},
                                   {"type": "null"}]},
         "flags": {"type": "array",
                   "items": {"type": "string",
@@ -400,6 +404,23 @@ def run_turn(lead, message, history=None, conv=None):
                                        "budget": heard}}
 
     state = _ladder(live_conv) + "\n".join(_already_quoted(messages))
+
+    # WHERE THIS BUYER IS DECIDES WHAT WE ASK THEM FOR (owner, 2026-08-11).
+    #
+    # Told per turn rather than baked into the system prompt, because the prompt is
+    # assembled once per brand and cached -- it cannot know which person is on the
+    # other end. Lead 1016 is why this exists: a +966 number asked to be called five
+    # different ways and was answered with "just tell me a day and I'll set up the
+    # visit" every time.
+    if config.is_overseas(lead):
+        state += (
+            "\n\nTHIS BUYER IS NOT IN INDIA. Do NOT ask them to visit the site and "
+            "do NOT ask for a day for a visit. Offer A LIVE VIDEO WALKTHROUGH "
+            "instead -- one of our team walks them through the site on a call. It is "
+            "booked the same way, a day and a time, and there are no directions "
+            "because it is a call. If they ask to be phoned, that is a yes to this: "
+            "take the day and set visit_venue='virtual'.")
+
     if conv and conv.get("outcome") == "qualified":
         state = HANDOVER_MODE + "\n\n" + state
     elif conv and conv.get("outcome") == "escalated":
@@ -1005,24 +1026,34 @@ def _enforce(d, chunks, lead, message=None, history=None):
         out["internal_note"] += f" | suppressed reply: {reply[:160]!r}"
         return out
 
-    # 0. THE EXPERIENCE CENTRE LOCK. The mall may only be offered against a real
-    #    distance objection. Seen on the first live turn: the buyer asked "how far
-    #    is this from Adyar" -- a question -- and the model volunteered the mall
-    #    ("if the drive feels long..."), pre-empting an objection never made. The
-    #    prompt already forbids this; enforcing it here is what makes it true.
-    if _MALL.search(reply) and not _raised_distance(message, history):
+    # 0. THE EXPERIENCE CENTRE IS GONE. Owner, 2026-08-11: "stop asking for visit to
+    #    experience center - we want ppl to visit the site if they are in chennai -
+    #    if they are outside chennai ... we have to push them for a virtual walk
+    #    thru".
+    #
+    #    This used to be a CONDITIONAL lock -- the mall was allowed once the buyer
+    #    objected to the distance. That condition is what the owner removed: a
+    #    distant buyer now gets a video walkthrough, which is a better answer than a
+    #    miniature model in a shopping mall, and a Chennai buyer gets the site.
+    #    So the strip is now unconditional and _raised_distance is no longer
+    #    consulted. Simpler, and a guarantee instead of a judgement.
+    if _MALL.search(reply):
         stripped = _strip_mall(reply)
         if stripped:
             d["reply"] = reply = stripped
             d["internal_note"] = (d.get("internal_note") or "") + \
-                " | mall offer removed: no distance objection from buyer"
+                " | experience centre offer removed: venue retired 2026-08-11"
         else:
             # The whole reply was the mall offer; there is nothing left to send.
-            out = _forced_escalation("mall offered with no distance objection", chunks)
+            out = _forced_escalation("experience centre offered; venue retired", chunks)
             out["internal_note"] += f" | suppressed reply: {reply[:160]}"
             return out
-        if d.get("visit_venue") == "experience_centre":
-            d["visit_venue"] = "site"
+    # Stale model output can still name the retired venue in the STRUCTURED field
+    # even when the reply text does not, so this normalisation runs unconditionally
+    # rather than only inside the strip above -- where it silently did nothing
+    # whenever the mall was named in the field but not in the sentence.
+    if d.get("visit_venue") == "experience_centre":
+        d["visit_venue"] = "site"
 
     # 1. CONFIDENCE FLOOR. A factual CLAIM with no chunk behind it is exactly how
     #    invented schools and possession dates reach a buyer.
