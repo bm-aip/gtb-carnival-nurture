@@ -26,10 +26,19 @@ Two independent signals, unioned, because each misses cases the other catches:
       only ever written for STRANGERS, so it misses every returning lead that
       clicked an ad (the leak this branch fixes).
 
-  (b) an inbound opening with `Hi!` -- the prefilled text of the CTWA ad, which is
-      the only trace left for those returning leads. `Hi,` is the landing page and
-      is deliberately NOT a candidate: no Meta click happened, so there is nothing
-      to fetch.
+  (b) an INBOUND message opening with `Hi!` -- the prefilled text of the CTWA ad.
+      `Hi,` is the landing page and is deliberately NOT a candidate: no Meta click
+      happened, so there is nothing to fetch.
+
+      ⚠️ `ml.direction='in'` is load-bearing. The BOT's own replies open with "Hi!"
+      too -- 97 outbound `qualifier_turn` rows on 2026-08-10 -- so without the
+      filter this matched almost every lead the bot had ever greeted. That inflated
+      the candidate set from 40 to 85 and spent 48 Wati calls proving that people
+      who were never CTWA have no CTWA referral. Cheap mistake here, but it also
+      produced a wrong claim in reporting: the extra 45 looked like leads whose
+      click id the old leak had dropped, and they were nothing of the kind. The
+      webhook's `sourceId` turned out to carry 36 of the 37 real referrals on its
+      own; this signal adds one.
 
 Leads already carrying a click id, or already looked at and found to have none, are
 skipped. Safe to re-run.
@@ -52,14 +61,16 @@ import wati    # noqa: E402
 CANDIDATES = """
 SELECT l.id, l.phone, l.name, l.wa_state, l.ctwa_clid, l.last_inbound_at,
        max(CASE WHEN ml.detail ~ 'sourceId=' THEN 1 ELSE 0 END) AS webhook_evidence,
-       max(CASE WHEN ml.body ~* '^\\s*hi!'   THEN 1 ELSE 0 END) AS opener_evidence
+       max(CASE WHEN ml.direction = 'in' AND ml.body ~* '^\\s*hi!'
+                THEN 1 ELSE 0 END) AS opener_evidence
   FROM leads l
   JOIN message_log ml ON ml.lead_id = l.id
  WHERE l.ctwa_clid IS NULL
    AND l.ctwa_looked_at IS NULL
  GROUP BY l.id
 HAVING max(CASE WHEN ml.detail ~ 'sourceId=' THEN 1 ELSE 0 END) = 1
-    OR max(CASE WHEN ml.body ~* '^\\s*hi!'   THEN 1 ELSE 0 END) = 1
+    OR max(CASE WHEN ml.direction = 'in' AND ml.body ~* '^\\s*hi!'
+                THEN 1 ELSE 0 END) = 1
  ORDER BY l.last_inbound_at DESC NULLS LAST
 """
 
