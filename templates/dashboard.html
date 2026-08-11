@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ event }} — Command</title>
+<title>{{ event }} — Engagement</title>
 <style>
   :root{
     --ink:#0d1330; --panel:#141b3f; --panel2:#1a2350; --line:#2a3568;
     --gold:#d4a53c; --gold-soft:#e8c877; --text:#e9ecf7; --dim:#8f97bd;
-    --ok:#4cc38a; --warn:#e5484d;
+    --ok:#4cc38a; --warn:#e5484d; --amber:#e8a33d;
   }
   *{box-sizing:border-box;margin:0}
   body{background:var(--ink);color:var(--text);
        font:15px/1.5 "Segoe UI",system-ui,sans-serif;padding:0 0 60px}
   header{display:flex;align-items:baseline;gap:14px;padding:22px 28px 10px;
-         border-bottom:1px solid var(--line)}
+         border-bottom:1px solid var(--line);flex-wrap:wrap}
   header h1{font-size:20px;letter-spacing:.12em;text-transform:uppercase;
             color:var(--gold);font-weight:600}
   header .dates{color:var(--dim);font-size:13px}
@@ -26,227 +26,364 @@
   nav button{background:none;border:1px solid transparent;color:var(--dim);
              padding:7px 16px;border-radius:8px;cursor:pointer;font-size:14px}
   nav button.active{color:var(--gold-soft);border-color:var(--gold);background:var(--panel)}
-  main{padding:24px 28px;max-width:1200px}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px}
+  main{padding:24px 28px;max-width:1100px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:14px;margin-bottom:8px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
   .card .k{font-size:12px;color:var(--dim);text-transform:uppercase;letter-spacing:.08em}
   .card .v{font-size:30px;font-weight:600;color:var(--gold-soft);margin-top:2px}
   .card .sub{font-size:12px;color:var(--dim)}
+  .wrap{overflow-x:auto}
   table{width:100%;border-collapse:collapse;background:var(--panel);
         border:1px solid var(--line);border-radius:12px;overflow:hidden}
   th,td{padding:9px 12px;text-align:left;font-size:13px;border-bottom:1px solid var(--line)}
   th{color:var(--dim);text-transform:uppercase;font-size:11px;letter-spacing:.08em;
      background:var(--panel2)}
   tr:last-child td{border-bottom:none}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
   .tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--panel2);
        border:1px solid var(--line)}
-  .tag.gold{color:var(--gold-soft);border-color:var(--gold)}
   .tag.green{color:var(--ok);border-color:var(--ok)}
   .tag.red{color:var(--warn);border-color:var(--warn)}
-  select,input{background:var(--panel2);color:var(--text);border:1px solid var(--line);
-        border-radius:6px;padding:5px 8px;font-size:13px}
   .btn{background:var(--gold);color:#1a1405;border:none;border-radius:8px;
        padding:7px 14px;font-weight:600;cursor:pointer;font-size:13px}
   .btn.ghost{background:none;color:var(--gold-soft);border:1px solid var(--gold)}
   .errbar{background:#3a1420;border:1px solid var(--warn);color:#ffb4b4;
           padding:8px 14px;border-radius:8px;margin-bottom:16px;font-size:13px;display:none}
   .hidden{display:none}
-  h2{font-size:15px;color:var(--dim);margin:18px 0 10px;text-transform:uppercase;
+  h2{font-size:15px;color:var(--dim);margin:26px 0 10px;text-transform:uppercase;
      letter-spacing:.08em}
+  .note{font-size:12.5px;color:var(--dim);margin:8px 0 14px;line-height:1.55;
+        border-left:2px solid var(--line);padding-left:12px}
+  .gate{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+        padding:14px 18px;margin-bottom:12px}
+  .gate .q{font-size:14px;color:var(--text);margin-bottom:2px}
+  .gate .qsub{font-size:12px;color:var(--dim);margin-bottom:12px}
+  .row{display:grid;grid-template-columns:150px 1fr 130px;gap:12px;align-items:center;
+       margin:7px 0;font-size:13px}
+  .row .lbl{color:var(--dim)}
+  .bar{height:16px;background:var(--panel2);border-radius:4px;overflow:hidden;
+       border:1px solid var(--line)}
+  .bar i{display:block;height:100%;background:var(--ok)}
+  .bar i.low{background:var(--warn)} .bar i.mid{background:var(--amber)}
+  .row .n{text-align:right;font-variant-numeric:tabular-nums;color:var(--text)}
+  .quote{font-size:13px;color:var(--text);font-style:italic}
+  @media (max-width:640px){ .row{grid-template-columns:1fr} main{padding:16px} }
 </style>
 </head>
 <body>
 <header>
   <h1>{{ event }}</h1>
-  <span class="dates">10 · 11 · 12 July 2026 — GTB Lounge, EA Mall</span>
+  <span class="dates">Republic of Nature — WhatsApp engagement</span>
   <div class="right">
-    <span id="rate" class="pill">…</span>
-    <span id="pausePill" class="pill ok">LIVE</span>
-    <button id="pauseBtn" class="btn ghost">Pause sending</button>
-    <button id="pollBtn" class="btn">Poll now</button>
+    <span id="sendsPill" class="pill">…</span>
+    <span id="pausePill" class="pill">…</span>
+    <span id="updated" class="dates"></span>
   </div>
 </header>
 <nav>
-  <button data-tab="overview" class="active">Overview</button>
-  <button data-tab="leads">Leads</button>
-  <button data-tab="campaigns">Campaigns</button>
-  <button data-tab="unmatched">Unmatched</button>
+  <button data-tab="funnel" class="active">Where people stop</button>
+  <button data-tab="sources">Sources &amp; ads</button>
+  <button data-tab="drip">Follow-ups</button>
+  <button data-tab="system">System</button>
 </nav>
 <main>
   <div id="errbar" class="errbar"></div>
 
-  <section id="tab-overview">
-    <div class="cards" id="dayCards"></div>
-    <h2>Pipeline by project</h2>
-    <table id="funnelTable"><thead><tr>
-      <th>Project</th><th>Queued</th><th>M1 sent</th><th>M2 sent</th>
-      <th>Date selected</th><th>Unmatched</th><th>Suppressed</th>
-    </tr></thead><tbody></tbody></table>
-  </section>
-
-  <section id="tab-leads" class="hidden">
-    <div style="margin-bottom:12px">
-      <select id="leadProject">
-        <option value="">All projects</option>
-        <option value="RON">RON</option>
-        <option value="ELEMENTS">Elements</option>
-      </select>
+  <!-- ================= WHERE PEOPLE STOP ================= -->
+  <section id="tab-funnel">
+    <div class="cards" id="funnelCards"></div>
+    <div class="note">
+      Rates below are of the people the bot <b>actually asked</b> — someone who never
+      got a question is not evidence about the question.
+      <b>Always read a source at a time.</b> The combined number is misleading: on
+      10 Aug the purpose question read 19.2% before a rewording and 13.9% after, which
+      looked like the rewrite had hurt. Split by source it inverted — landing page went
+      19.0% → 24.3% (the rewrite <i>helped</i>) while CTWA volume grew from 5 to 37
+      conversations at 2.9%. The combined figure moved because the mix moved.
     </div>
-    <table id="leadsTable"><thead><tr>
-      <th>Name</th><th>Project</th><th>Phone</th><th>Sell.do status</th>
-      <th>WhatsApp state</th><th>Selected day</th><th>Last reply</th>
-    </tr></thead><tbody></tbody></table>
+    <h2>Each question, by source</h2>
+    <div id="gates"></div>
+
+    <h2>Which wording earns an answer</h2>
+    <div class="note">
+      The bot rephrases only when the first wording got no answer, so wording #1 always
+      carries most of the volume and #2 and #3 are asked of a harder audience. A high
+      rate on a handful of attempts means nothing — read <b>used</b> before rate.
+      <br><b>Caveat:</b> the sentences shown are what is live now, while the counts were
+      earned by whatever was live at the time. The purpose wording changed on 7 Aug 2026,
+      so counts from before then belong to the previous sentence.
+    </div>
+    <div id="framings"></div>
   </section>
 
-  <section id="tab-campaigns" class="hidden">
-    <table id="campTable"><thead><tr>
-      <th>Campaign</th><th>Account</th><th>Mapped to</th><th>Spend ₹</th>
-      <th>Leads</th><th>CPL ₹</th><th>Clicks</th>
-    </tr></thead><tbody></tbody></table>
+  <!-- ================= SOURCES & ADS ================= -->
+  <section id="tab-sources" class="hidden">
+    <div class="note">
+      One row per door people came through. <b>Answer rate</b> is the share who replied
+      to at least one question — the honest test of whether a source sends real buyers.
+      An ad appears here once its click has been captured; anything not yet attributed
+      shows as <i>unattributed</i> rather than being folded into another row.
+    </div>
+    <div class="wrap"><table id="srcTable">
+      <thead><tr>
+        <th>Source</th><th class="num">People</th><th class="num">Asked</th>
+        <th class="num">Answered</th><th class="num">Answer rate</th>
+        <th class="num">3 of 4</th><th class="num">Reached sales</th>
+      </tr></thead><tbody></tbody>
+    </table></div>
+    <div class="note" id="spendNote">
+      <b>No cost figures yet.</b> Meta ad spend is polled at campaign level over a date
+      range still frozen on the carnival window, and messaging campaigns are filtered
+      out by objective — so CTWA ads have no spend on record. Until that is fixed,
+      cost per answering lead cannot be shown.
+    </div>
   </section>
 
-  <section id="tab-unmatched" class="hidden">
-    <p style="color:var(--dim);font-size:13px;margin-bottom:12px">
-      Leads whose phone number could not be pulled from the Meta lead form.
-      Enter the number manually to queue them.</p>
-    <table id="unmatchedTable"><thead><tr>
-      <th>Name</th><th>Project</th><th>Sell.do ID</th><th>Meta lead ID</th>
-      <th>Phone</th><th></th>
-    </tr></thead><tbody></tbody></table>
+  <!-- ================= FOLLOW-UPS (DRIP) ================= -->
+  <section id="tab-drip" class="hidden">
+    <div class="cards" id="dripCards"></div>
+    <div class="note">
+      These are the messages the bot sends to people who have <b>gone quiet</b> — the
+      other half of the picture, since the funnel only measures people already talking.
+      <b>Reply rate</b> is the share who said anything within 72 hours. A reply is
+      credited to the last follow-up sent before it; an earlier one may have warmed
+      them, and there is no way to separate those.
+    </div>
+    <h2>Each follow-up</h2>
+    <div id="dripSteps"></div>
+
+    <h2>Did they arrive?</h2>
+    <div class="note">
+      <b>Accepted</b> only means Wati took the message. <b>Delivered</b> and <b>read</b>
+      come from WhatsApp's own callbacks. The gap between them matters: treating
+      accepted as delivered is how a 62% failure rate went unnoticed for a day on
+      2 Aug. <i>No callback</i> means we never found out — that is a blind spot, not a zero.
+    </div>
+    <div class="wrap"><table id="dripDelivery">
+      <thead><tr><th>Outcome</th><th class="num">Messages</th>
+        <th class="num">Share</th></tr></thead><tbody></tbody>
+    </table></div>
+  </section>
+
+  <!-- ================= SYSTEM ================= -->
+  <section id="tab-system" class="hidden">
+    <div class="cards" id="sysCards"></div>
+    <h2>Conversation states</h2>
+    <div class="wrap"><table id="stateTable">
+      <thead><tr><th>Project</th><th>State</th><th class="num">People</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <h2>Failed jobs — messages never answered</h2>
+    <div class="wrap"><table id="failTable">
+      <thead><tr><th>Kind</th><th>Phone</th><th class="num">Tries</th>
+        <th>Last error</th></tr></thead><tbody></tbody>
+    </table></div>
+
+    <h2>Errors on record</h2>
+    <div class="wrap"><table id="errTable">
+      <thead><tr><th>Check</th><th>Message</th></tr></thead><tbody></tbody>
+    </table></div>
   </section>
 </main>
 
 <script>
-const $=s=>document.querySelector(s);
-const fmtD=d=>new Date(d+"T00:00").toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"});
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const pct = v => (v === null || v === undefined) ? "—" : v.toFixed(1) + "%";
 
-document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
-  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("active"));
+// Question text people actually hear, in plain words. The stored gate names
+// ("purpose") mean nothing to anyone who did not write the code.
+const GATE_LABEL = {
+  purpose:       ['"Is this a weekend place, a primary home or an investment?"',
+                  "Asked first, right after the bot answers their opening question."],
+  location:      ['"Whereabouts are you looking to buy?"',
+                  "Asked second, once they have said how they would use the place."],
+  configuration: ['"Apartment or villa, and how many bedrooms?"',
+                  "Asked third."],
+  budget:        ['"Roughly what range are you working with?"',
+                  "Asked last — it is the sharpest question, so it is earned."]
+};
+
+function barClass(r){ return r === null ? "" : (r < 10 ? "low" : (r < 25 ? "mid" : "")); }
+
+const TABS = ["funnel","sources","drip","system"];
+const NAV = document.querySelector("nav");
+NAV.querySelectorAll("button").forEach(b => b.onclick = () => {
+  NAV.querySelectorAll("button").forEach(x => x.classList.remove("active"));
   b.classList.add("active");
-  document.querySelectorAll("main section").forEach(s=>s.classList.add("hidden"));
-  $("#tab-"+b.dataset.tab).classList.remove("hidden");
-  load(b.dataset.tab);
+  TABS.forEach(t => $("#tab-" + t).classList.toggle("hidden", t !== b.dataset.tab));
 });
 
-async function j(url,opt){const r=await fetch(url,opt);return r.json()}
+// "knock_t2_location" is a database key. Marketing reads "Follow-up 2 · location".
+function stepLabel(mt){
+  const m = /^knock_t(\d+)_(.+)$/.exec(mt || "");
+  if (m) return "Follow-up " + m[1] + " · " + m[2].replace(/_/g, " ");
+  return String(mt || "").replace(/^knock_/, "").replace(/_/g, " ");
+}
 
-async function loadSummary(){
-  const s=await j("/api/summary");
-  $("#rate").textContent=s.sends_last_hour+" sends / hr";
-  $("#pausePill").textContent=s.paused?"PAUSED":"LIVE";
-  $("#pausePill").className="pill "+(s.paused?"bad":"ok");
-  $("#pauseBtn").textContent=s.paused?"Resume sending":"Pause sending";
-  $("#pauseBtn").dataset.paused=s.paused;
-  const errs=Object.entries(s.errors).filter(([k,v])=>v).map(([k,v])=>k+": "+v);
-  $("#errbar").style.display=errs.length?"block":"none";
-  $("#errbar").textContent=errs.join(" | ");
+function card(k, v, sub){
+  return `<div class="card"><div class="k">${esc(k)}</div>
+          <div class="v">${esc(v)}</div>
+          <div class="sub">${esc(sub || "")}</div></div>`;
+}
 
-  // Two populations, deliberately not summed into one headline number:
-  //   replied  -> answered us on WhatsApp (tapped the day-picker / typed a date)
-  //   formOnly -> day came from the Meta form's preferred_date; never responded
-  const byDate={}, byProj={}, byRep={};
-  s.day_counts.forEach(r=>{
-    byDate[r.selected_date]=(byDate[r.selected_date]||0)+r.n;
-    byRep[r.selected_date]=(byRep[r.selected_date]||0)+(r.replied||0);
-    byProj[r.selected_date]=byProj[r.selected_date]||{};
-    byProj[r.selected_date][r.project]=r.n;
-  });
-  const tot=Object.values(byDate).reduce((a,b)=>a+b,0);
-  const rep=Object.values(byRep).reduce((a,b)=>a+b,0);
-  // event_dates is gone from /api/summary (Phase 0 task 1b -- the carnival is
-  // over). The per-day attendance cards below only ever made sense for a
-  // three-day event, so with no dates supplied they render as nothing rather
-  // than throwing and taking the whole dashboard down with them.
-  $("#dayCards").innerHTML=(s.event_dates||[]).map(d=>{
-    const p=byProj[d]||{}, n=byDate[d]||0, rd=byRep[d]||0;
-    return `<div class="card"><div class="k">${fmtD(d)}</div>
-      <div class="v">${n}</div>
-      <div class="sub">${rd} replied · ${n-rd} form-only</div>
-      <div class="sub">RON ${p.RON||0} · Elements ${p.ELEMENTS||0}</div></div>`;
-  }).join("")
-  +`<div class="card"><div class="k">Replied to us</div>
-      <div class="v">${rep}</div>
-      <div class="sub">tapped or typed a day on WhatsApp</div></div>`
-  +`<div class="card"><div class="k">Form-picked only</div>
-      <div class="v">${tot-rep}</div>
-      <div class="sub">day taken from the Meta form; no reply yet</div></div>`;
+async function load(){
+  let ads, sum, queue, drip;
+  try {
+    [ads, sum, queue, drip] = await Promise.all([
+      fetch("/admin/ads").then(r => r.json()),
+      fetch("/api/summary").then(r => r.json()),
+      fetch("/api/queue").then(r => r.json()).catch(() => ({})),
+      fetch("/admin/drip").then(r => r.json()).catch(() => ({}))
+    ]);
+  } catch (e) {
+    $("#errbar").style.display = "block";
+    $("#errbar").textContent = "Could not load data: " + e;
+    return;
+  }
+  $("#updated").textContent = "updated " + new Date().toLocaleTimeString();
 
-  const f={};
-  s.funnel.forEach(r=>{f[r.project]=f[r.project]||{};f[r.project][r.wa_state]=r.n});
-  $("#funnelTable tbody").innerHTML=["RON","ELEMENTS"].map(p=>{
-    const g=f[p]||{};
-    return `<tr><td>${p}</td><td>${g.queued||0}</td><td>${g.m1_sent||0}</td>
-      <td>${g.m2_sent||0}</td><td>${g.date_selected||0}</td>
-      <td>${g.unmatched||0}</td><td>${g.suppressed||0}</td></tr>`;
+  // ---- header state ----
+  const sends = sum.sends_enabled;
+  $("#sendsPill").textContent = sends ? "SENDING ON" : "SENDING OFF";
+  $("#sendsPill").className = "pill " + (sends ? "ok" : "bad");
+  $("#pausePill").textContent = sum.paused ? "PAUSED" : "LIVE";
+  $("#pausePill").className = "pill " + (sum.paused ? "bad" : "ok");
+
+  // ---- funnel cards ----
+  const t = ads.totals || {};
+  const silent = t.answered_nothing || 0, convs = t.conversations || 0;
+  $("#funnelCards").innerHTML =
+      card("Conversations", convs, "people who messaged us")
+    + card("Answered nothing", silent,
+           convs ? Math.round(100 * silent / convs) + "% of everyone" : "")
+    + card("Reached sales", t.reached_human || 0, "asked for a call or booked");
+
+  // ---- each question, by source ----
+  $("#gates").innerHTML = (ads.gates || []).map(g => {
+    const lbl = GATE_LABEL[g.gate] || [g.gate, ""];
+    const rows = (g.by_source || []).map(s => {
+      const r = s.answer_rate;
+      const w = r === null ? 0 : Math.max(r, 1.5);
+      return `<div class="row">
+        <span class="lbl">${esc(s.source)}</span>
+        <span class="bar"><i class="${barClass(r)}" style="width:${w}%"></i></span>
+        <span class="n">${s.answered} of ${s.asked} &nbsp; <b>${pct(r)}</b></span>
+      </div>`;
+    }).join("") || `<div class="row"><span class="lbl">never asked</span></div>`;
+    return `<div class="gate"><div class="q">${esc(lbl[0])}</div>
+            <div class="qsub">${esc(lbl[1])}</div>${rows}</div>`;
   }).join("");
+
+  // ---- wording ----
+  $("#framings").innerHTML = (ads.gates || []).map(g => {
+    const live = (g.framings || []).filter(f => f.used > 0);
+    if (!live.length) return "";
+    const lbl = (GATE_LABEL[g.gate] || [g.gate])[0];
+    const rows = live.map(f => `<tr>
+        <td class="quote">“${esc(f.text)}”</td>
+        <td class="num">${f.used}</td><td class="num">${f.closed}</td>
+        <td class="num">${pct(f.close_rate)}</td></tr>`).join("");
+    return `<h2 style="margin-top:18px">${esc(lbl)}</h2>
+      <div class="wrap"><table><thead><tr><th>Wording</th>
+        <th class="num">Used</th><th class="num">Answered</th>
+        <th class="num">Rate</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join("");
+
+  // ---- sources ----
+  $("#srcTable tbody").innerHTML = (ads.sources || []).map(s => {
+    // An ad headline is what marketing recognises. The numeric id is a database key.
+    const name = s.headline ? s.headline
+               : (s.source === "ctwa" ? "CTWA (ad not identified)"
+               : (/^\d+$/.test(s.source) ? "Ad " + s.source : s.source));
+    const link = s.url ? ` <a href="${esc(s.url)}" target="_blank"
+                             rel="noopener" style="color:var(--dim)">↗</a>` : "";
+    const r = s.answer_rate;
+    const tag = r === null ? "" : (r < 10 ? "red" : (r >= 25 ? "green" : ""));
+    return `<tr><td>${esc(name)}${link}</td>
+      <td class="num">${s.convs}</td><td class="num">${s.asked_any}</td>
+      <td class="num">${s.answered_any}</td>
+      <td class="num"><span class="tag ${tag}">${pct(r)}</span></td>
+      <td class="num">${s.answered_3_plus}</td>
+      <td class="num">${s.reached_human}</td></tr>`;
+  }).join("") || `<tr><td colspan="7">No attributed sources yet.</td></tr>`;
+
+  // ---- follow-ups ----
+  const steps = drip.steps || [];
+  const sentTot = steps.reduce((a, s) => a + (s.accepted || 0), 0);
+  const repTot  = steps.reduce((a, s) => a + (s.replied  || 0), 0);
+  const optTot  = Object.values(drip.optouts || {}).reduce((a, b) => a + b, 0);
+  $("#dripCards").innerHTML =
+      card("Follow-ups sent", sentTot, "accepted by WhatsApp")
+    + card("Replies earned", repTot,
+           sentTot ? pct(100 * repTot / sentTot) + " of sends" : "")
+    + card("Opt-outs", optTot, optTot ? "people who asked us to stop" : "nobody yet");
+
+  $("#dripSteps").innerHTML = steps.map(s => {
+    const r = s.reply_rate, w = r === null ? 0 : Math.max(r, 1.5);
+    // Scaled against the best step, not against 100% -- an 8% bar next to a 1.7%
+    // bar is the comparison that matters, and both look like nothing against 100.
+    return `<div class="gate">
+      <div class="q">${esc(stepLabel(s.msg_type))}</div>
+      <div class="qsub">${s.accepted} sent${s.attempts > s.accepted
+          ? ` · ${s.attempts - s.accepted} refused before sending` : ""}</div>
+      <div class="row">
+        <span class="lbl">replied within 72h</span>
+        <span class="bar"><i class="${barClass(r)}" style="width:${w * 4}%"></i></span>
+        <span class="n">${s.replied} of ${s.accepted} &nbsp; <b>${pct(r)}</b></span>
+      </div></div>`;
+  }).join("") || `<div class="note">No follow-ups sent in this window.</div>`;
+
+  const dOut = (drip.delivery || {}).by_outcome || {};
+  const dTot = Object.values(dOut).reduce((a, b) => a + b, 0);
+  const ORDER = ["read","delivered","sent","failed","no callback"];
+  const keys = Object.keys(dOut).sort((a, b) => ORDER.indexOf(a) - ORDER.indexOf(b));
+  $("#dripDelivery tbody").innerHTML = keys.map(k => {
+    const tag = k === "failed" ? "red" : (k === "read" ? "green" : "");
+    return `<tr><td><span class="tag ${tag}">${esc(k)}</span></td>
+      <td class="num">${dOut[k]}</td>
+      <td class="num">${dTot ? pct(100 * dOut[k] / dTot) : "—"}</td></tr>`;
+  }).join("") || `<tr><td colspan="3">No delivery callbacks recorded.</td></tr>`;
+
+  // ---- system ----
+  // jobs.stats() nests the tallies under `counts`. A failed job is not a statistic:
+  // each one is a customer message that was never answered, and nothing else in the
+  // system surfaces that, so it gets its own card even when the count is zero.
+  const qc = queue.counts || {};
+  const failed = qc.failed ?? 0;
+  const alerts = [];
+  if (failed) alerts.push(failed + " customer message(s) never answered");
+  $("#sysCards").innerHTML =
+      card("Sent last hour", sum.sends_last_hour ?? "—", "messages out")
+    + card("Queue waiting", qc.queued ?? "—", "jobs not yet picked up")
+    + card("Unanswered messages", failed,
+           failed ? "jobs gave up — a person is waiting" : "none");
+  $("#failTable tbody").innerHTML = (queue.recent_failures || []).map(f =>
+    `<tr><td>${esc(f.kind)}</td><td>${esc(String(f.phone || "").slice(-4).padStart(6,"·"))}</td>
+     <td class="num">${esc(f.attempts)}</td><td>${esc(f.last_error)}</td></tr>`).join("")
+    || `<tr><td colspan="4">None.</td></tr>`;
+
+  $("#stateTable tbody").innerHTML = (sum.funnel || []).map(f =>
+    `<tr><td>${esc(f.project)}</td><td>${esc(f.wa_state)}</td>
+     <td class="num">${f.n}</td></tr>`).join("")
+    || `<tr><td colspan="3">Nothing yet.</td></tr>`;
+
+  const errs = Object.entries(sum.errors || {}).filter(([, v]) => v);
+  $("#errTable tbody").innerHTML = errs.map(([k, v]) =>
+    `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join("")
+    || `<tr><td colspan="2">No errors recorded.</td></tr>`;
+  if (errs.length) alerts.push(errs.length + " error(s) on record");
+
+  // One banner, both alerts. Written last so neither can overwrite the other --
+  // a silent failure hidden by a louder one is how the 62% template failure went
+  // unnoticed for a day.
+  $("#errbar").style.display = alerts.length ? "block" : "none";
+  $("#errbar").textContent = alerts.join(" · ") + (alerts.length ? " — see System tab" : "");
 }
 
-async function loadLeads(){
-  const p=$("#leadProject").value;
-  const rows=await j("/api/leads"+(p?("?project="+p):""));
-  $("#leadsTable tbody").innerHTML=rows.map(r=>`<tr>
-    <td>${r.name||"—"}</td><td>${r.project}</td><td>${r.phone||"—"}</td>
-    <td><span class="tag">${r.selldo_status||"—"}</span></td>
-    <td><span class="tag ${r.wa_state==='date_selected'?'green':(r.wa_state==='suppressed'||r.wa_state==='unmatched'?'red':'gold')}">${r.wa_state}</span></td>
-    <td>${r.selected_date?fmtD(r.selected_date):"—"}</td>
-    <td>${r.last_inbound_text||"—"}</td></tr>`).join("");
-}
-$("#leadProject").onchange=loadLeads;
-
-async function loadCampaigns(){
-  const rows=await j("/api/campaigns");
-  $("#campTable tbody").innerHTML=rows.map(r=>`<tr>
-    <td>${r.campaign_name||r.campaign_id}</td><td>${r.account_id||""}</td>
-    <td><select onchange="mapC('${r.campaign_id}',this.value)">
-      <option value="" ${!r.project?"selected":""}>—</option>
-      <option value="RON" ${r.project==="RON"?"selected":""}>RON</option>
-      <option value="ELEMENTS" ${r.project==="ELEMENTS"?"selected":""}>Elements</option>
-    </select></td>
-    <td>${(+r.spend).toLocaleString("en-IN")}</td><td>${r.leads}</td>
-    <td>${r.cpl??"—"}</td><td>${r.clicks}</td></tr>`).join("");
-}
-async function mapC(cid,project){
-  await j(`/api/campaigns/${cid}/map`,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify({project})});
-}
-
-async function loadUnmatched(){
-  const rows=await j("/api/unmatched");
-  $("#unmatchedTable tbody").innerHTML=rows.length?rows.map(r=>`<tr>
-    <td>${r.name||"—"}</td><td>${r.project}</td><td>${r.selldo_lead_id}</td>
-    <td>${r.meta_lead_id||"—"}</td>
-    <td><input id="ph${r.id}" placeholder="98xxxxxxxx"></td>
-    <td><button class="btn" onclick="fixPhone(${r.id})">Queue</button></td></tr>`).join("")
-    :`<tr><td colspan="6" style="color:var(--dim)">Nothing unmatched. Good.</td></tr>`;
-}
-async function fixPhone(id){
-  const phone=$("#ph"+id).value;
-  const r=await j(`/api/unmatched/${id}/phone`,{method:"POST",
-    headers:{"Content-Type":"application/json"},body:JSON.stringify({phone})});
-  if(r.ok)loadUnmatched();else alert(r.error||"failed");
-}
-
-$("#pauseBtn").onclick=async()=>{
-  const cur=$("#pauseBtn").dataset.paused==="true";
-  await j("/admin/pause",{method:"POST",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({paused:!cur})});
-  loadSummary();
-};
-$("#pollBtn").onclick=async()=>{
-  $("#pollBtn").textContent="Polling…";
-  await j("/admin/poll-now",{method:"POST"});
-  $("#pollBtn").textContent="Poll now";
-  load(document.querySelector("nav button.active").dataset.tab);
-};
-
-function load(tab){
-  loadSummary();
-  if(tab==="leads")loadLeads();
-  if(tab==="campaigns")loadCampaigns();
-  if(tab==="unmatched")loadUnmatched();
-}
-load("overview");
-setInterval(()=>load(document.querySelector("nav button.active").dataset.tab),60000);
+load();
+setInterval(load, 60000);
 </script>
 </body>
 </html>

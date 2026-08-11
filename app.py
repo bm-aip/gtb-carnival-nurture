@@ -600,6 +600,257 @@ def admin_webhook_status():
     })
 
 
+@app.route("/admin/ads")
+@auth
+def admin_ads():
+    """Which ad brings people who actually talk, and where they stop talking.
+
+    THE QUESTION THIS ANSWERS. When the bot is not getting replies, exactly two
+    things can be wrong: the leads are bad, or the messaging is bad. Those need
+    opposite responses -- one is a media decision, the other is a rewrite -- and
+    guessing between them costs either ad spend or a redesign that fixes nothing.
+
+    They separate cleanly on this data:
+
+      * BAD LEADS shows up as one source answering far worse than another while the
+        questions are identical. Measured 2026-08-10: landing-page arrivals answered
+        at 29%, CTWA ad clicks at 5%. Same bot, same words, six times the result --
+        that difference is the lead, not the message.
+
+      * BAD MESSAGING shows up in `gates`, as a collapse at one question rather than
+        a slope across all of them. Measured the same day: purpose asked 97 times and
+        answered 15, then 42% / 100% / 50% for everything after it. A funnel that
+        holds once people are past the first question is not leaking; one question is
+        turning them away.
+
+    Sends nothing, writes nothing.
+
+    Reads `leads.ctwa_source_id`, which is populated by the capture job and by
+    scripts/backfill_ctwa.py. Ads therefore appear here only once one of those has
+    run -- an ad with no row has no attributed conversation yet, which is not the
+    same as an ad with no conversions, so `unattributed` is reported rather than
+    quietly folded into the landing-page bucket.
+    """
+    GATES = ("purpose", "location", "configuration", "budget")
+
+    # `n_answered` / `n_asked` are counted the way the qualifier itself reads them:
+    # a key present with a null or empty value is NOT an answer (conversation.py
+    # tests `checklist.get(gate)` for truthiness), and a gate listed in `asked` with
+    # an empty framing array was never actually put to anyone. Counting raw key
+    # presence would inflate both and quietly overstate how well the bot is doing.
+    rows = db.q("""
+        WITH conv AS (
+            SELECT c.lead_id, c.outcome,
+                   (SELECT count(*) FROM jsonb_each_text(c.checklist) kv
+                     WHERE kv.key = ANY (%s)
+                       AND kv.value IS NOT NULL AND kv.value NOT IN ('', 'null'))
+                     AS n_answered,
+                   (SELECT count(*) FROM jsonb_each(c.asked) ka
+                     WHERE ka.key = ANY (%s)
+                       AND jsonb_array_length(ka.value) > 0) AS n_asked
+              FROM conversations c
+        )
+        SELECT COALESCE(l.ctwa_source_id, l.inflow, 'unattributed') AS source,
+               max(l.ctwa_headline)   AS headline,
+               max(l.ctwa_source_url) AS url,
+               count(*)                                        AS convs,
+               count(*) FILTER (WHERE conv.n_asked    > 0)      AS asked_any,
+               count(*) FILTER (WHERE conv.n_answered > 0)      AS answered_any,
+               count(*) FILTER (WHERE conv.n_answered >= 3)     AS answered_3_plus,
+               count(*) FILTER (WHERE conv.n_asked > 0
+                                  AND conv.n_answered = 0)      AS asked_but_silent,
+               count(*) FILTER (WHERE conv.outcome IN
+                    ('qualified','visit_booked','escalated'))   AS reached_human
+          FROM leads l
+          JOIN conv ON conv.lead_id = l.id
+         GROUP BY 1
+         ORDER BY count(*) DESC
+    """, (list(GATES), list(GATES))) or []
+
+    for r in rows:
+        # Rates, not counts, are what makes two sources of different sizes
+        # comparable -- and comparing them is the entire purpose of this endpoint.
+        asked = r["asked_any"] or 0
+        r["answer_rate"] = round(100.0 * (r["answered_any"] or 0) / asked, 1) if asked else None
+        r["qualified_rate"] = round(100.0 * (r["answered_3_plus"] or 0) / asked, 1) if asked else None
+
+    # The per-question funnel, SPLIT BY SOURCE, because a combined rate lies.
+    #
+    # Measured 2026-08-10, purpose gate: 19.2% before the 07 Aug rewording and 13.9%
+    # after, which reads as "the rewrite hurt". Split by source it inverts -- landing
+    # page went 19.0% -> 24.3% (the rewrite HELPED) while CTWA volume went from 5
+    # conversations to 37 at 2.9%. The combined number moved only because the mix
+    # moved. A single funnel would have shown 15% and hidden both facts, and the
+    # decision it invites -- rewrite the question again -- is the wrong one for CTWA,
+    # where 2.9% is not a wording problem at all.
+    #
+    # So: never report a bare gate rate on this page. Only ever per source.
+    gates = []
+    for g in GATES:
+        by_source = db.q("""
+            SELECT CASE WHEN l.ctwa_source_id IS NOT NULL OR l.inflow = 'ctwa'
+                        THEN 'CTWA' ELSE 'landing page / other' END AS source,
+                   count(*) FILTER (WHERE t.was_asked)                    AS asked,
+                   count(*) FILTER (WHERE t.was_asked AND t.was_answered) AS answered
+              FROM (SELECT lead_id,
+                      (asked ? %s
+                        AND jsonb_array_length(asked -> %s) > 0)  AS was_asked,
+                      (checklist ->> %s IS NOT NULL
+                        AND checklist ->> %s NOT IN ('', 'null')) AS was_answered
+                      FROM conversations) t
+              JOIN leads l ON l.id = t.lead_id
+             GROUP BY 1 ORDER BY 1
+        """, (g, g, g, g)) or []
+        for s in by_source:
+            a = s["asked"] or 0
+            s["answer_rate"] = round(100.0 * (s["answered"] or 0) / a, 1) if a else None
+        asked = sum(s["asked"] or 0 for s in by_source)
+        got = sum(s["answered"] or 0 for s in by_source)
+        gates.append({"gate": g,
+                      "asked": asked, "answered": got,
+                      # Reported for completeness, but the UI shows by_source instead.
+                      "answer_rate_combined": round(100.0 * got / asked, 1) if asked else None,
+                      "by_source": by_source,
+                      "framings": _framing_rates(g)})
+
+    totals = db.q("""
+        SELECT count(*) AS conversations,
+               count(*) FILTER (WHERE checklist = '{}'::jsonb) AS answered_nothing,
+               count(*) FILTER (WHERE outcome IN
+                    ('qualified','visit_booked','escalated')) AS reached_human
+          FROM conversations""", one=True) or {}
+
+    return jsonify({
+        "sources": rows,
+        "gates": gates,
+        "totals": totals,
+        # Read the gates in order. The first one with a rate far below the rest is
+        # the question to rewrite, and rewriting it lifts everything after it.
+        "note": "answer_rate is of conversations the bot actually asked, not of all "
+                "arrivals -- an arrival that never got a question is not evidence "
+                "about the question.",
+    })
+
+
+def _framing_rates(gate):
+    """Answer rate per WORDING, for one gate. Marketing owns this text, so the
+    per-wording number is the one they can act on -- a gate that fails might be the
+    wrong question or merely the wrong words, and only this separates those.
+
+    ATTRIBUTION RULE. `asked` holds the framing indexes spent on a gate, in order.
+    A conversation that heard two framings and then answered is credited to the
+    SECOND one, because that is the wording the person actually responded to.
+    Crediting the first would make an opener look good on an answer it did not earn.
+    A conversation that never answered is charged to the LAST wording tried, for the
+    same reason in reverse -- that is where they walked away.
+
+    Counts are small by design: only the first framing gets real volume, because the
+    bot only rephrases when the first one failed. So `used` is reported alongside
+    every rate; a 100% rate on two attempts is not evidence of anything.
+
+    ⚠️ `config.FRAMINGS` IS NOT VERSIONED. The text below is whatever is deployed
+    right now, while the counts were earned by whatever was deployed at the time --
+    the purpose wording changed on 07 Aug 2026 (#37) and the older counts belong to
+    the previous sentence. Until the wording is stamped at ask time, treat a rate as
+    valid only for asks made since marketing last touched that line.
+    """
+    framings = config.FRAMINGS.get(gate) or []
+    rows = db.q("""SELECT asked -> %s AS idxs,
+                          (checklist ->> %s IS NOT NULL
+                            AND checklist ->> %s NOT IN ('', 'null')) AS answered
+                     FROM conversations
+                    WHERE asked ? %s
+                      AND jsonb_array_length(asked -> %s) > 0""",
+                (gate, gate, gate, gate, gate)) or []
+
+    used = [0] * len(framings)
+    closed = [0] * len(framings)
+    for r in rows:
+        idxs = [int(i) for i in (r["idxs"] or []) if isinstance(i, (int, float))]
+        if not idxs:
+            continue
+        for i in idxs:
+            if 0 <= i < len(framings):
+                used[i] += 1
+        last = max(idxs)
+        if r["answered"] and 0 <= last < len(framings):
+            closed[last] += 1
+
+    return [{"i": i,
+             "text": framings[i],
+             "used": used[i],
+             "closed": closed[i],
+             "close_rate": round(100.0 * closed[i] / used[i], 1) if used[i] else None}
+            for i in range(len(framings))]
+
+
+@app.route("/admin/drip")
+@auth
+def admin_drip():
+    """Does the follow-up sequence earn replies, and do the messages even arrive?
+
+    The funnel on /admin/ads only measures people who are already talking. This
+    measures the other half -- the proactive knocks sent to people who are not.
+
+    TWO NUMBERS THAT MUST NOT BE CONFLATED.
+      `accepted` is Wati saying it took the send. It is NOT delivery.
+      `delivery` comes from Wati's own callbacks, matched by phone and time because
+      template sends return no message id to match on.
+    Treating the first as the second is how a 62% failure rate went unnoticed for a
+    day on 2026-08-02, and it is why both appear here side by side.
+
+    REPLY IS ATTRIBUTED TO THE LAST KNOCK SENT BEFORE IT, within 72 hours. A person
+    who replies after knock 2 is credited to knock 2 even though knock 1 may have
+    warmed them -- there is no way to separate those, and crediting both would make
+    the sequence look better than it is.
+
+    Measured 2026-08-10: follow-up 1 earned 7 replies from 88 sends (8.0%),
+    follow-up 2 earned 1 from 60 (1.7%). A second knock that buys one reply per
+    sixty sends is a cost question, not a copy question.
+
+    Sends nothing, writes nothing.
+    """
+    hours = int(request.args.get("hours", str(24 * 30)))
+
+    steps = db.q("""
+        WITH k AS (
+            SELECT ml.id, ml.lead_id, ml.msg_type, ml.ts, ml.ok
+              FROM message_log ml
+             WHERE ml.direction = 'out' AND ml.msg_type LIKE 'knock\\_%%'
+               AND ml.ts > now() - (%s || ' hours')::interval
+        )
+        SELECT k.msg_type,
+               count(*)                          AS attempts,
+               count(*) FILTER (WHERE k.ok)      AS accepted,
+               count(*) FILTER (WHERE k.ok AND EXISTS (
+                    SELECT 1 FROM message_log i
+                     WHERE i.lead_id = k.lead_id AND i.direction = 'in'
+                       AND i.msg_type = 'inbound'
+                       AND i.ts > k.ts AND i.ts < k.ts + interval '72 hours'
+               ))                                AS replied
+          FROM k GROUP BY 1 ORDER BY 1
+    """, (hours,)) or []
+    for s in steps:
+        acc = s["accepted"] or 0
+        s["reply_rate"] = round(100.0 * (s["replied"] or 0) / acc, 1) if acc else None
+
+    optouts = {r["scope"]: r["n"] for r in
+               (db.q("SELECT scope, count(*) AS n FROM optouts GROUP BY scope") or [])}
+
+    return jsonify({
+        "window_hours": hours,
+        "steps": steps,
+        "delivery": db.knock_delivery_summary(hours),
+        "rollup": db.delivery_rollup(min(hours, 24 * 7)),
+        # The cost side of knocking. One opt-out against 148 sends is the evidence
+        # that the fatigue cap is set about right; a jump here is the first sign it
+        # is not.
+        "optouts": optouts,
+        "note": "accepted = Wati took the send. delivery = Wati's callbacks. They are "
+                "different numbers and a gap between them is a finding, not noise.",
+    })
+
+
 @app.route("/admin/nurture")
 @auth
 def admin_nurture():
