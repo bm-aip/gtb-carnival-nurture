@@ -198,4 +198,65 @@ avg = sum(len(f.split()) for fs in config.FRAMINGS.values() for f in fs) / 12
 r.check(f"framings average under 11 words (got {avg:.1f})", avg < 11,
         detail="they averaged 14 before this rewrite")
 
+# --- 6. register: Chennai, not London ----------------------------------------
+# Owner, 2026-08-17, on the first rewrite: "'a rough band is plenty' - this is
+# exactly the kind of thing that is not going well for Indian... very western, very
+# English (UK)." Clipped is not the same as plain, and my first pass optimised for
+# short and casual, which lands as British informality.
+BRITISH = {
+    "rough band": "an approximate range",
+    "is plenty": "is enough",
+    "plenty of": "enough / a few",
+    "a bit of": "a few",
+    "side of town": "your area",
+    "worth seeing": "worth a visit",
+    "fair enough": "that's fine",
+    "lovely": "good",
+    "brilliant": "very good",
+    "keen on": "interested in",
+    "fancy a": "would you like a",
+    "sort out": "arrange",
+    "straight away": "immediately",
+}
+for gate, framings in config.FRAMINGS.items():
+    for i, f in enumerate(framings):
+        for bad, better in BRITISH.items():
+            if bad in f.lower():
+                r.check(f"{gate}[{i}] avoids '{bad}' (use '{better}')", False, detail=f)
+
+r.check("the budget framing offers an approximate RANGE, the owner's own wording",
+        any("approximate" in f for f in config.FRAMINGS["budget"]),
+        detail=str(config.FRAMINGS["budget"]))
+r.check("reasons use 'so that', which reads naturally here",
+        sum(1 for fs in config.FRAMINGS.values() for f in fs
+            if f.startswith("so that") or " so that " in f) >= 8,
+        detail="a bare 'so' reads clipped")
+
+# The rulebook must stop banning the words buyers here actually use. It told the bot
+# to prefer "about" over "approximately" and "3 bedroom" over "3BHK", which quietly
+# de-Indianised every reply.
+import answering                        # noqa: E402
+lang = answering.RULES["language"]
+r.check("the rulebook no longer bans 'approximately'",
+        '"About 20\nminutes" not "approximately"' not in lang
+        and 'not "approximately"' not in lang, detail="that rule was backwards")
+r.check("the rulebook says approximately and 3BHK are correct here",
+        "3BHK" in lang and "correct here" in lang)
+r.check("the rulebook carries a Chennai-not-London table",
+        "spoken in Chennai" in lang)
+
+# THE EXAMPLES ARE THE STRONGEST SIGNAL IN THE DOCUMENT -- a model copies a BETTER
+# line far more readily than it follows a rule. Three of the four modelled the exact
+# register the rules forbid: "Nice.", "Oh good.", "Worth seeing in person", and em
+# dashes in two of them. A ban contradicted by its own example is not a ban.
+better = re.findall(r"^BETTER: \"(.*)\"$", lang, re.M)
+r.check(f"there are BETTER examples to check (found {len(better)})", len(better) >= 3)
+for ex in better:
+    r.check(f"BETTER example has no dash: {ex[:44]}",
+            not re.search(r"\s[-–—]\s", ex), detail=ex)
+    for bad in ("Nice.", "Oh good", "Worth seeing", "Fair enough", "Lovely",
+                "plenty", "a bit of"):
+        if bad.lower() in ex.lower():
+            r.check(f"BETTER example avoids '{bad}'", False, detail=ex)
+
 sys.exit(0 if r.report("COPY STYLE RULES") else 1)

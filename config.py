@@ -623,8 +623,26 @@ def is_overseas(lead):
 # ⚠️ SALES OWNS THIS WORDING, not engineering (design §7). It lives in config so it
 # is data rather than code; it moves to the `agents.framings` column when the
 # corpus-upload screen exists (task 28).
-# REWRITTEN 2026-08-17. Owner: "rewrite the framings in plainer words, keep it as
-# simple as it can be".
+# REWRITTEN TWICE ON 2026-08-17. First for plainness, then for REGISTER, and the
+# second pass is the one that mattered.
+#
+# Owner on the first attempt: "'a rough band is plenty' - this is exactly the kind of
+# thing that is not going well for Indian. 'Give an approximate range' is better...
+# many things are like that, very western, very English (UK). I need the more natural
+# local flavour."
+#
+# He was right, and the mistake was mine twice over. I had optimised for SHORT and
+# CASUAL, which in practice means British informality -- "a rough band is plenty",
+# "worth seeing", "plenty of", "your side of town". Clipped is not the same as plain.
+#
+# Worse, an EARLIER rule of mine was pushing the same way: answering-rules.md told the
+# bot to write "about 20 minutes" instead of "approximately", and "3 bedroom" instead
+# of "3BHK". Both are the words buyers here actually use, so that rule was quietly
+# de-Indianising every reply. It is reversed now.
+#
+# What changed in this pass: "so that" rather than a bare "so", "an approximate range
+# is enough" rather than "a rough band is plenty", "your area" rather than "your side
+# of town", "the connectivity from your area" rather than "how well it connects".
 #
 # These clauses ride on most questions the bot asks, so they were a large share of
 # what made the copy read as written rather than spoken. They averaged 14 words;
@@ -649,9 +667,9 @@ def is_overseas(lead):
 #   re-point what a mid-flight conversation thinks it has already spent.
 FRAMINGS = {
     "purpose": [
-        "so I know which homes to show you",
-        "a weekend home and a primary home are very different picks here",
-        "so I don't waste your time",
+        "so that I can show you the right homes",
+        "a weekend home and a primary home are very different",
+        "so that I don't waste your time",
     ],
     # REWRITTEN 2026-08-02. The previous three were "whether this stretch of ECR
     # works for you", "the drive matters differently depending on where you're
@@ -667,19 +685,19 @@ FRAMINGS = {
     # Still one meaning: where they want to BUY, never where they live. And still
     # nothing that plants doubt -- the 2026-08-02 note above stands.
     "location": [
-        "so I can tell you the drive from your side of town",
-        "so I can keep the right homes ready before you come",
-        "so I can tell you how well it connects for you",
+        "so that I can tell you the distance from your area",
+        "so that we can keep the right homes ready for your visit",
+        "so that I can tell you about the connectivity from your area",
     ],
     "configuration": [
-        "so I can tell you what's available now, not everything at once",
+        "so that I can tell you what is available right now",
         "the apartments and the villas are very different",
-        "so I can point you at the two or three worth seeing",
+        "so that I can suggest the two or three that suit you",
     ],
     "budget": [
-        "only so I show you homes in your range, nothing above it",
-        "so the team doesn't show you the wrong homes on a visit",
-        "a rough band is plenty",
+        "only so that I show you homes within your range",
+        "so that our team shows you the right homes during the visit",
+        "an approximate range is enough",
     ],
 }
 
