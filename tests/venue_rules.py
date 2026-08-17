@@ -92,4 +92,4 @@ r.check("the rulebook names the video walkthrough",
 r.check("the rulebook still says the site is the win for Chennai buyers",
         "site" in visits.lower() and "chennai" in visits.lower())
 
-sys.exit(r.report("VENUE RULES"))
+sys.exit(0 if r.report("VENUE RULES") else 1)

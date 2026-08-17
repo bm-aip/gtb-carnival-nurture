@@ -73,6 +73,69 @@ def enqueue(kind, payload, phone=None, dedup_key=None, delay_seconds=0):
     return n == 1
 
 
+def enqueue_inbound(payload, phone, dedup_key=None):
+    """Add an inbound turn, MERGING it into one already waiting for the same person.
+
+    Returns "merged" if it was folded into a pending job, "queued" if a new job was
+    created, or "dup" if `dedup_key` had already been used.
+
+    WHY. People text in fragments. Measured 2026-08-11: 151 of 323 model calls -- 47%
+    -- fired within 90 seconds of the previous one for the same person. Lead 1016 sent
+    "Ok", "Call me", "Fast" inside thirty seconds and got three separate paragraphs
+    back, each with its own retrieval and its own model call, each answering a third
+    of a thought.
+
+    Merging is strictly better on every axis. One model call instead of three, and the
+    model sees the WHOLE message before answering, so "Call me / Fast / Only 2
+    minutes" reads as one urgent request rather than three unrelated ones. It also
+    reads more like a person: nobody fires three replies at three fragments.
+
+    NOT A DEDUP. Every fragment is kept, joined by a newline, because the fragments
+    together are the message -- dropping any of them would lose what they said.
+
+    ONLY MERGES INTO A `queued` JOB. A running job has already read its payload, so
+    appending to it would silently discard the new text.
+
+    A race between two webhooks can still produce two jobs -- both may find nothing to
+    merge into and both insert. That is exactly today's behaviour, so the worst case is
+    no worse than before; it is not worth a lock to close.
+    """
+    text = (payload or {}).get("text") or ""
+
+    # Idempotency has to survive merging: a merge inserts no row, so the
+    # ON CONFLICT (dedup_key) that used to guarantee this cannot fire. Claimed
+    # against the existing processed_webhooks table rather than a new one -- it is
+    # the same question ("have I already handled this message id?") and the caller
+    # already uses it, so a redelivery cannot append the same sentence twice.
+    if dedup_key and not db.mark_webhook_new(dedup_key):
+        return "dup"
+
+    if text and phone:
+        merged = db.q("""
+            UPDATE job_queue
+               SET payload = jsonb_set(
+                       jsonb_set(payload, '{text}',
+                                 to_jsonb(COALESCE(payload->>'text', '')
+                                          || E'\\n' || %s::text)),
+                       '{merged}',
+                       to_jsonb(COALESCE((payload->>'merged')::int, 1) + 1)),
+                   updated_at = now()
+             WHERE id = (SELECT j.id FROM job_queue j
+                          WHERE j.phone = %s AND j.kind = %s AND j.status = %s
+                          ORDER BY j.id DESC
+                          FOR UPDATE SKIP LOCKED
+                          LIMIT 1)
+            RETURNING id""", (text, phone, KIND_INBOUND, QUEUED)) or []
+        if merged:
+            return "merged"
+
+    n = db.x("""INSERT INTO job_queue (kind, phone, payload, dedup_key, run_after)
+                VALUES (%s,%s,%s,%s, now())
+                ON CONFLICT (dedup_key) DO NOTHING""",
+             (KIND_INBOUND, phone, json.dumps(payload), None))
+    return "queued" if n == 1 else "dup"
+
+
 def claim():
     """Take the next runnable job, or None.
 

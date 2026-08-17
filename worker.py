@@ -28,6 +28,7 @@ import signal
 import threading
 import time
 
+import answering
 import config
 import conversation
 import db
@@ -191,6 +192,25 @@ def _handle_inbound(job):
     # Silence now has exactly two legitimate sources, and both are explicit acts by a
     # person: the buyer sends STOP (optout.py, enforced in sendgate), or an operator
     # pauses the bot in Wati. Do not add a third.
+
+    # A BARE ACKNOWLEDGEMENT AFTER HANDOFF NEEDS NO MODEL.
+    #
+    # This is still a reply -- it does not add a third source of silence, and the rule
+    # above stands. It just refuses to spend a model call and a paragraph of amenities
+    # on the word "Ok". Lead 1016 answered "Ok", "Hm" and "By" and each got a fresh
+    # fact about the clubhouse plus another push to book a visit.
+    #
+    # GATED ON THE CONVERSATION ALREADY BEING HANDED OVER, deliberately. Before
+    # handoff, "ok" and "sure" are often real ANSWERS -- to "shall I pencil in
+    # Sunday?", to "would you like someone to call?" -- and short-circuiting those
+    # would drop a booking on the floor. Once a human owns the conversation there is
+    # no outstanding question a one-word reply could be answering.
+    if answering.is_bare_acknowledgement(text) and conv \
+            and conv.get("outcome") in config.HANDED_OFF_OUTCOMES:
+        sequencer._send(lead, "qualifier_ack", body=config.ACK_REPLY)
+        db.log_msg(lead["id"], "in", "ack_shortcircuit", text,
+                   detail=f"outcome={conv.get('outcome')}; fixed reply, no model call")
+        return
 
     turns = db.q("""SELECT direction, body FROM message_log
                     WHERE lead_id=%s AND msg_type IN ('inbound','qualifier_turn')
