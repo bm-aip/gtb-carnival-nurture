@@ -412,6 +412,20 @@ def run_turn(lead, message, history=None, conv=None):
     # other end. Lead 1016 is why this exists: a +966 number asked to be called five
     # different ways and was answered with "just tell me a day and I'll set up the
     # visit" every time.
+    # THEIR NAME. The reference conversation used it in 61% of messages; we used it
+    # in 5 of 624. It is the cheapest warmth available and it is how business is
+    # spoken here. Offered, not mandated -- a name wedged into every sentence reads
+    # like a mail merge, which is the opposite of the point.
+    #
+    # clean_first_name returns None for junk, and the guard matters because the buyer
+    # controls this string: WhatsApp profile names in this database include
+    # "Muna💞💞💞" and bare phone numbers. "Hi Muna💞💞💞" is worse than no name.
+    first = config.clean_first_name((lead or {}).get("name"))
+    if first:
+        state += (f"\n\nTHEIR NAME IS {first}. Use it naturally now and then -- an "
+                  f"opening, a reassurance -- not in every message and never twice "
+                  f"in one. If it looks wrong for the person, leave it out.")
+
     if config.is_overseas(lead):
         state += (
             "\n\nTHIS BUYER IS NOT IN INDIA. Do NOT ask them to visit the site and "
@@ -710,6 +724,20 @@ def _ladder(conv):
     if not gate:
         lines.append("The checklist is COMPLETE. Do not ask another gate question.")
         return "\n".join(lines)
+
+    # PACING. Whether this turn may ask is decided in code -- see
+    # conversation.may_ask_gate -- and the model is told the answer, never asked to
+    # judge it. Left to the prompt it asked something in 81% of turns.
+    if not convmod.may_ask_gate(conv):
+        lines.append(
+            "\nDO NOT ASK A QUALIFYING QUESTION THIS TURN. You asked one recently "
+            "and it is the buyer's turn to lead. Answer what they asked, warmly and "
+            "briefly, and stop there. Do not append a fact they did not ask for and "
+            "do not push a visit. Set gate_asked=null.\n"
+            "Ending a turn without a question is not a failure -- it is how a "
+            "conversation breathes, and those turns get answered more often.")
+        return "\n".join(lines)
+
     remaining = convmod.unused_framings(conv, gate)
     all_f = config.FRAMINGS.get(gate, [])
     lines.append(f"\nNEXT GATE TO ASK: {gate}")
@@ -999,6 +1027,66 @@ def _raised_distance(message, history):
     return any(_DISTANCE_OBJECTION.search(t) for t in texts)
 
 
+def _shorten(reply, cap, keep_last=False):
+    """Bring a reply under `cap` characters without cutting mid-sentence.
+
+    `keep_last` protects the final paragraph, and it exists because the first version
+    of this function was wrong in a way only a dry run over real history exposed.
+
+    The assumption was that our long replies end in padding -- an unasked-for fact,
+    another nudge about a visit -- so dropping from the end would remove exactly the
+    slack. Run over all 623 replies we had actually sent, it removed THE QUESTION:
+    the real shape is "answer" then "gate question", one paragraph each. That is the
+    opposite of the intent, and it would also have left `gate_asked` recorded for a
+    question the buyer never saw, quietly spending a framing on nothing.
+
+    So when this turn is allowed to ask, the last paragraph is protected and the trim
+    eats the middle instead -- the middle is where the unasked-for fact lives. When
+    the turn asks nothing, dropping from the end is right after all.
+
+    Never returns a fragment. A single sentence longer than the cap is left intact:
+    too long is recoverable, half a sentence reaching a buyer is not.
+    """
+    reply = (reply or "").strip()
+    if len(reply) <= cap:
+        return reply, None
+
+    paras = [p.strip() for p in re.split(r"\n\s*\n", reply) if p.strip()]
+
+    if keep_last and len(paras) > 1:
+        head, tail = paras[:-1], paras[-1]
+        # Drop from the END of the head -- nearest the question, furthest from the
+        # answer they asked for.
+        while len(head) > 1 and len("\n\n".join(head + [tail])) > cap:
+            head.pop()
+        out = "\n\n".join(head + [tail])
+        if len(out) <= cap:
+            return out, f"dropped {len(reply) - len(out)} chars, kept the question"
+        # Head is one paragraph and it is still too long: shrink it by sentences,
+        # never below one, so the answer and the question both survive.
+        shrunk, _ = _shorten(head[0], max(cap - len(tail) - 2, 80))
+        out = f"{shrunk}\n\n{tail}"
+        return out, f"answer shortened to fit the question ({len(out)} chars)"
+
+    while len(paras) > 1 and len("\n\n".join(paras)) > cap:
+        paras.pop()
+    out = "\n\n".join(paras)
+    if len(out) <= cap:
+        return out, f"dropped {len(reply) - len(out)} chars of trailing padding"
+
+    sentences = re.split(r"(?<=[.!?])\s+", out)
+    kept = []
+    for s in sentences:
+        candidate = " ".join(kept + [s])
+        if kept and len(candidate) > cap:
+            break
+        kept.append(s)
+    trimmed = " ".join(kept).strip()
+    if not trimmed:
+        return out, "over cap but unsplittable; left intact"
+    return trimmed, f"trimmed to {len(trimmed)} chars from {len(reply)}"
+
+
 def _strip_mall(reply):
     """Remove the sentences that offer the mall, keep the rest of the answer."""
     parts = re.split(r"(?<=[.!?])\s+", reply)
@@ -1054,6 +1142,31 @@ def _enforce(d, chunks, lead, message=None, history=None):
     # whenever the mall was named in the field but not in the sentence.
     if d.get("visit_venue") == "experience_centre":
         d["visit_venue"] = "site"
+
+    # 0b. LENGTH. Applied AFTER the mall strip so the two cannot fight over which
+    #     sentence goes, and BEFORE the citation and price checks so those judge the
+    #     text a buyer will actually receive rather than a longer draft.
+    #
+    #     Enforced rather than requested: the rulebook has asked for "two or three
+    #     lines" since it was written, and the median reply came out at 304
+    #     characters. Turns of 120-240 chars were replied to at 71.6%, turns of
+    #     240-400 at 42.8%.
+    if len(reply) > config.MAX_REPLY_CHARS:
+        asked_something = bool(d.get("gate_asked"))
+        shorter, how = _shorten(reply, config.MAX_REPLY_CHARS,
+                                keep_last=asked_something)
+        if shorter and shorter != reply:
+            d["reply"] = reply = shorter
+            d["internal_note"] = (d.get("internal_note") or "") + f" | length: {how}"
+        # LAST RESORT, and the reason this check exists at all: if the question did
+        # not survive, the turn did not ask. Leaving gate_asked set would record a
+        # question the buyer never saw, mark the gate as spent and burn one of its
+        # three framings on nothing -- the conversation would then move on to the
+        # next gate having never put this one.
+        if asked_something and "?" not in reply:
+            d["gate_asked"] = None
+            d["framing_used"] = None
+            d["internal_note"] += " | gate cleared: the question did not survive"
 
     # 1. CONFIDENCE FLOOR. A factual CLAIM with no chunk behind it is exactly how
     #    invented schools and possession dates reach a buyer.

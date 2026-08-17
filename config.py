@@ -530,6 +530,54 @@ HANDED_OFF_OUTCOMES = ("qualified", "visit_booked", "escalated", "wants_sales", 
 ACK_REPLY = os.environ.get(
     "ACK_REPLY", "Sure - someone from our team will be in touch shortly.")
 
+# --- shorter, warmer, less interrogative (owner, 2026-08-17) -------------------
+#
+# Measured across 623 turns that day, alongside a competitor conversation the owner
+# supplied as the reference for tone:
+#
+#                      that bot    ours     our reply rate
+#   median length      171 ch      304 ch   120-240ch: 71.6%  240-400: 42.8%
+#   carries a question    30%       81%     no question: 70.6%  one: 47.9%
+#   uses the name         61%       <1%
+#
+# Our median message sat in our own worst-performing length bucket.
+
+# Ask a qualifying question at most this often. 2 = ask, let two turns breathe, ask.
+# Turned down to 1 restores the old behaviour of asking almost every turn.
+GATE_EVERY_N_TURNS = int(os.environ.get("GATE_EVERY_N_TURNS", "2"))
+
+# HARD CEILING on a reply, enforced in qualifier._enforce rather than requested in
+# the rulebook. The rulebook has said "two or three lines is usually plenty" since
+# it was written and the median came out at 304 characters anyway -- a prompt is a
+# request, and this is the guarantee. The reference bot's longest message was 282.
+MAX_REPLY_CHARS = int(os.environ.get("MAX_REPLY_CHARS", "300"))
+
+# Junk profile names. The buyer controls this string, so it is display-only -- but
+# now that it is spoken back to them, "Hi Muna💞💞💞" is worse than no name at all.
+_NAME_JUNK = re.compile(r"^(test|testing|abc|xyz|na|n/?a|none|null|user|guest|"
+                        r"customer|admin|hi|hello|sir|madam|unknown)$", re.I)
+
+
+def clean_first_name(raw):
+    """A first name safe to say out loud, or None.
+
+    Returns None rather than a cleaned-up guess whenever there is doubt: a message
+    addressed to nobody reads fine, and one addressed to "Hi 9" does not.
+    """
+    if not raw:
+        return None
+    first = str(raw).strip().split()[0] if str(raw).strip() else ""
+    # Keep letters and internal apostrophes/hyphens; drop emoji, digits, symbols.
+    first = re.sub(r"[^A-Za-zÀ-ɏ'\-]", "", first).strip("'-")
+    if len(first) < 2 or len(first) > 20:
+        return None
+    if _NAME_JUNK.match(first):
+        return None
+    # A name that was mostly decoration -- "💞💞Mu💞" -> "Mu" -- is not a name.
+    if len(first) < len(re.sub(r"\s", "", str(raw).split()[0])) / 2:
+        return None
+    return first[:1].upper() + first[1:]
+
 
 def is_overseas(lead):
     """Is this buyer outside India, so a site visit is the wrong ask?

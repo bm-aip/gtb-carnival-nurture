@@ -34,6 +34,34 @@ def get_or_create(lead):
     return db.q("SELECT * FROM conversations WHERE lead_id=%s", (lead["id"],), one=True)
 
 
+def may_ask_gate(conv):
+    """Is this turn allowed to ask a qualifying question?
+
+    THE PACING RULE, decided in code rather than asked for in prose. Owner,
+    2026-08-17: ask a gate only every second or third turn.
+
+    Measured the same day across 623 turns: the bot carried a question in 81% of
+    them, and turns with a question were replied to at 47.9% against 70.6% for turns
+    with none. The reference conversation the owner supplied -- a competitor's bot
+    that sustained 26 exchanges -- carried a question in 30% of its messages and
+    qualified nobody, so this is a trade, not a free win: fewer asks means slower
+    qualification in exchange for a conversation that survives long enough to have
+    one.
+
+    The confound is worth stating: a turn with no question is often the bot ANSWERING
+    something, so the buyer was already engaged and the causation may run backwards.
+    Three independent cuts pointed the same way, which is suggestive, not proof. This
+    is reversible in one config value if the reply rate does not move.
+
+    The FIRST turn always asks -- `turns_since_gate` defaults to 99 -- because an
+    opener that asks nothing gives the buyer nothing to answer.
+    """
+    if not conv:
+        return True
+    return (conv.get("turns_since_gate") if conv.get("turns_since_gate") is not None
+            else 99) >= config.GATE_EVERY_N_TURNS
+
+
 def next_gate(conv):
     """The next thing to ask, in the locked order.
 
@@ -152,12 +180,19 @@ def record_turn(conv, decision, gate_asked, framing_index):
     flag_now = (unrec >= config.UNRECIPROCATED_LIMIT
                 and not conv.get("human_flagged_at"))
 
+    # Pacing. Reset the moment we ask, count up on every turn that does not, so the
+    # next ask is at least GATE_EVERY_N_TURNS turns later. Counted on TURNS TAKEN
+    # rather than time: the rule is about how often the buyer is questioned, and a
+    # conversation that pauses overnight has not earned another ask by waiting.
+    since = 0 if gate_asked else (conv.get("turns_since_gate") or 0) + 1
+
     db.x("""UPDATE conversations
-            SET checklist=%s, asked=%s, unreciprocated=%s,
+            SET checklist=%s, asked=%s, unreciprocated=%s, turns_since_gate=%s,
                 human_flagged_at = CASE WHEN %s THEN now() ELSE human_flagged_at END,
                 last_turn_at=now(), updated_at=now()
             WHERE id=%s""",
-         (json.dumps(checklist), json.dumps(asked), unrec, flag_now, conv["id"]))
+         (json.dumps(checklist), json.dumps(asked), unrec, since, flag_now,
+          conv["id"]))
 
     fresh = db.q("SELECT * FROM conversations WHERE id=%s", (conv["id"],), one=True)
     fresh["_newly_flagged"] = flag_now
