@@ -124,6 +124,20 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS knock_lost_at TIMESTAMPTZ;
 -- Which VARIANT actually went out. Without it a retry cannot know which wording
 -- has already been spent on this person, and the whole rotation is guesswork.
 ALTER TABLE message_log ADD COLUMN IF NOT EXISTS template_name TEXT;
+
+-- 2026-08-17: how many turns since we last asked a qualifying question.
+--
+-- The bot asked one in 81% of its turns, and turns carrying a question were replied
+-- to at 47.9% against 70.6% for turns carrying none. Owner: ask a gate only every
+-- second or third turn and let the buyer lead in between.
+--
+-- A COUNTER, not a timestamp, because the rule is "turns", and a conversation can
+-- go quiet for a day between two turns without that meaning anything. `asked` cannot
+-- answer this -- it records WHICH framings were spent, never when.
+--
+-- Starts at 99 so a brand-new conversation is immediately eligible: the first turn
+-- should still ask, it is the rest that should breathe.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS turns_since_gate INT NOT NULL DEFAULT 99;
 -- Per-ad reporting is the whole point of storing source_id, and it is always a
 -- GROUP BY over the full table.
 CREATE INDEX IF NOT EXISTS idx_leads_ctwa_source ON leads (ctwa_source_id);

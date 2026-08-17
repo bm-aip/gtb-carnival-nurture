@@ -412,6 +412,40 @@ def run_turn(lead, message, history=None, conv=None):
     # other end. Lead 1016 is why this exists: a +966 number asked to be called five
     # different ways and was answered with "just tell me a day and I'll set up the
     # visit" every time.
+    # THEY ASKED TO BE PHONED. Decided from their words in code, because the model
+    # got this right once in four: it escalated correctly and then replied about
+    # apartment prices, so sales was notified while the buyer heard nothing about a
+    # call. Told first, and enforced afterwards in _enforce.
+    if message and config.WANTS_CALL.search(message):
+        state += (f"\n\nTHEY HAVE ASKED TO BE PHONED. Say so FIRST, in these words in "
+                  f"spirit:\n  {config.CALL_ACK_FRAMING}\n"
+                  f"Then answer anything else they asked. Do NOT offer a site visit "
+                  f"instead, do NOT add a fact they did not ask for, and do NOT "
+                  f"promise a time. Set action='connect_sales' unless a colleague "
+                  f"has already been told about this person.")
+
+    # THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the
+    # same name, so the model reads it as an ANSWER. It is a question.
+    if message and config.ASKS_LOCATION.match(message.strip()):
+        state += ("\n\nTHIS IS A QUESTION ABOUT WHERE THE PROJECT IS, not their "
+                  "answer to the location gate. Tell them: ECR, near Kovalam "
+                  "Junction. Do NOT record it as their location and do NOT treat it "
+                  "as answered.")
+
+    # THEIR NAME. The reference conversation used it in 61% of messages; we used it
+    # in 5 of 624. It is the cheapest warmth available and it is how business is
+    # spoken here. Offered, not mandated -- a name wedged into every sentence reads
+    # like a mail merge, which is the opposite of the point.
+    #
+    # clean_first_name returns None for junk, and the guard matters because the buyer
+    # controls this string: WhatsApp profile names in this database include
+    # "Muna💞💞💞" and bare phone numbers. "Hi Muna💞💞💞" is worse than no name.
+    first = config.clean_first_name((lead or {}).get("name"))
+    if first:
+        state += (f"\n\nTHEIR NAME IS {first}. Use it naturally now and then -- an "
+                  f"opening, a reassurance -- not in every message and never twice "
+                  f"in one. If it looks wrong for the person, leave it out.")
+
     if config.is_overseas(lead):
         state += (
             "\n\nTHIS BUYER IS NOT IN INDIA. Do NOT ask them to visit the site and "
@@ -490,7 +524,60 @@ def _decide(resp, chunks, lead, message, history):
     except Exception:
         return _forced_escalation("unparseable decision", chunks)
 
-    return _enforce(decision, chunks, lead, message=message, history=history)
+    return _answer_the_question(
+        _enforce(decision, chunks, lead, message=message, history=history), message)
+
+
+def _answer_the_question(d, message):
+    """Two things a buyer asks plainly that we were failing to answer.
+
+    RUNS AFTER _enforce, ON PURPOSE, and that placement is the fix rather than a
+    detail. Inside _enforce these guards were defeated by the confidence floor: a
+    reply with an uncited factual claim is replaced wholesale by the escalation line,
+    so a buyer who asked "Location" was told "someone will come back to you" and
+    still never learned where the project is. Out here, every path is covered --
+    including a forced escalation.
+
+    Both sentences are OUR OWN approved config text, not retrieved knowledge, so
+    stating them cannot invent anything and neither needs a citation.
+
+    THEY ASKED TO BE PHONED. Measured 2026-08-17: six buyers did, and four of the
+    replies never mentioned a call or a person -- one answered "Call me" with
+    apartment prices and a site visit. Three of those conversations were `escalated`,
+    so a colleague HAD been told while the buyer read about the clubhouse. The
+    routing worked and the words did not, which from their side is being ignored.
+
+    THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the same
+    name, so the model reads it as an ANSWER. It is a question, and it is also not
+    their location -- recording it would tell a buyer in Adyar where the site is
+    instead of noting that they are in Adyar.
+    """
+    if not d or not message:
+        return d
+    reply = (d.get("reply") or "").strip()
+    note = d.get("internal_note") or ""
+
+    if (config.WANTS_CALL.search(message)
+            and not re.search(r"\bcall\b|colleague|our team|someone (from|will)",
+                              reply, re.I)):
+        reply = f"{config.CALL_ACK_FRAMING} {reply}".strip()
+        note += " | call request was not acknowledged; framing prepended"
+
+    if (config.ASKS_LOCATION.match(message.strip())
+            and not re.search(r"ECR|Kovalam", reply, re.I)):
+        reply = f"We're on {config.VISIT_VENUES['site']['name']}. {reply}".strip()
+        note += " | location question was not answered; location prepended"
+
+    if config.ASKS_LOCATION.match(message.strip()):
+        # Their words were a question, so they said nothing about where THEY are.
+        d["location"] = None
+        if d.get("gate_asked") == "location":
+            d["gate_asked"] = None
+            d["framing_used"] = None
+
+    d["reply"] = reply
+    d["internal_note"] = note
+    return d
 
 
 # Sent instead of the normal checklist push once the lead is already qualified.
@@ -710,6 +797,20 @@ def _ladder(conv):
     if not gate:
         lines.append("The checklist is COMPLETE. Do not ask another gate question.")
         return "\n".join(lines)
+
+    # PACING. Whether this turn may ask is decided in code -- see
+    # conversation.may_ask_gate -- and the model is told the answer, never asked to
+    # judge it. Left to the prompt it asked something in 81% of turns.
+    if not convmod.may_ask_gate(conv):
+        lines.append(
+            "\nDO NOT ASK A QUALIFYING QUESTION THIS TURN. You asked one recently "
+            "and it is the buyer's turn to lead. Answer what they asked, warmly and "
+            "briefly, and stop there. Do not append a fact they did not ask for and "
+            "do not push a visit. Set gate_asked=null.\n"
+            "Ending a turn without a question is not a failure -- it is how a "
+            "conversation breathes, and those turns get answered more often.")
+        return "\n".join(lines)
+
     remaining = convmod.unused_framings(conv, gate)
     all_f = config.FRAMINGS.get(gate, [])
     lines.append(f"\nNEXT GATE TO ASK: {gate}")
@@ -802,7 +903,53 @@ def _clean_reply(reply):
     reply = _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), reply)
     for bad, good in _PUNCT.items():
         reply = reply.replace(bad, good)
+    reply = _dedash(reply)
     return re.sub(r"[ \t]{2,}", " ", reply).strip()
+
+
+# A dash with spaces around it, used to hang a second thought off the first.
+_ASIDE = re.compile(r"\s+[-–—]\s+")
+
+
+def _dedash(reply):
+    """Turn "X - Y" into "X. Y" (or "X, Y"), because the dash is the tell.
+
+    THIS IS THE BIGGEST SINGLE DIFFERENCE IN REGISTER, and we were manufacturing it.
+    Measured 2026-08-17 across 625 replies: the dash-as-aside appears in 70% of ours
+    and 0% of the reference conversation the owner supplied. Median words per
+    sentence is actually LOWER than the reference (13 against 15), so what reads as
+    "high standard" is not length -- it is this one editorial construction, stacking
+    a second clause onto a sentence that had finished.
+
+    We caused it. _PUNCT folds every em and en dash down to " - ", so a model writing
+    an ordinary em dash had it converted into the exact shape we did not want.
+
+    A FULL STOP, not a comma, when what follows can stand on its own. On every real
+    example a full stop read better and produced the reference's register directly:
+
+        "...near Kovalam Junction - apartments and villas, a beach and lagoon..."
+     -> "...near Kovalam Junction. Apartments and villas, a beach and lagoon..."
+
+    Short trailing fragments ("Rs 3.94 Cr - onwards") become a comma instead, since
+    splitting those would leave a one-word sentence. The rulebook asks for the same
+    thing in words; this makes it true.
+    """
+    if not reply or not _ASIDE.search(reply):
+        return reply
+
+    parts = _ASIDE.split(reply)
+    out = parts[0]
+    for seg in parts[1:]:
+        stripped = seg.lstrip()
+        # Three or more words can carry a sentence; fewer is a trailing fragment.
+        if len(stripped.split()) >= 3 and out.rstrip() and not out.rstrip().endswith(
+                (".", "!", "?", ",", ":", ";")):
+            out = out.rstrip() + ". " + stripped[:1].upper() + stripped[1:]
+        elif out.rstrip().endswith((".", "!", "?")):
+            out = out.rstrip() + " " + stripped[:1].upper() + stripped[1:]
+        else:
+            out = out.rstrip().rstrip(",") + ", " + stripped
+    return out
 
 
 # A buyer message that carries nothing: a bare acknowledgement, not an answer.
@@ -999,6 +1146,66 @@ def _raised_distance(message, history):
     return any(_DISTANCE_OBJECTION.search(t) for t in texts)
 
 
+def _shorten(reply, cap, keep_last=False):
+    """Bring a reply under `cap` characters without cutting mid-sentence.
+
+    `keep_last` protects the final paragraph, and it exists because the first version
+    of this function was wrong in a way only a dry run over real history exposed.
+
+    The assumption was that our long replies end in padding -- an unasked-for fact,
+    another nudge about a visit -- so dropping from the end would remove exactly the
+    slack. Run over all 623 replies we had actually sent, it removed THE QUESTION:
+    the real shape is "answer" then "gate question", one paragraph each. That is the
+    opposite of the intent, and it would also have left `gate_asked` recorded for a
+    question the buyer never saw, quietly spending a framing on nothing.
+
+    So when this turn is allowed to ask, the last paragraph is protected and the trim
+    eats the middle instead -- the middle is where the unasked-for fact lives. When
+    the turn asks nothing, dropping from the end is right after all.
+
+    Never returns a fragment. A single sentence longer than the cap is left intact:
+    too long is recoverable, half a sentence reaching a buyer is not.
+    """
+    reply = (reply or "").strip()
+    if len(reply) <= cap:
+        return reply, None
+
+    paras = [p.strip() for p in re.split(r"\n\s*\n", reply) if p.strip()]
+
+    if keep_last and len(paras) > 1:
+        head, tail = paras[:-1], paras[-1]
+        # Drop from the END of the head -- nearest the question, furthest from the
+        # answer they asked for.
+        while len(head) > 1 and len("\n\n".join(head + [tail])) > cap:
+            head.pop()
+        out = "\n\n".join(head + [tail])
+        if len(out) <= cap:
+            return out, f"dropped {len(reply) - len(out)} chars, kept the question"
+        # Head is one paragraph and it is still too long: shrink it by sentences,
+        # never below one, so the answer and the question both survive.
+        shrunk, _ = _shorten(head[0], max(cap - len(tail) - 2, 80))
+        out = f"{shrunk}\n\n{tail}"
+        return out, f"answer shortened to fit the question ({len(out)} chars)"
+
+    while len(paras) > 1 and len("\n\n".join(paras)) > cap:
+        paras.pop()
+    out = "\n\n".join(paras)
+    if len(out) <= cap:
+        return out, f"dropped {len(reply) - len(out)} chars of trailing padding"
+
+    sentences = re.split(r"(?<=[.!?])\s+", out)
+    kept = []
+    for s in sentences:
+        candidate = " ".join(kept + [s])
+        if kept and len(candidate) > cap:
+            break
+        kept.append(s)
+    trimmed = " ".join(kept).strip()
+    if not trimmed:
+        return out, "over cap but unsplittable; left intact"
+    return trimmed, f"trimmed to {len(trimmed)} chars from {len(reply)}"
+
+
 def _strip_mall(reply):
     """Remove the sentences that offer the mall, keep the rest of the answer."""
     parts = re.split(r"(?<=[.!?])\s+", reply)
@@ -1054,6 +1261,31 @@ def _enforce(d, chunks, lead, message=None, history=None):
     # whenever the mall was named in the field but not in the sentence.
     if d.get("visit_venue") == "experience_centre":
         d["visit_venue"] = "site"
+
+    # 0b. LENGTH. Applied AFTER the mall strip so the two cannot fight over which
+    #     sentence goes, and BEFORE the citation and price checks so those judge the
+    #     text a buyer will actually receive rather than a longer draft.
+    #
+    #     Enforced rather than requested: the rulebook has asked for "two or three
+    #     lines" since it was written, and the median reply came out at 304
+    #     characters. Turns of 120-240 chars were replied to at 71.6%, turns of
+    #     240-400 at 42.8%.
+    if len(reply) > config.MAX_REPLY_CHARS:
+        asked_something = bool(d.get("gate_asked"))
+        shorter, how = _shorten(reply, config.MAX_REPLY_CHARS,
+                                keep_last=asked_something)
+        if shorter and shorter != reply:
+            d["reply"] = reply = shorter
+            d["internal_note"] = (d.get("internal_note") or "") + f" | length: {how}"
+        # LAST RESORT, and the reason this check exists at all: if the question did
+        # not survive, the turn did not ask. Leaving gate_asked set would record a
+        # question the buyer never saw, mark the gate as spent and burn one of its
+        # three framings on nothing -- the conversation would then move on to the
+        # next gate having never put this one.
+        if asked_something and "?" not in reply:
+            d["gate_asked"] = None
+            d["framing_used"] = None
+            d["internal_note"] += " | gate cleared: the question did not survive"
 
     # 1. CONFIDENCE FLOOR. A factual CLAIM with no chunk behind it is exactly how
     #    invented schools and possession dates reach a buyer.

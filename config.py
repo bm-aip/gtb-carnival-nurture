@@ -530,6 +530,96 @@ HANDED_OFF_OUTCOMES = ("qualified", "visit_booked", "escalated", "wants_sales", 
 ACK_REPLY = os.environ.get(
     "ACK_REPLY", "Sure - someone from our team will be in touch shortly.")
 
+# --- two things the buyer says that we were getting wrong (2026-08-17) ---------
+#
+# Both found by reading what the bot actually replied to real messages, and both are
+# comprehension failures rather than tone: the buyer asked something plainly and the
+# answer did not address it.
+
+# THEY ASKED TO BE PHONED. Six buyers did, and FOUR of the four replies we sent never
+# mentioned a call or a person at all -- one answered "Call me" with apartment prices
+# and a site visit. Three of those conversations were `escalated`, so a human WAS
+# notified while the buyer was told about the clubhouse. The routing worked and the
+# words did not, which from the buyer's side is indistinguishable from being ignored.
+#
+# handoff.py already handles "yes please, ask them to call me", but only once the call
+# has been OFFERED and answered (conversation.sales_offer_state == "answered"). An
+# UNPROMPTED request had no path at all and rode entirely on the model picking the
+# right label.
+WANTS_CALL = re.compile(
+    r"call me|can you call|could you call|please call|call back|give me a call|"
+    r"ring me|phone me|call now|call kar|call pannu|"
+    r"share (his|her|their|the) (contact|number|mobile)|"
+    r"(want|need|like) to (talk|speak)|talk to (someone|a person|sales|somebody)",
+    re.I)
+
+# ⚠️ SALES OWNS THIS WORDING, like SALES_OFFER_FRAMING and ACK_REPLY. It is the
+# sentence a buyer gets when they have asked to be phoned, so it must promise only
+# what we actually do: a colleague calls. No time is committed to, because nothing
+# here knows the team's diary.
+CALL_ACK_FRAMING = os.environ.get(
+    "CALL_ACK_FRAMING", "Sure, I'll have a colleague call you.")
+
+# THEY ASKED WHERE IT IS. Seen once and failed once: a buyer sent "Location" and the
+# reply opened "Ha, thanks." then described the beach and the clubhouse without ever
+# saying where the project is.
+#
+# The collision is structural, not random: our own gate is CALLED location, so a bare
+# "location" reads to the model as the buyer ANSWERING it rather than asking. The
+# checklist recorded nothing, so it did not even land as an answer -- it was simply
+# misread.
+ASKS_LOCATION = re.compile(
+    r"^\W*(location|address|where|where is (it|this|the (site|project))|"
+    r"how far|which (area|place|part)|exact location|site location)\W*$", re.I)
+
+# --- shorter, warmer, less interrogative (owner, 2026-08-17) -------------------
+#
+# Measured across 623 turns that day, alongside a competitor conversation the owner
+# supplied as the reference for tone:
+#
+#                      that bot    ours     our reply rate
+#   median length      171 ch      304 ch   120-240ch: 71.6%  240-400: 42.8%
+#   carries a question    30%       81%     no question: 70.6%  one: 47.9%
+#   uses the name         61%       <1%
+#
+# Our median message sat in our own worst-performing length bucket.
+
+# Ask a qualifying question at most this often. 2 = ask, let two turns breathe, ask.
+# Turned down to 1 restores the old behaviour of asking almost every turn.
+GATE_EVERY_N_TURNS = int(os.environ.get("GATE_EVERY_N_TURNS", "2"))
+
+# HARD CEILING on a reply, enforced in qualifier._enforce rather than requested in
+# the rulebook. The rulebook has said "two or three lines is usually plenty" since
+# it was written and the median came out at 304 characters anyway -- a prompt is a
+# request, and this is the guarantee. The reference bot's longest message was 282.
+MAX_REPLY_CHARS = int(os.environ.get("MAX_REPLY_CHARS", "300"))
+
+# Junk profile names. The buyer controls this string, so it is display-only -- but
+# now that it is spoken back to them, "Hi Muna💞💞💞" is worse than no name at all.
+_NAME_JUNK = re.compile(r"^(test|testing|abc|xyz|na|n/?a|none|null|user|guest|"
+                        r"customer|admin|hi|hello|sir|madam|unknown)$", re.I)
+
+
+def clean_first_name(raw):
+    """A first name safe to say out loud, or None.
+
+    Returns None rather than a cleaned-up guess whenever there is doubt: a message
+    addressed to nobody reads fine, and one addressed to "Hi 9" does not.
+    """
+    if not raw:
+        return None
+    first = str(raw).strip().split()[0] if str(raw).strip() else ""
+    # Keep letters and internal apostrophes/hyphens; drop emoji, digits, symbols.
+    first = re.sub(r"[^A-Za-zÀ-ɏ'\-]", "", first).strip("'-")
+    if len(first) < 2 or len(first) > 20:
+        return None
+    if _NAME_JUNK.match(first):
+        return None
+    # A name that was mostly decoration -- "💞💞Mu💞" -> "Mu" -- is not a name.
+    if len(first) < len(re.sub(r"\s", "", str(raw).split()[0])) / 2:
+        return None
+    return first[:1].upper() + first[1:]
+
 
 def is_overseas(lead):
     """Is this buyer outside India, so a site visit is the wrong ask?
@@ -575,11 +665,53 @@ def is_overseas(lead):
 # ⚠️ SALES OWNS THIS WORDING, not engineering (design §7). It lives in config so it
 # is data rather than code; it moves to the `agents.framings` column when the
 # corpus-upload screen exists (task 28).
+# REWRITTEN TWICE ON 2026-08-17. First for plainness, then for REGISTER, and the
+# second pass is the one that mattered.
+#
+# Owner on the first attempt: "'a rough band is plenty' - this is exactly the kind of
+# thing that is not going well for Indian. 'Give an approximate range' is better...
+# many things are like that, very western, very English (UK). I need the more natural
+# local flavour."
+#
+# He was right, and the mistake was mine twice over. I had optimised for SHORT and
+# CASUAL, which in practice means British informality -- "a rough band is plenty",
+# "worth seeing", "plenty of", "your side of town". Clipped is not the same as plain.
+#
+# Worse, an EARLIER rule of mine was pushing the same way: answering-rules.md told the
+# bot to write "about 20 minutes" instead of "approximately", and "3 bedroom" instead
+# of "3BHK". Both are the words buyers here actually use, so that rule was quietly
+# de-Indianising every reply. It is reversed now.
+#
+# What changed in this pass: "so that" rather than a bare "so", "an approximate range
+# is enough" rather than "a rough band is plenty", "your area" rather than "your side
+# of town", "the connectivity from your area" rather than "how well it connects".
+#
+# These clauses ride on most questions the bot asks, so they were a large share of
+# what made the copy read as written rather than spoken. They averaged 14 words;
+# they now average 9.
+#
+# Three things were wrong beyond length:
+#
+#   FOUR OF THE TWELVE BROKE THE STYLE RULES THEY SIT UNDER. budget[0] and budget[2]
+#   carried em dashes, configuration[1] said "quite" and budget[0] said "genuinely" --
+#   all now banned in answering-rules.md. tests/copy_style.py checks this from here on,
+#   so a future edit cannot quietly reintroduce them.
+#
+#   SEVEN OF TWELVE OPENED "so I can...", explaining OUR process. The measured
+#   purpose rates say that is the weak move: "so I can show you the homes that suit
+#   how you'd actually use the place" closed 4 of 58 (6.9%), while "a weekend home
+#   and a primary home are very different picks here" closed 7 of 55 (12.7%) and
+#   "so I don't waste your time" 4 of 32 (12.5%). The one that explains our workflow
+#   lost to the two that tell the buyer something or respect their time.
+#
+#   ORDER IS PRESERVED even where a later framing reads stronger. `asked` stores
+#   framing INDEXES against live conversations, so reordering would silently
+#   re-point what a mid-flight conversation thinks it has already spent.
 FRAMINGS = {
     "purpose": [
-        "so I can show you the homes that suit how you'd actually use the place",
-        "because a weekend home and a primary home are very different picks here",
-        "so I don't waste your time on the wrong side of the project",
+        "so that I can show you the right homes",
+        "a weekend home and a primary home are very different",
+        "so that I don't waste your time",
     ],
     # REWRITTEN 2026-08-02. The previous three were "whether this stretch of ECR
     # works for you", "the drive matters differently depending on where you're
@@ -592,20 +724,22 @@ FRAMINGS = {
     # they LIVE; the gate wants where they want to BUY, and the model merged them
     # into "based in or looking to buy around?", which a real buyer answered "Yes".
     # One meaning now, and a reason that gives them something.
+    # Still one meaning: where they want to BUY, never where they live. And still
+    # nothing that plants doubt -- the 2026-08-02 note above stands.
     "location": [
-        "so I can show you how it connects to the places you already go",
-        "so I can line up the right homes and the right views before you come",
-        "so I can tell you what the drive actually looks like from your side of town",
+        "so that I can tell you the distance from your area",
+        "so that we can keep the right homes ready for your visit",
+        "so that I can tell you about the connectivity from your area",
     ],
     "configuration": [
-        "so I can tell you what's actually available rather than everything at once",
-        "because the apartments and the villas are quite different experiences",
-        "so I can point you at the two or three worth seeing",
+        "so that I can tell you what is available right now",
+        "the apartments and the villas are very different",
+        "so that I can suggest the two or three that suit you",
     ],
     "budget": [
-        "only so I show you homes that are genuinely in range — nothing above it",
-        "so our team doesn't put you in front of the wrong homes on a site visit",
-        "just a rough band is plenty — it saves you being shown things you'd rule out",
+        "only so that I show you homes within your range",
+        "so that our team shows you the right homes during the visit",
+        "an approximate range is enough",
     ],
 }
 
