@@ -245,6 +245,71 @@ _STATUS_KEYWORDS = (
 _INBOUND_EVENTS = ("message", "text", "interactive", "button")
 
 
+# Keys that plausibly carry WHY a send failed. Matched on the key NAME, at any depth,
+# because Wati's callback schema is not stable and the four names we guessed were all
+# empty on 96 consecutive failures.
+_REASON_KEY = re.compile(r"fail|error|reject|reason|undeliver|denial|cause", re.I)
+# Keys that merely say a failure happened, which we already know from `status`.
+_REASON_SKIP = re.compile(r"^(failed|isfailed|hasfailed)$", re.I)
+# Meta's numeric error codes, e.g. 131049 for the quality restriction.
+_META_CODE = re.compile(r"\b1\d{5}\b")
+
+
+def _find_reason(payload):
+    """The failure reason from anywhere in the payload, or None.
+
+    Walks the whole structure rather than reading four fixed keys, so a provider
+    rename cannot silently return us to storing NULL again. Returns `key=value`
+    pairs, so the first real capture also tells us WHICH field carried the answer.
+
+    CONTEXT IS INHERITED. Meta sends `errors: [{code: 131049, message: "..."}]`,
+    where the useful keys are `code` and `message` -- neither of which looks like a
+    failure on its own. So once a CONTAINER key matches (`error`, `errors`,
+    `failureDetail`), everything inside it counts, labelled with its parent. Without
+    this the array shape returns nothing, which is exactly the silence being fixed.
+
+    Numeric-only values are kept when they look like a Meta error code (131049 and
+    friends) and dropped otherwise: a timestamp or a retry count dressed up as a
+    reason is worse than no reason, because it looks like an answer.
+    """
+    if payload is None:
+        return None
+    found = []
+    seen = set()
+
+    def add(label, value):
+        s = str(value).strip()
+        if not s or s.lower() in ("true", "false", "0", "none", "null"):
+            return
+        if s.isdigit() and not _META_CODE.search(s):
+            return
+        item = f"{label}={s[:200]}"
+        if item not in seen:
+            seen.add(item)
+            found.append(item)
+
+    def walk(node, depth, prefix, inherited):
+        if depth > 6 or len(found) >= 6:
+            return
+        if isinstance(node, dict):
+            for k, v in node.items():
+                key = str(k)
+                matched = bool(_REASON_KEY.search(key)) and not _REASON_SKIP.match(key)
+                label = f"{prefix}.{key}" if prefix else key
+                if isinstance(v, (dict, list)):
+                    walk(v, depth + 1, label if (matched or inherited) else "",
+                         inherited or matched)
+                elif v not in (None, "", [], {}):
+                    if matched or inherited:
+                        add(label, v)
+        elif isinstance(node, list):
+            for item in node[:20]:
+                walk(item, depth + 1, prefix, inherited)
+
+    walk(payload, 0, "", False)
+    return " | ".join(found[:6]) or None
+
+
 def _canonical_status(*fields):
     """First keyword hit across the supplied strings, or None."""
     blob = " ".join(str(f).lower() for f in fields if f)
@@ -298,10 +363,22 @@ def parse_status(payload):
         mid = (m.get("whatsappMessageId") or m.get("messageId")
                or m.get("id") or m.get("localMessageId"))
 
-        reason = (m.get("failureReason") or m.get("errorMessage")
-                  or m.get("reason") or m.get("error"))
-        if isinstance(reason, dict):
-            reason = reason.get("message") or reason.get("title") or str(reason)
+        # THE DEEP SEARCH RUNS FIRST, and the four named keys are the fallback.
+        #
+        # It used to be the other way round, and all four names were empty on every
+        # one of the 96 template failures recorded up to 2026-08-17 -- so `reason`
+        # was NULL throughout and "Meta has restricted it for higher quality
+        # messaging" was only ever readable in Wati's dashboard.
+        #
+        # Order matters beyond that: `error` as a nested object used to resolve to
+        # its `title` alone, which reads fine and silently drops the 131049 code
+        # underneath it. The deep search returns both.
+        reason = _find_reason(payload)
+        if not reason:
+            reason = (m.get("failureReason") or m.get("errorMessage")
+                      or m.get("reason") or m.get("error"))
+            if isinstance(reason, dict):
+                reason = reason.get("message") or reason.get("title") or str(reason)
 
         ts = (m.get("timestamp") or m.get("eventTime") or m.get("created")
               or m.get("createdAt"))
@@ -313,9 +390,17 @@ def parse_status(payload):
             "reason": str(reason)[:500] if reason else None,
             "event_type": str(etype)[:80] if etype else None,
             "event_ts": _parse_ts(ts),
-            # Raw kept ONLY for events we could not classify -- storing every
-            # payload would balloon the table for no diagnostic gain.
-            "raw": None if status else json.dumps(payload)[:4000],
+            # Raw kept for anything we could not classify AND for every FAILURE.
+            #
+            # It used to be unclassified-only, on the argument that storing every
+            # payload would balloon the table for no diagnostic gain. That was right
+            # about volume and wrong about failures: a failed send is the one event
+            # whose cause we always end up needing and can never recover afterwards.
+            # Checked 2026-08-17 -- a refused template barely appears in Wati's own
+            # message history, so there is nothing to go back and read. The payload
+            # is the only copy. Successes still store nothing.
+            "raw": (json.dumps(payload)[:4000]
+                    if (not status or status == "failed") else None),
         }
     except Exception:
         # A callback we cannot even parse is still evidence that something
