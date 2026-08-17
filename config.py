@@ -623,11 +623,35 @@ def is_overseas(lead):
 # ⚠️ SALES OWNS THIS WORDING, not engineering (design §7). It lives in config so it
 # is data rather than code; it moves to the `agents.framings` column when the
 # corpus-upload screen exists (task 28).
+# REWRITTEN 2026-08-17. Owner: "rewrite the framings in plainer words, keep it as
+# simple as it can be".
+#
+# These clauses ride on most questions the bot asks, so they were a large share of
+# what made the copy read as written rather than spoken. They averaged 14 words;
+# they now average 9.
+#
+# Three things were wrong beyond length:
+#
+#   FOUR OF THE TWELVE BROKE THE STYLE RULES THEY SIT UNDER. budget[0] and budget[2]
+#   carried em dashes, configuration[1] said "quite" and budget[0] said "genuinely" --
+#   all now banned in answering-rules.md. tests/copy_style.py checks this from here on,
+#   so a future edit cannot quietly reintroduce them.
+#
+#   SEVEN OF TWELVE OPENED "so I can...", explaining OUR process. The measured
+#   purpose rates say that is the weak move: "so I can show you the homes that suit
+#   how you'd actually use the place" closed 4 of 58 (6.9%), while "a weekend home
+#   and a primary home are very different picks here" closed 7 of 55 (12.7%) and
+#   "so I don't waste your time" 4 of 32 (12.5%). The one that explains our workflow
+#   lost to the two that tell the buyer something or respect their time.
+#
+#   ORDER IS PRESERVED even where a later framing reads stronger. `asked` stores
+#   framing INDEXES against live conversations, so reordering would silently
+#   re-point what a mid-flight conversation thinks it has already spent.
 FRAMINGS = {
     "purpose": [
-        "so I can show you the homes that suit how you'd actually use the place",
-        "because a weekend home and a primary home are very different picks here",
-        "so I don't waste your time on the wrong side of the project",
+        "so I know which homes to show you",
+        "a weekend home and a primary home are very different picks here",
+        "so I don't waste your time",
     ],
     # REWRITTEN 2026-08-02. The previous three were "whether this stretch of ECR
     # works for you", "the drive matters differently depending on where you're
@@ -640,20 +664,22 @@ FRAMINGS = {
     # they LIVE; the gate wants where they want to BUY, and the model merged them
     # into "based in or looking to buy around?", which a real buyer answered "Yes".
     # One meaning now, and a reason that gives them something.
+    # Still one meaning: where they want to BUY, never where they live. And still
+    # nothing that plants doubt -- the 2026-08-02 note above stands.
     "location": [
-        "so I can show you how it connects to the places you already go",
-        "so I can line up the right homes and the right views before you come",
-        "so I can tell you what the drive actually looks like from your side of town",
+        "so I can tell you the drive from your side of town",
+        "so I can keep the right homes ready before you come",
+        "so I can tell you how well it connects for you",
     ],
     "configuration": [
-        "so I can tell you what's actually available rather than everything at once",
-        "because the apartments and the villas are quite different experiences",
+        "so I can tell you what's available now, not everything at once",
+        "the apartments and the villas are very different",
         "so I can point you at the two or three worth seeing",
     ],
     "budget": [
-        "only so I show you homes that are genuinely in range — nothing above it",
-        "so our team doesn't put you in front of the wrong homes on a site visit",
-        "just a rough band is plenty — it saves you being shown things you'd rule out",
+        "only so I show you homes in your range, nothing above it",
+        "so the team doesn't show you the wrong homes on a visit",
+        "a rough band is plenty",
     ],
 }
 

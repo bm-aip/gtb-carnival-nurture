@@ -16,6 +16,7 @@ Owner's calls: ask a gate every second or third turn, enforce length in code, us
 first name with a junk filter.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -168,5 +169,33 @@ lang = answering.RULES["language"]
 r.check("the rulebook bans dashes outright", "Dashes. Any of them" in lang)
 r.check("the rulebook names the softeners", "softeners" in lang.lower())
 r.check("the rulebook drops the British openers", "read as British" in lang)
+
+# --- 5. the framings obey the rules they sit under ---------------------------
+# These clauses ride on most questions the bot asks, so they were a large share of
+# what made the copy read as written rather than spoken. Four of the twelve broke
+# the style rules in the same document that forbids them: two carried em dashes,
+# and "quite" and "genuinely" appeared. Checked here so an edit cannot bring them
+# back quietly.
+BANNED_WORDS = ("really", "actually", "quite", "genuinely", "rather", "truly")
+for gate, framings in config.FRAMINGS.items():
+    r.eq(f"{gate}: three framings", len(framings), 3)
+    for i, f in enumerate(framings):
+        tag = f"{gate}[{i}]"
+        r.check(f"{tag} has no dash", not re.search(r"\s[-–—]\s", f), detail=f)
+        r.check(f"{tag} has no em or en dash at all",
+                "—" not in f and "–" not in f, detail=f)
+        for w in BANNED_WORDS:
+            if re.search(rf"\b{w}\b", f, re.I):
+                r.check(f"{tag} avoids '{w}'", False, detail=f)
+        r.check(f"{tag} is 12 words or fewer", len(f.split()) <= 12,
+                detail=f"{len(f.split())}w: {f}")
+        r.check(f"{tag} starts lowercase (it continues a sentence)",
+                f[:1].islower(), detail=f)
+        r.check(f"{tag} has no trailing full stop", not f.rstrip().endswith("."),
+                detail=f)
+
+avg = sum(len(f.split()) for fs in config.FRAMINGS.values() for f in fs) / 12
+r.check(f"framings average under 11 words (got {avg:.1f})", avg < 11,
+        detail="they averaged 14 before this rewrite")
 
 sys.exit(0 if r.report("COPY STYLE RULES") else 1)
