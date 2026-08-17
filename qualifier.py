@@ -830,7 +830,53 @@ def _clean_reply(reply):
     reply = _ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), reply)
     for bad, good in _PUNCT.items():
         reply = reply.replace(bad, good)
+    reply = _dedash(reply)
     return re.sub(r"[ \t]{2,}", " ", reply).strip()
+
+
+# A dash with spaces around it, used to hang a second thought off the first.
+_ASIDE = re.compile(r"\s+[-–—]\s+")
+
+
+def _dedash(reply):
+    """Turn "X - Y" into "X. Y" (or "X, Y"), because the dash is the tell.
+
+    THIS IS THE BIGGEST SINGLE DIFFERENCE IN REGISTER, and we were manufacturing it.
+    Measured 2026-08-17 across 625 replies: the dash-as-aside appears in 70% of ours
+    and 0% of the reference conversation the owner supplied. Median words per
+    sentence is actually LOWER than the reference (13 against 15), so what reads as
+    "high standard" is not length -- it is this one editorial construction, stacking
+    a second clause onto a sentence that had finished.
+
+    We caused it. _PUNCT folds every em and en dash down to " - ", so a model writing
+    an ordinary em dash had it converted into the exact shape we did not want.
+
+    A FULL STOP, not a comma, when what follows can stand on its own. On every real
+    example a full stop read better and produced the reference's register directly:
+
+        "...near Kovalam Junction - apartments and villas, a beach and lagoon..."
+     -> "...near Kovalam Junction. Apartments and villas, a beach and lagoon..."
+
+    Short trailing fragments ("Rs 3.94 Cr - onwards") become a comma instead, since
+    splitting those would leave a one-word sentence. The rulebook asks for the same
+    thing in words; this makes it true.
+    """
+    if not reply or not _ASIDE.search(reply):
+        return reply
+
+    parts = _ASIDE.split(reply)
+    out = parts[0]
+    for seg in parts[1:]:
+        stripped = seg.lstrip()
+        # Three or more words can carry a sentence; fewer is a trailing fragment.
+        if len(stripped.split()) >= 3 and out.rstrip() and not out.rstrip().endswith(
+                (".", "!", "?", ",", ":", ";")):
+            out = out.rstrip() + ". " + stripped[:1].upper() + stripped[1:]
+        elif out.rstrip().endswith((".", "!", "?")):
+            out = out.rstrip() + " " + stripped[:1].upper() + stripped[1:]
+        else:
+            out = out.rstrip().rstrip(",") + ", " + stripped
+    return out
 
 
 # A buyer message that carries nothing: a bare acknowledgement, not an answer.

@@ -131,4 +131,42 @@ r.check("a name that was mostly decoration is rejected",
 r.check("a very long token is rejected",
         clean("Abcdefghijklmnopqrstuvwxyz") is None)
 
+# --- 4. the dash, the biggest register tell ----------------------------------
+# 70% of our replies carried it, 0% of the reference. And we manufactured it:
+# _PUNCT folds every em/en dash down to " - ".
+dd = q._dedash
+
+r.eq("an aside becomes a sentence",
+     dd("It's a 32-acre community on ECR, near Kovalam Junction - apartments and "
+        "villas, with a big clubhouse."),
+     "It's a 32-acre community on ECR, near Kovalam Junction. Apartments and "
+     "villas, with a big clubhouse.")
+r.eq("an em dash is handled the same way after _PUNCT folds it",
+     q._clean_reply("Mornings are quiet — the city never is."),
+     "Mornings are quiet. The city never is.")
+r.eq("a short trailing fragment becomes a comma, not a one-word sentence",
+     dd("Villas start at Rs 3.94 Cr - onwards."),
+     "Villas start at Rs 3.94 Cr, onwards.")
+r.check("no dash survives a normal reply",
+        " - " not in dd("343 homes across 32 acres - mornings are quiet here."),
+        detail=dd("343 homes across 32 acres - mornings are quiet here."))
+r.eq("text with no dash is untouched",
+     dd("Sure, Ravi. The clubhouse is over 1,00,000 sqft."),
+     "Sure, Ravi. The clubhouse is over 1,00,000 sqft.")
+r.eq("empty stays empty", dd(""), "")
+r.check("None does not raise", dd(None) is None)
+r.eq("a hyphenated word is NOT split",
+     dd("It's a low-density community with a man-made beach."),
+     "It's a low-density community with a man-made beach.")
+r.eq("a negative number range is not split",
+     dd("2552-2612 sqft for the 3 bedroom."), "2552-2612 sqft for the 3 bedroom.")
+
+# The rulebook must carry the same rule in words, or the model keeps writing them
+# and the code quietly cleans up after it every single turn.
+import answering                        # noqa: E402
+lang = answering.RULES["language"]
+r.check("the rulebook bans dashes outright", "Dashes. Any of them" in lang)
+r.check("the rulebook names the softeners", "softeners" in lang.lower())
+r.check("the rulebook drops the British openers", "read as British" in lang)
+
 sys.exit(0 if r.report("COPY STYLE RULES") else 1)
