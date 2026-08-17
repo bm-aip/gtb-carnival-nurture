@@ -163,6 +163,18 @@
       <thead><tr><th>Outcome</th><th class="num">Messages</th>
         <th class="num">Share</th></tr></thead><tbody></tbody>
     </table></div>
+
+    <h2>Why they failed</h2>
+    <div class="note">
+      Captured from WhatsApp's callback at the moment of failure. Anything marked
+      <i>reason not captured</i> failed before 17 Aug, when we started keeping the
+      payload &mdash; that cannot be recovered, because a refused message barely
+      appears in Wati's own history.
+    </div>
+    <div class="wrap"><table id="dripReasons">
+      <thead><tr><th>Reason</th><th class="num">Messages</th>
+        <th class="num">Last seen</th></tr></thead><tbody></tbody>
+    </table></div>
   </section>
 
   <!-- ================= SYSTEM ================= -->
@@ -345,6 +357,15 @@ async function load(){
       <td class="num">${dOut[k]}</td>
       <td class="num">${dTot ? pct(100 * dOut[k] / dTot) : "—"}</td></tr>`;
   }).join("") || `<tr><td colspan="3">No delivery callbacks recorded.</td></tr>`;
+
+  $("#dripReasons tbody").innerHTML = (drip.failure_reasons || []).map(x => {
+    const uncaptured = /not captured/.test(x.reason || "");
+    return `<tr><td>${uncaptured
+        ? `<span class="tag">${esc(x.reason)}</span>`
+        : `<span class="tag red">${esc(x.reason)}</span>`}</td>
+      <td class="num">${x.n}</td>
+      <td class="num">${esc(String(x.last_seen || "").slice(0, 16).replace("T", " "))}</td></tr>`;
+  }).join("") || `<tr><td colspan="3">Nothing has failed in this window.</td></tr>`;
 
   // ---- system ----
   // jobs.stats() nests the tallies under `counts`. A failed job is not a statistic:

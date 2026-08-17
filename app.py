@@ -142,6 +142,18 @@ def _wati_inbound(payload, allow_create):
         # recipient failure would never be counted.
         if ev["status"] == "failed":
             ev["fail_class"] = failures.classify(ev.get("reason") or ev.get("event_type"))
+            # The newest failure, kept where a person can read it in one request.
+            # message_delivery.raw is the durable record; this is the equivalent of
+            # last_wati_webhook_raw, which is how the inbound schema got worked out
+            # in the first place -- you should not have to write a query to answer
+            # "why did the last send fail".
+            try:
+                db.set_setting("last_failed_webhook_raw",
+                               (sequencer.now_ist().isoformat() + " " +
+                                (ev.get("reason") or "reason=NONE FOUND") + " :: " +
+                                (request.get_data(as_text=True) or ""))[:3000])
+            except Exception:
+                pass
         key = f"{ev['provider_msg_id']}:{ev['status']}" if ev["provider_msg_id"] else None
         if key and not db.mark_webhook_new(key):
             return jsonify({"ok": True, "dup": True})
@@ -859,11 +871,23 @@ def admin_drip():
     optouts = {r["scope"]: r["n"] for r in
                (db.q("SELECT scope, count(*) AS n FROM optouts GROUP BY scope") or [])}
 
+    # WHY sends fail, not just how many. Everything before 2026-08-17 reads
+    # "(reason not captured)" -- the callback carried it and we threw it away, and
+    # it cannot be recovered afterwards because a refused template barely appears in
+    # Wati's own message history. Anything from that date on is the real answer.
+    reasons = db.q("""SELECT COALESCE(left(reason, 90), '(reason not captured)') AS reason,
+                             count(*) AS n, max(created_at) AS last_seen
+                        FROM message_delivery
+                       WHERE status='failed'
+                         AND created_at > now() - (%s || ' hours')::interval
+                       GROUP BY 1 ORDER BY n DESC LIMIT 12""", (hours,)) or []
+
     return jsonify({
         "window_hours": hours,
         "steps": steps,
         "delivery": db.knock_delivery_summary(hours),
         "rollup": db.delivery_rollup(min(hours, 24 * 7)),
+        "failure_reasons": reasons,
         # The cost side of knocking. One opt-out against 148 sends is the evidence
         # that the fatigue cap is set about right; a jump here is the first sign it
         # is not.
