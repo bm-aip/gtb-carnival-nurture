@@ -145,7 +145,25 @@ def _wati_inbound(payload, allow_create):
         key = f"{ev['provider_msg_id']}:{ev['status']}" if ev["provider_msg_id"] else None
         if key and not db.mark_webhook_new(key):
             return jsonify({"ok": True, "dup": True})
-        db.record_delivery(ev)
+        new_event = db.record_delivery(ev)
+
+        # META REFUSED A TEMPLATE WE HAD ALREADY LOGGED AS SENT.
+        #
+        # This is the only place the refusal is ever visible: the send returned ok,
+        # Wati accepted it, and the refusal arrives minutes later as its own event.
+        # Correcting the send record here is what makes the knock retryable and what
+        # stops a message nobody received from spending the person's fatigue
+        # allowance (owner, 2026-08-11: "never arrived so don't count").
+        #
+        # Guarded by `new_event` so a redelivered callback cannot flip a second,
+        # later, genuinely-delivered knock to failed.
+        if (config.KNOCK_RETRY_ENABLED and new_event and ev["status"] == "failed"
+                and str(ev.get("event_type") or "").lower().startswith("template")):
+            corrected = db.mark_meta_refused(ev.get("phone"), ev.get("event_ts"))
+            if corrected:
+                db.log_msg(None, "in", "meta_refused", None, ok=False,
+                           detail=f"phone={ev.get('phone')} corrected send "
+                                  f"message_log.id={corrected}; knock is retryable")
         return jsonify({"ok": True, "status": ev["status"]})
 
     if not db.mark_webhook_new(_mid):

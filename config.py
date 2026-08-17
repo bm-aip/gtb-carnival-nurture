@@ -263,6 +263,64 @@ KNOCK_TEMPLATES = {
     "t6_visit":       os.environ.get("WATI_TPL_T6", "ron_nurture_06_visit_new_acc"),
 }
 
+
+def _variants(*names):
+    """Approved templates carrying the SAME message, in the order they are tried.
+
+    Empty slots are dropped, so a step with no alternates written yet degrades to
+    the single template it already had rather than to nothing.
+    """
+    seen, out = set(), []
+    for n in names:
+        n = (n or "").strip()
+        if n and n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+# Up to three wordings per knock, cycled on refusal (owner, 2026-08-11: "3 variants
+# - cycling upto 10 tries").
+#
+# ⚠️ EVERY VARIANT OF A STEP MUST DECLARE THE SAME VARIABLES. The parameter list is
+# chosen per STEP in knocks.TEMPLATE_TAKES_NAME, not per template, because a knock
+# is one message with three phrasings. A variant that adds or drops a {{1}} fails on
+# send with a parameter-count error -- which the retry loop would then treat as a
+# Meta refusal and spend ten attempts on. Marketing must keep the variables
+# identical across the variants of a step.
+#
+# The _B and _C slots are unset until marketing has approved alternates, so today
+# every step has exactly one variant and the rotation is a no-op.
+KNOCK_TEMPLATE_VARIANTS = {
+    "t1_lifestyle": _variants(KNOCK_TEMPLATES["t1_lifestyle"],
+                              os.environ.get("WATI_TPL_T1_B"),
+                              os.environ.get("WATI_TPL_T1_C")),
+    "t2_location": _variants(KNOCK_TEMPLATES["t2_location"],
+                             os.environ.get("WATI_TPL_T2_B"),
+                             os.environ.get("WATI_TPL_T2_C")),
+    "t3_low_density": _variants(KNOCK_TEMPLATES["t3_low_density"],
+                                os.environ.get("WATI_TPL_T3_B"),
+                                os.environ.get("WATI_TPL_T3_C")),
+    "t6_visit": _variants(KNOCK_TEMPLATES["t6_visit"],
+                          os.environ.get("WATI_TPL_T6_B"),
+                          os.environ.get("WATI_TPL_T6_C")),
+}
+
+# --- Retrying a knock Meta refused (2026-08-11) -------------------------------
+#
+# Meta refuses template sends per RECIPIENT and temporarily, not per sender: on
+# 2026-08-11 two numbers each got two knocks the same day, one read and one refused.
+# So the same person can be reached later with a different wording.
+#
+# OFF BY DEFAULT. It changes the meaning of a send already recorded as ok, and it
+# is the first thing in this system that deliberately messages someone again after
+# a failure. That deserves a switch someone has to turn on.
+KNOCK_RETRY_ENABLED = os.environ.get("KNOCK_RETRY_ENABLED", "false").lower() == "true"
+# Owner: retry ten times, then mark the person lost and leave them alone forever.
+KNOCK_RETRY_MAX = int(os.environ.get("KNOCK_RETRY_MAX", "10"))
+# "another version of the same message next day".
+KNOCK_RETRY_GAP_HOURS = int(os.environ.get("KNOCK_RETRY_GAP_HOURS", "24"))
+
 # Ghost re-opener (task 18/19). Someone who talked and then went quiet cannot be
 # sent the COLD sequence -- those templates introduce the project from scratch to a
 # person who already told us their budget, which reads as broken at exactly the

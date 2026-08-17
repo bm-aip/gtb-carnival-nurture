@@ -108,6 +108,66 @@ def knock_state(phone):
     return r.get("n", 0), r.get("last_at")
 
 
+def attempt_state(phone, step_key):
+    """(attempts at this step, when the last one was tried) counting REFUSALS too.
+
+    THE COUNTERPART TO knock_state, AND IT MUST NOT FILTER ON `ok`.
+
+    knock_state deliberately counts only sends that reached the handset, so when
+    db.mark_meta_refused() flips a refused knock to ok=FALSE the step becomes due
+    again -- that is how a retry happens at all. But it also means the refused
+    attempt becomes invisible, and two things then break unless something counts it:
+
+      * the ceiling. Ten attempts have to be ten, not infinity.
+      * the clock. `last_at` in due() falls back to the previous SUCCESSFUL knock,
+        or to None when there was none -- and a None gap means the retry fires again
+        on the very next tick, in a loop, all day.
+
+    So attempts are counted from every row for this step, ok or not, and the retry
+    gap is measured from the last ATTEMPT rather than the last delivery.
+
+    `blocked:` rows are EXCLUDED. Those are our own gates -- fatigue cap, opt-out,
+    send disabled -- and nothing went on the wire, so they are not attempts at
+    reaching the person and must not consume one of the ten. Counting them would let
+    a week of fatigue blocks exhaust the ceiling without Meta ever seeing a send.
+    """
+    r = db.q("""SELECT count(*) AS n, max(ml.ts) AS last_at
+                  FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+                 WHERE l.phone = %s AND ml.direction = 'out'
+                   AND ml.msg_type = %s
+                   AND (ml.detail IS NULL OR ml.detail NOT LIKE 'blocked:%%')""",
+             (phone, msg_type_for(step_key)), one=True) or {}
+    return r.get("n", 0) or 0, r.get("last_at")
+
+
+def variant_for(step_key, attempts):
+    """Which wording to try now. Cycles, so 10 attempts over 3 variants is fine.
+
+    Falls back to the single configured template when no alternates exist, which is
+    the state of every step until marketing has alternates approved.
+    """
+    variants = config.KNOCK_TEMPLATE_VARIANTS.get(step_key) or []
+    if not variants:
+        return config.KNOCK_TEMPLATES.get(step_key)
+    return variants[attempts % len(variants)]
+
+
+def _give_up(lead, step_key, attempts):
+    """Ten attempts and Meta refused every one. Stop, permanently.
+
+    Owner 2026-08-11: "left alone permanently marked as lost". NOT `suppressed` --
+    that field means the person asked us to stop, and conflating our own delivery
+    failure with their instruction would make an opt-out list that cannot be trusted.
+    """
+    db.x("""UPDATE leads SET knock_lost_at=now(), wa_state='knock_lost',
+                             updated_at=now()
+             WHERE id=%s AND knock_lost_at IS NULL""", (lead["id"],))
+    db.log_msg(lead["id"], "out", "knock_gave_up", None, ok=False,
+               fail_class="meta_refused",
+               detail=f"{step_key}: {attempts} attempts all refused by Meta; "
+                      f"marked lost, no further knocks")
+
+
 def _min_gap_days(step_index):
     """Days that must pass since the PREVIOUS knock before this one may go.
 
@@ -136,6 +196,9 @@ def due(limit=None):
         LEFT JOIN conversations c ON c.lead_id = l.id
         WHERE l.phone IS NOT NULL
           AND NOT l.suppressed
+          -- Ten refusals and we stopped. Excluded here rather than checked per
+          -- lead so a lost number cannot occupy a slot in the batch forever.
+          AND l.knock_lost_at IS NULL
           AND lower(trim(l.campaign)) = ANY(%s)
           -- task 18: ANY inbound ends the sequence, permanently.
           AND l.last_inbound_at IS NULL
@@ -171,6 +234,30 @@ def due(limit=None):
                 last_at = last_at.replace(tzinfo=timezone.utc)
             if now < last_at + timedelta(days=_min_gap_days(sent)):
                 continue
+
+        # RETRY BOOKKEEPING. Only reached when the step is otherwise due.
+        #
+        # ENTIRELY INSIDE THE SWITCH, on purpose. A knock blocked by the fatigue cap
+        # already leaves an ok=FALSE row and is correctly retried once the window
+        # clears; guarding on attempt count regardless of the switch would kill that
+        # -- the lead would lose the knock permanently. So with the switch off this
+        # block does nothing at all and the engine behaves exactly as before.
+        #
+        # With it on, both guards are load-bearing: without the ceiling a
+        # permanently-refused number is retried forever, and without the gap the
+        # refused attempt is invisible to the clock above (knock_state cannot see it)
+        # so the same knock fires on every tick of the day.
+        if config.KNOCK_RETRY_ENABLED:
+            attempts, last_try = attempt_state(lead["phone"], step_key)
+            if attempts >= config.KNOCK_RETRY_MAX:
+                _give_up(lead, step_key, attempts)
+                continue
+            if attempts and last_try is not None:
+                if last_try.tzinfo is None:
+                    last_try = last_try.replace(tzinfo=timezone.utc)
+                if now < last_try + timedelta(hours=config.KNOCK_RETRY_GAP_HOURS):
+                    continue
+
         out.append((lead, sent, step_key))
         claimed.add(lead["phone"])
         if len(out) >= limit:
@@ -180,10 +267,17 @@ def due(limit=None):
 
 def send_knock(lead, step_index, step_key):
     """Send one knock. Returns True only if it actually went out."""
-    template = config.KNOCK_TEMPLATES.get(step_key)
+    # Which wording. On a first attempt this is variant 0, i.e. exactly what the
+    # step always sent; on a retry it is the next one in the rotation.
+    attempts, _last_try = attempt_state(lead["phone"], step_key)
+    template = variant_for(step_key, attempts)
     if not template:
         log.warning("no template configured for %s", step_key)
         return False
+    if attempts:
+        log.info("knock %s retry %d/%d for %s using variant %s",
+                 step_key, attempts + 1, config.KNOCK_RETRY_MAX,
+                 lead["phone"], template)
 
     allowed, reason = fatigue.check(lead["phone"], msg_type_for(step_key),
                                     project=lead.get("project"))

@@ -107,6 +107,23 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_captured_at TIMESTAMPTZ;
 -- state from "we never asked". Without it the backfill re-asks about the same
 -- landing-page walk-ins on every run, forever.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS ctwa_looked_at TIMESTAMPTZ;
+
+-- 2026-08-11: the knock that Meta refused, and when we stopped trying.
+--
+-- Meta refuses individual template sends per RECIPIENT, not per sender. Proven on
+-- 2026-08-11: numbers 919884739289 and 919841071005 each received two knocks the
+-- same day from the same number -- one delivered and read, the other refused. A
+-- sender-wide penalty cannot do that, so a refusal is temporary and the same person
+-- can be reached later with a different template.
+--
+-- `knock_lost_at` is set when the retry ceiling is reached. Owner 2026-08-11: after
+-- ten attempts the person is "left alone permanently, marked as lost". Separate
+-- from `suppressed`, which means they asked us to stop -- these two must never be
+-- confused, because one is our failure and the other is their instruction.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS knock_lost_at TIMESTAMPTZ;
+-- Which VARIANT actually went out. Without it a retry cannot know which wording
+-- has already been spent on this person, and the whole rotation is guesswork.
+ALTER TABLE message_log ADD COLUMN IF NOT EXISTS template_name TEXT;
 -- Per-ad reporting is the whole point of storing source_id, and it is always a
 -- GROUP BY over the full table.
 CREATE INDEX IF NOT EXISTS idx_leads_ctwa_source ON leads (ctwa_source_id);
@@ -409,13 +426,14 @@ def mark_webhook_new(msg_id):
 
 
 def log_msg(lead_id, direction, msg_type, body, ok=True, detail=None,
-            provider_msg_id=None, fail_class=None, sources=None):
+            provider_msg_id=None, fail_class=None, sources=None,
+            template_name=None):
     import json as _json
     x("""INSERT INTO message_log (lead_id, direction, msg_type, body, ok, detail,
-                                  provider_msg_id, fail_class, sources)
-         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+                                  provider_msg_id, fail_class, sources, template_name)
+         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
       (lead_id, direction, msg_type, body, ok, detail, provider_msg_id, fail_class,
-       _json.dumps(sources) if sources else None))
+       _json.dumps(sources) if sources else None, template_name))
 
 
 def record_delivery(ev):
@@ -452,6 +470,55 @@ def record_delivery(ev):
            ev.get("status"), ev.get("reason"), ev.get("event_type"),
            ev.get("event_ts"), ev.get("raw"), ev.get("fail_class")))
     return n == 1
+
+
+def mark_meta_refused(phone, event_ts=None, window_minutes=120):
+    """Meta refused a template we had already logged as sent. Correct the record.
+
+    Returns the message_log id we corrected, or None.
+
+    WHY FLIP `ok` RATHER THAN ADD A RETRY TABLE
+    -------------------------------------------
+    `ok=TRUE` currently means "Wati accepted it", and when Meta then refuses the
+    message that record is simply WRONG -- nothing reached the handset. Three
+    separate counters already read `ok`, each with the same intent:
+
+        knocks.knock_state   -- "ok=TRUE only: a template that never reached the
+                                handset has not been spent"
+        fatigue.window_count -- proactive sends this person RECEIVED in 7 days
+        fatigue.journey_count-- knocks RECEIVED in the current journey
+
+    So correcting the one flag makes all three right at once, and it delivers the
+    owner's rule of 2026-08-11 -- "never arrived so don't count" -- without adding a
+    parallel bookkeeping system that could disagree with the log.
+
+    It also produces the retry for free: with the row no longer counted, the step
+    becomes due again and the engine picks the next variant.
+
+    MATCHED BY PHONE AND TIME. Wati's sendTemplateMessage response carries no
+    message id, so a callback can never be joined to its send by id -- the same
+    reason knock_delivery() matches this way. The most recent still-ok knock to that
+    number inside the window is the one that was refused.
+    """
+    if not phone:
+        return None
+    row = q("""SELECT ml.id
+                 FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+                WHERE l.phone = %s
+                  AND ml.direction = 'out' AND ml.ok
+                  AND ml.msg_type LIKE 'knock\\_%%'
+                  AND ml.ts <= COALESCE(%s, now())
+                  AND ml.ts > COALESCE(%s, now()) - (%s * interval '1 minute')
+                ORDER BY ml.ts DESC LIMIT 1""",
+            (phone, event_ts, event_ts, window_minutes), one=True)
+    if not row:
+        return None
+    x("""UPDATE message_log
+            SET ok = FALSE,
+                fail_class = 'meta_refused',
+                detail = COALESCE(detail, '') || ' | meta refused after accept'
+          WHERE id = %s""", (row["id"],))
+    return row["id"]
 
 
 def knock_delivery(hours=72):
