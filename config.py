@@ -530,6 +530,48 @@ HANDED_OFF_OUTCOMES = ("qualified", "visit_booked", "escalated", "wants_sales", 
 ACK_REPLY = os.environ.get(
     "ACK_REPLY", "Sure - someone from our team will be in touch shortly.")
 
+# --- two things the buyer says that we were getting wrong (2026-08-17) ---------
+#
+# Both found by reading what the bot actually replied to real messages, and both are
+# comprehension failures rather than tone: the buyer asked something plainly and the
+# answer did not address it.
+
+# THEY ASKED TO BE PHONED. Six buyers did, and FOUR of the four replies we sent never
+# mentioned a call or a person at all -- one answered "Call me" with apartment prices
+# and a site visit. Three of those conversations were `escalated`, so a human WAS
+# notified while the buyer was told about the clubhouse. The routing worked and the
+# words did not, which from the buyer's side is indistinguishable from being ignored.
+#
+# handoff.py already handles "yes please, ask them to call me", but only once the call
+# has been OFFERED and answered (conversation.sales_offer_state == "answered"). An
+# UNPROMPTED request had no path at all and rode entirely on the model picking the
+# right label.
+WANTS_CALL = re.compile(
+    r"call me|can you call|could you call|please call|call back|give me a call|"
+    r"ring me|phone me|call now|call kar|call pannu|"
+    r"share (his|her|their|the) (contact|number|mobile)|"
+    r"(want|need|like) to (talk|speak)|talk to (someone|a person|sales|somebody)",
+    re.I)
+
+# ⚠️ SALES OWNS THIS WORDING, like SALES_OFFER_FRAMING and ACK_REPLY. It is the
+# sentence a buyer gets when they have asked to be phoned, so it must promise only
+# what we actually do: a colleague calls. No time is committed to, because nothing
+# here knows the team's diary.
+CALL_ACK_FRAMING = os.environ.get(
+    "CALL_ACK_FRAMING", "Sure, I'll have a colleague call you.")
+
+# THEY ASKED WHERE IT IS. Seen once and failed once: a buyer sent "Location" and the
+# reply opened "Ha, thanks." then described the beach and the clubhouse without ever
+# saying where the project is.
+#
+# The collision is structural, not random: our own gate is CALLED location, so a bare
+# "location" reads to the model as the buyer ANSWERING it rather than asking. The
+# checklist recorded nothing, so it did not even land as an answer -- it was simply
+# misread.
+ASKS_LOCATION = re.compile(
+    r"^\W*(location|address|where|where is (it|this|the (site|project))|"
+    r"how far|which (area|place|part)|exact location|site location)\W*$", re.I)
+
 # --- shorter, warmer, less interrogative (owner, 2026-08-17) -------------------
 #
 # Measured across 623 turns that day, alongside a competitor conversation the owner

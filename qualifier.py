@@ -412,6 +412,26 @@ def run_turn(lead, message, history=None, conv=None):
     # other end. Lead 1016 is why this exists: a +966 number asked to be called five
     # different ways and was answered with "just tell me a day and I'll set up the
     # visit" every time.
+    # THEY ASKED TO BE PHONED. Decided from their words in code, because the model
+    # got this right once in four: it escalated correctly and then replied about
+    # apartment prices, so sales was notified while the buyer heard nothing about a
+    # call. Told first, and enforced afterwards in _enforce.
+    if message and config.WANTS_CALL.search(message):
+        state += (f"\n\nTHEY HAVE ASKED TO BE PHONED. Say so FIRST, in these words in "
+                  f"spirit:\n  {config.CALL_ACK_FRAMING}\n"
+                  f"Then answer anything else they asked. Do NOT offer a site visit "
+                  f"instead, do NOT add a fact they did not ask for, and do NOT "
+                  f"promise a time. Set action='connect_sales' unless a colleague "
+                  f"has already been told about this person.")
+
+    # THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the
+    # same name, so the model reads it as an ANSWER. It is a question.
+    if message and config.ASKS_LOCATION.match(message.strip()):
+        state += ("\n\nTHIS IS A QUESTION ABOUT WHERE THE PROJECT IS, not their "
+                  "answer to the location gate. Tell them: ECR, near Kovalam "
+                  "Junction. Do NOT record it as their location and do NOT treat it "
+                  "as answered.")
+
     # THEIR NAME. The reference conversation used it in 61% of messages; we used it
     # in 5 of 624. It is the cheapest warmth available and it is how business is
     # spoken here. Offered, not mandated -- a name wedged into every sentence reads
@@ -504,7 +524,60 @@ def _decide(resp, chunks, lead, message, history):
     except Exception:
         return _forced_escalation("unparseable decision", chunks)
 
-    return _enforce(decision, chunks, lead, message=message, history=history)
+    return _answer_the_question(
+        _enforce(decision, chunks, lead, message=message, history=history), message)
+
+
+def _answer_the_question(d, message):
+    """Two things a buyer asks plainly that we were failing to answer.
+
+    RUNS AFTER _enforce, ON PURPOSE, and that placement is the fix rather than a
+    detail. Inside _enforce these guards were defeated by the confidence floor: a
+    reply with an uncited factual claim is replaced wholesale by the escalation line,
+    so a buyer who asked "Location" was told "someone will come back to you" and
+    still never learned where the project is. Out here, every path is covered --
+    including a forced escalation.
+
+    Both sentences are OUR OWN approved config text, not retrieved knowledge, so
+    stating them cannot invent anything and neither needs a citation.
+
+    THEY ASKED TO BE PHONED. Measured 2026-08-17: six buyers did, and four of the
+    replies never mentioned a call or a person -- one answered "Call me" with
+    apartment prices and a site visit. Three of those conversations were `escalated`,
+    so a colleague HAD been told while the buyer read about the clubhouse. The
+    routing worked and the words did not, which from their side is being ignored.
+
+    THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the same
+    name, so the model reads it as an ANSWER. It is a question, and it is also not
+    their location -- recording it would tell a buyer in Adyar where the site is
+    instead of noting that they are in Adyar.
+    """
+    if not d or not message:
+        return d
+    reply = (d.get("reply") or "").strip()
+    note = d.get("internal_note") or ""
+
+    if (config.WANTS_CALL.search(message)
+            and not re.search(r"\bcall\b|colleague|our team|someone (from|will)",
+                              reply, re.I)):
+        reply = f"{config.CALL_ACK_FRAMING} {reply}".strip()
+        note += " | call request was not acknowledged; framing prepended"
+
+    if (config.ASKS_LOCATION.match(message.strip())
+            and not re.search(r"ECR|Kovalam", reply, re.I)):
+        reply = f"We're on {config.VISIT_VENUES['site']['name']}. {reply}".strip()
+        note += " | location question was not answered; location prepended"
+
+    if config.ASKS_LOCATION.match(message.strip()):
+        # Their words were a question, so they said nothing about where THEY are.
+        d["location"] = None
+        if d.get("gate_asked") == "location":
+            d["gate_asked"] = None
+            d["framing_used"] = None
+
+    d["reply"] = reply
+    d["internal_note"] = note
+    return d
 
 
 # Sent instead of the normal checklist push once the lead is already qualified.
