@@ -565,8 +565,21 @@ def _answer_the_question(d, message):
 
     if (config.ASKS_LOCATION.match(message.strip())
             and not re.search(r"ECR|Kovalam", reply, re.I)):
-        reply = f"We're on {config.VISIT_VENUES['site']['name']}. {reply}".strip()
-        note += " | location question was not answered; location prepended"
+        # Marketing's own sentence, with the map link they supplied on the 2026-08-17
+        # voice sheet. Replaces my composed "We're on the site on ECR..." -- theirs
+        # says "5 kms from Kovalam" and carries a link, which we never had.
+        reply = f"{config.LOCATION_ANSWER} {reply}".strip()
+        note += " | location question was not answered; marketing's answer prepended"
+
+    # THEY ASKED FOR DOCUMENTS. Marketing answers this by naming a colleague rather
+    # than by declining or by quoting prices, so the bot does the same. Checked for
+    # the colleague's name AND for a brochure word, because a reply that merely says
+    # "I can't send photos" satisfies neither.
+    if (config.ASKS_DOCS.search(message)
+            and config.BROCHURE_CONTACT.lower() not in reply.lower()):
+        reply = (config.BROCHURE_FRAMING.format(name=config.BROCHURE_CONTACT)
+                 + " " + reply).strip()
+        note += f" | document request handed to {config.BROCHURE_CONTACT}"
 
     if config.ASKS_LOCATION.match(message.strip()):
         # Their words were a question, so they said nothing about where THEY are.
@@ -942,11 +955,20 @@ def _dedash(reply):
     for seg in parts[1:]:
         stripped = seg.lstrip()
         # Three or more words can carry a sentence; fewer is a trailing fragment.
-        if len(stripped.split()) >= 3 and out.rstrip() and not out.rstrip().endswith(
-                (".", "!", "?", ",", ":", ";")):
-            out = out.rstrip() + ". " + stripped[:1].upper() + stripped[1:]
+        # NEVER CAPITALISE A URL. Marketing's location answer is
+        # "...exact location - https://maps.app.goo.gl/..." and a naive split turned
+        # that into "Https://maps...". The scheme still resolves, but it reads as
+        # broken to a buyer, which is worse than the dash we were removing.
+        starts_url = bool(re.match(r"(https?://|www\.)", stripped, re.I))
+
+        def _cap(t):
+            return t if starts_url else t[:1].upper() + t[1:]
+
+        if (len(stripped.split()) >= 3 and out.rstrip()
+                and not out.rstrip().endswith((".", "!", "?", ",", ":", ";"))):
+            out = out.rstrip() + ". " + _cap(stripped)
         elif out.rstrip().endswith((".", "!", "?")):
-            out = out.rstrip() + " " + stripped[:1].upper() + stripped[1:]
+            out = out.rstrip() + " " + _cap(stripped)
         else:
             out = out.rstrip().rstrip(",") + ", " + stripped
     return out

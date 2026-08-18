@@ -317,7 +317,12 @@ def test_the_rulebook_loads_and_fails_loudly():
     R.check("the prompt is assembled from the document",
             len(a.system_prompt("Republic of Nature")) > 4000)
     R.check("the escalation sentence comes from the document",
-            a.RULES["escalation_reply"].startswith("Let me have someone"),
+            "someone from our team come back to you" in a.RULES["escalation_reply"],
+            a.RULES["escalation_reply"])
+    # It is sent VERBATIM by _forced_escalation, so a line break in the document
+    # would reach a buyer mid-sentence. Marketing's version arrived wrapped.
+    R.check("...and is a single line",
+            chr(10) not in a.RULES["escalation_reply"],
             a.RULES["escalation_reply"])
     R.check("qualifier uses it", q._forced_escalation("x", [])["reply"]
             == a.RULES["escalation_reply"])
@@ -337,7 +342,7 @@ def test_the_rulebook_loads_and_fails_loudly():
         R.check("...and the orphaned heading", "does nothing" in str(e), str(e)[:200])
 
     # An emptied section must not be silently defaulted.
-    gutted = doc.replace("Let me have someone from our team come back to you on this.", "")
+    gutted = doc.replace(a.RULES["escalation_reply"], "")
     try:
         a.validate(*a.parse(gutted))
         R.check("an emptied section raises", False, "no error raised")
@@ -613,12 +618,28 @@ def test_the_voice_is_plain_and_the_examples_survive():
     voice = answering.RULES["voice"]
 
     R.check("the language rules are substantial", len(lang) > 900, lang[:80])
+    # REPLACED 2026-08-17: marketing supplied ten real replies on the voice sheet, so
+    # the examples are now BUYER/US pairs in their voice rather than TOO MUCH/BETTER
+    # pairs in mine. Still the asset; still must not be tidied away.
+    R.check("marketing's examples are present",
+            lang.count("BUYER:") >= 5 and lang.count("US:") >= 5,
+            f'BUYER: {lang.count("BUYER:")}, US: {lang.count("US:")}')
+    R.check("they are marked as outranking the prose rules", "THESE WIN" in lang)
     # Counted on the PARSED text, not the file. `>` lines are notes to the editor and
     # are stripped by design -- these examples were written as blockquotes first and
     # reached the model as four blank lines. The document looked right and the bot was
     # told nothing. Anything meant for the model has to be asserted after parsing.
-    R.check("...and show real before/after pairs", lang.count("TOO MUCH:") >= 4
-            and lang.count("BETTER:") >= 4,
+    # TWO KINDS OF EXAMPLE NOW, and both must survive a tidy-up.
+    #
+    # Marketing's BUYER/US replies (checked above) are the register anchor -- they are
+    # the approved voice. The TOO MUCH/BETTER pairs remain for SPECIFIC TICS, where
+    # showing the wrong version is the only way to name it: the dash hanging a second
+    # thought off a finished sentence is the live example. Four of the original pairs
+    # were mine and were replaced by marketing's on 2026-08-17; what is left is the
+    # tic-specific one, which is the one that cannot be expressed as a good reply
+    # alone.
+    R.check("...and keep at least one wrong/right pair for a named tic",
+            lang.count("TOO MUCH:") >= 1 and lang.count("BETTER:") >= 1,
             f"{lang.count('TOO MUCH:')} bad, {lang.count('BETTER:')} good")
 
     # The specific tics seen in live replies. Each one must stay named: a banned

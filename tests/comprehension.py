@@ -141,4 +141,79 @@ r.check("their location is not captured from a question",
 r.check("and the gate is not marked as asked",
         out.get("gate_asked") is None, detail=repr(out.get("gate_asked")))
 
+
+# --- marketing's approved answers, 2026-08-17 voice sheet ---------------------
+# Their file: RON-VOICE-SHEET-FOR-MARKETING REPLY.md. Where their wording and my
+# earlier wording disagree, theirs is the approved one and mine was the guess.
+
+# 3. "Call me" -- they name the role. Mine said "a colleague".
+r.check("the call acknowledgement is marketing's wording",
+        "sales person" in config.CALL_ACK_FRAMING.lower(),
+        detail=config.CALL_ACK_FRAMING)
+
+# 4. Location -- their sentence, their map link. We had no link at all before, and we
+#    were saying "near Kovalam Junction" where they say "5 kms from Kovalam".
+r.check("the location answer says 5 kms from Kovalam",
+        "5 kms from Kovalam" in config.LOCATION_ANSWER, detail=config.LOCATION_ANSWER)
+r.check("and carries the map link",
+        "maps.app.goo.gl/RpzjkiwQ4j8iAEAh9" in config.LOCATION_ANSWER)
+r.check("and never says Vadanemmeli",
+        "vadanemmeli" not in config.LOCATION_ANSWER.lower())
+# A URL survives the punctuation folding. The dash before it used to become a full
+# stop and capitalise the scheme into "Https://".
+cleaned = q._clean_reply(config.LOCATION_ANSWER)
+r.check("the map link survives _clean_reply intact",
+        "https://maps.app.goo.gl/RpzjkiwQ4j8iAEAh9" in cleaned, detail=cleaned)
+r.check("the scheme is not capitalised",
+        "Https://" not in q._dedash("the location - https://x.com/a b c"),
+        detail=q._dedash("the location - https://x.com/a b c"))
+r.check("the location answer fits the length cap",
+        len(config.LOCATION_ANSWER) <= config.MAX_REPLY_CHARS,
+        detail=f"{len(config.LOCATION_ANSWER)} chars")
+
+# 5 and 7. Documents -- marketing answered BOTH the brochure question and the
+# floor-plan/configuration question by naming a colleague. That replaces declining
+# ("I can't open photos here") and replaces answering with prices.
+for msg in ("Share the floor plans", "Can u send pics", "send me the brochure",
+            "Pl send the 3 BHK Villa Land Area and Built up Area Details",
+            "floor plan please", "share photos", "layout", "unit details",
+            "what is the built up area"):
+    r.check(f"detected as a document request: {msg!r}",
+            bool(config.ASKS_DOCS.search(msg)), detail=msg)
+for msg in ("What is the price", "Where is it", "Call me", "Any other amenities",
+            "When is possession"):
+    r.check(f"NOT a document request: {msg!r}",
+            not config.ASKS_DOCS.search(msg), detail=msg)
+
+r.check("the colleague is named", bool(config.BROCHURE_CONTACT.strip()))
+r.check("the brochure sentence uses their name",
+        config.BROCHURE_CONTACT in
+        config.BROCHURE_FRAMING.format(name=config.BROCHURE_CONTACT))
+
+out = enforced("I can't open photos here, sorry.", "Share the floor plans")
+r.check("a document request is handed to the colleague",
+        config.BROCHURE_CONTACT in out["reply"], detail=out["reply"])
+out = enforced(f"Sure, {config.BROCHURE_CONTACT} will send those over.",
+               "Share the floor plans")
+r.check("a reply that already names them is untouched",
+        out["reply"].count(config.BROCHURE_CONTACT) == 1, detail=out["reply"])
+
+out = enforced("Ha, thanks. It is a big community.", "Location")
+r.check("a location question gets marketing's answer",
+        "5 kms from Kovalam" in out["reply"], detail=out["reply"])
+r.check("and the map link", "maps.app.goo.gl" in out["reply"], detail=out["reply"])
+
+# 9. Their fuller deferral gives a reason before handing over.
+import answering                        # noqa: E402
+r.check("the escalation reply gives a reason first",
+        "depends on the unit" in answering.RULES["escalation_reply"].lower(),
+        detail=answering.RULES["escalation_reply"])
+
+# Their ten replies are the register anchor now, not my invented pairs.
+lang = answering.RULES["language"]
+r.check("marketing's examples are in the rulebook", "Vidya from my team" in lang)
+r.check("and are marked as winning over my rules", "THESE WIN" in lang)
+# They used "plenty" themselves, so it cannot stay on the banned list.
+r.check("'plenty' is no longer banned", "plenty of space" not in lang)
+
 sys.exit(0 if r.report("COMPREHENSION RULES") else 1)
