@@ -249,8 +249,14 @@ r.check("the rulebook carries a Chennai-not-London table",
 # line far more readily than it follows a rule. Three of the four modelled the exact
 # register the rules forbid: "Nice.", "Oh good.", "Worth seeing in person", and em
 # dashes in two of them. A ban contradicted by its own example is not a ban.
-better = re.findall(r"^BETTER: \"(.*)\"$", lang, re.M)
-r.check(f"there are BETTER examples to check (found {len(better)})", len(better) >= 3)
+# CHANGED 2026-08-17: the four BETTER lines were mine and were replaced by marketing's
+# ten real BUYER/US replies. So the examples to check against the style rules are now
+# theirs -- which is the stronger test, because these are what the model copies AND
+# what the business approved. Any TOO MUCH/BETTER pair that remains is checked too.
+better = (re.findall(r'^US: "?(.*?)"?$', lang, re.M)
+          + re.findall(r'^BETTER: "(.*)"$', lang, re.M))
+better = [b for b in better if len(b) > 15]
+r.check(f"there are approved examples to check (found {len(better)})", len(better) >= 3)
 for ex in better:
     r.check(f"BETTER example has no dash: {ex[:44]}",
             not re.search(r"\s[-–—]\s", ex), detail=ex)

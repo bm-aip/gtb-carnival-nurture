@@ -557,8 +557,34 @@ WANTS_CALL = re.compile(
 # sentence a buyer gets when they have asked to be phoned, so it must promise only
 # what we actually do: a colleague calls. No time is committed to, because nothing
 # here knows the team's diary.
+# MARKETING'S OWN WORDING, 2026-08-17 voice sheet. Mine was "Sure, I'll have a
+# colleague call you." Theirs names the role, which is how it is said here.
 CALL_ACK_FRAMING = os.environ.get(
-    "CALL_ACK_FRAMING", "Sure, I'll have a colleague call you.")
+    "CALL_ACK_FRAMING", "Sure. I'll arrange for a call from our sales person.")
+
+# WHERE THE PROJECT IS, in marketing's words, with the map link they supplied. Both
+# are new: we were saying "on ECR, near Kovalam Junction" and they say "5 kms from
+# Kovalam, ECR", and there was no link at all -- the map URL had been an open blocker
+# on showing media in answers.
+#
+# Stated from config rather than retrieved, so the citation floor does not apply and
+# the figure cannot drift the way the clubhouse size did.
+LOCATION_ANSWER = os.environ.get(
+    "LOCATION_ANSWER",
+    "Republic of Nature is located 5 kms from Kovalam, ECR. Here is the exact "
+    "location: https://maps.app.goo.gl/RpzjkiwQ4j8iAEAh9")
+
+# THE COLLEAGUE WHO SENDS DOCUMENTS. Marketing answered both the brochure question
+# and the floor-plan/configuration question with the same sentence, naming a real
+# person: "Sure, Vidya from my team will share you the brochure and floor plans."
+#
+# That is a behaviour change, not only wording. We were answering configuration
+# questions with prices and declining photo requests with "I can't open photos here".
+# Marketing wants both handed to Vidya.
+BROCHURE_CONTACT = os.environ.get("BROCHURE_CONTACT", "Vidya")
+BROCHURE_FRAMING = os.environ.get(
+    "BROCHURE_FRAMING",
+    "Sure, {name} from my team will share you the brochure and floor plans.")
 
 # THEY ASKED WHERE IT IS. Seen once and failed once: a buyer sent "Location" and the
 # reply opened "Ha, thanks." then described the beach and the clubhouse without ever
@@ -568,6 +594,19 @@ CALL_ACK_FRAMING = os.environ.get(
 # "location" reads to the model as the buyer ANSWERING it rather than asking. The
 # checklist recorded nothing, so it did not even land as an answer -- it was simply
 # misread.
+# THEY ASKED FOR A BROCHURE, PHOTOS, FLOOR PLANS OR UNIT DETAILS. Marketing answered
+# both the brochure question and the floor-plan/configuration question with the SAME
+# sentence, naming a colleague: "Sure, Vidya from my team will share you the brochure
+# and floor plans."
+#
+# That is a behaviour change, not a rewording. We were declining photo requests with
+# "I can't open photos here" and answering configuration questions with prices.
+ASKS_DOCS = re.compile(
+    r"brochure|floor\s*plan|floorplan|layout|plans?|"
+    r"send (me )?(the )?(pic|photo|image|detail)|share (the )?(pic|photo|detail)|"
+    r"pics?|photos?|land area|built ?up|carpet area|unit (detail|size)",
+    re.I)
+
 ASKS_LOCATION = re.compile(
     r"^\W*(location|address|where|where is (it|this|the (site|project))|"
     r"how far|which (area|place|part)|exact location|site location)\W*$", re.I)
