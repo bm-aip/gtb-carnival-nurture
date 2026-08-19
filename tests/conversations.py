@@ -37,6 +37,7 @@ def _fold(conv, decision):
     a buyer is allowed to change their mind about (the apartment pivot).
     """
     checklist = dict(conv["checklist"])
+    learned = False
     for field, key in (("purpose", "purpose"), ("location", "location"),
                        ("configuration", "configuration"), ("budget_inr", "budget"),
                        ("timeline", "timeline"), ("visit_day", "visit_day"),
@@ -46,7 +47,10 @@ def _fold(conv, decision):
             continue
         if checklist.get(key) and key != "configuration":
             continue
+        if checklist.get(key) == val:
+            continue
         checklist[key] = val
+        learned = True
     asked = {k: list(v) for k, v in conv["asked"].items()}
     gate, fr = decision.get("gate_asked"), decision.get("framing_used")
     # The sales offer has one wording and no framing index, so it is recorded on
@@ -57,7 +61,24 @@ def _fold(conv, decision):
         asked.setdefault(gate, [])
         if fr not in asked[gate]:
             asked[gate].append(fr)
-    return {**conv, "checklist": checklist, "asked": asked}
+
+    # THE PACING COUNTERS, added 2026-08-19. Without these the harness held
+    # `unreciprocated` at whatever the scenario started with, so may_ask_gate always
+    # said yes and the one-turn pause after a dodge never engaged -- the dodger
+    # scenario was testing a conversation production would never have. Mirrors
+    # record_turn exactly; if that changes, this must too.
+    if decision.get("action") in ("connect_sales", "nurture"):
+        learned = True
+    if learned:
+        unrec = 0
+    elif gate:
+        unrec = (conv.get("unreciprocated") or 0) + 1
+    else:
+        unrec = conv.get("unreciprocated") or 0
+    since = 0 if gate else (conv.get("turns_since_gate") or 0) + 1
+
+    return {**conv, "checklist": checklist, "asked": asked,
+            "unreciprocated": unrec, "turns_since_gate": since}
 
 
 # ---------------------------------------------------------------------------
@@ -294,6 +315,72 @@ SCENARIOS = [
         "turns": [
             {"say": "what is the per square foot rate?", "forbid": [r"per sq"]},
             {"say": "can I visit on Tuesday?", "forbid": [r"\btuesday\b.{0,30}\b(booked|confirmed|see you)\b"]},
+        ],
+    },
+
+    # ---- 2026-08-19. The goal-driven turn. -----------------------------------
+    # Owner: "goal is to qualify and book site visit - not an answering engine".
+    {
+        "name": "vignesh — the real conversation, replayed",
+        "why": ("Lead 9840168185, 2026-08-19 05:52 IST. Four exchanges, every one "
+                "answered in under ten seconds, and he reached a salesperson with "
+                "nothing known about him: no purpose, no location, no budget, and "
+                "no visit. He asked for a price and was told a colleague would send "
+                "it; he had to ask twice for a number we held all along."),
+        "turns": [
+            {"say": "Hi! Need more details about republic of nature.",
+             "action_not": "escalate"},
+            # THE DEFLECTION. "Pls share cost" is a question missing one word --
+            # ask which home, do not hand it to a person.
+            {"say": "Pls share cost",
+             "action_not": "escalate",
+             "forbid": [r"(colleague|team|vidya|someone).{0,40}"
+                        r"(share|send|come back|be in touch|call you)"],
+             "require": [r"apartment|villa|which"]},
+            {"say": "Send me for villas",
+             "require": [r"3\.94|Rs"],
+             "forbid": [r"₹"]},
+        ],
+        # He engaged on every turn, so the bot was never in a pause. By the end of
+        # three exchanges it must have gone after something -- anything -- about
+        # him. Last night it asked once, was talked over, and never asked again.
+        "require_anywhere": [r"looking (to buy|at)|which area|where.{0,25}(you|based)|"
+                             r"sit(s)? (around|about)|range you|thinking|budget"],
+    },
+    {
+        "name": "dodger — three refusals must not become silence",
+        "why": ("The pause is now spent only on a buyer who dodged, and it lasts one "
+                "turn. A buyer who steps around every question must still be asked, "
+                "from a new angle each time -- not quietly dropped."),
+        "start": {"checklist": {"purpose": "investment"},
+                  "asked": {"purpose": [0]}},
+        "turns": [
+            {"say": "just send me the brochure"},
+            {"say": "what is the clubhouse like?"},
+            {"say": "and how big is the community?"},
+        ],
+        "require_anywhere": [r"which area|where .{0,30}(buy|looking)|apartment or villa|"
+                             r"3 bed|4 bed|size|range|budget"],
+    },
+    {
+        "name": "short-let — an Airbnb buyer is turned away graciously",
+        "why": ("Owner, 2026-08-19: 'unless they say I want for rental - i want to "
+                "book like a airbnb - we reject them'. There was no rule for this "
+                "at all: a short-let buyer read as an investment lead and would "
+                "have been qualified and sent to sales."),
+        "turns": [
+            {"say": "I want to buy a villa to put on Airbnb for short stays",
+             "action_is": "dead",
+             "forbid": [r"visit|site tour|book"]},
+        ],
+    },
+    {
+        "name": "value before price — do not lead with the number",
+        "why": ("Owner, 2026-08-19: 'dont push price upfront - talk discover make "
+                "them see the value - then check if budget is within range'."),
+        "turns": [
+            {"say": "Need More Details",
+             "forbid": [r"\d+\s*(cr|crore|lakh)"]},
         ],
     },
 ]

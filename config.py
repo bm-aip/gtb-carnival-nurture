@@ -611,6 +611,33 @@ ASKS_LOCATION = re.compile(
     r"^\W*(location|address|where|where is (it|this|the (site|project))|"
     r"how far|which (area|place|part)|exact location|site location)\W*$", re.I)
 
+# --- "Pls share cost" (owner, 2026-08-19) -------------------------------------
+#
+# A price question with no product named. Lead 9840168185 sent exactly this and was
+# told a colleague would send the details; he asked a SECOND time before he got a
+# number we had all along, and we learned nothing about him in either exchange.
+#
+# Decided in code, for the same reason as WANTS_CALL and ASKS_LOCATION above: the
+# rulebook now says to ask which home, and on a replay of his real conversation the
+# model followed it once in two attempts. A rule the model weighs is not a floor. It
+# is one word missing from an answerable question -- never a handover.
+#
+# ASKS_PRICE must match, NAMES_PRODUCT must not. Deliberately narrow: the moment
+# they say villa, apartment, 3 bed or a size, we can retrieve and answer, and this
+# must not fire on "what does a 3 bed villa cost".
+ASKS_PRICE = re.compile(
+    r"price|cost|rate|budget|how much|kitna|starting (at|from)|\bpricing\b", re.I)
+
+NAMES_PRODUCT = re.compile(
+    r"villa|apartment|flat|\d\s*(bed|bhk|bedroom)|"
+    r"(two|three|four)\s*(bed|bhk|bedroom)|sqft|sq\.?\s*ft|square f", re.I)
+
+
+def asks_price_without_product(message):
+    """A price question we cannot answer only because they left out one word."""
+    m = message or ""
+    return bool(ASKS_PRICE.search(m)) and not NAMES_PRODUCT.search(m)
+
 # --- shorter, warmer, less interrogative (owner, 2026-08-17) -------------------
 #
 # Measured across 623 turns that day, alongside a competitor conversation the owner
@@ -623,9 +650,22 @@ ASKS_LOCATION = re.compile(
 #
 # Our median message sat in our own worst-performing length bucket.
 
-# Ask a qualifying question at most this often. 2 = ask, let two turns breathe, ask.
-# Turned down to 1 restores the old behaviour of asking almost every turn.
-GATE_EVERY_N_TURNS = int(os.environ.get("GATE_EVERY_N_TURNS", "2"))
+# PACING IS NOW EARNED, NOT CLOCKED (owner, 2026-08-19: "be fucking goal focussed").
+#
+# This used to be a blanket gag: GATE_EVERY_N_TURNS=2 meant the bot was FORBIDDEN to
+# ask anything on two turns out of every three, whatever the buyer was doing. Lead
+# 9840168185 spent his entire conversation inside that window -- he asked twice about
+# price while the bot was under orders not to ask him anything -- and reached a
+# salesperson with nothing known about him.
+#
+# The 2026-08-17 numbers above are not wrong, they were read too broadly. A question
+# depressed the reply rate because the bot asked the SAME gate bluntly and had
+# nowhere to go when ignored; silence is not the remedy for a bad ask. So the pause
+# is now spent only where it was earned -- on a buyer who has just declined to
+# answer -- and never on one who is actively engaging.
+#
+# Turns to wait after an ask that got nothing back. 0 restores asking every turn.
+PAUSE_AFTER_DODGE = int(os.environ.get("PAUSE_AFTER_DODGE", "1"))
 
 # HARD CEILING on a reply, enforced in qualifier._enforce rather than requested in
 # the rulebook. The rulebook has said "two or three lines is usually plenty" since
