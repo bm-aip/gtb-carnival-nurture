@@ -377,10 +377,26 @@ SCENARIOS = [
     {
         "name": "value before price — do not lead with the number",
         "why": ("Owner, 2026-08-19: 'dont push price upfront - talk discover make "
-                "them see the value - then check if budget is within range'."),
+                "them see the value - then check if budget is within range'.\n"
+                "    The buyer's words are the REAL ones from lead 919894724843, not "
+                "the button label. This scenario passed on 'Need More Details' while "
+                "production sent 'Hi! Need more details about republic of nature.' and "
+                "got both starting prices pushed at it -- a different enough string to "
+                "take a different path. Test what buyers actually type."),
+        "turns": [
+            {"say": "Hi! Need more details about republic of nature.",
+             "forbid": [r"\d+(\.\d+)?\s*(cr\b|crore|lakh)", r"Rs\s*\d"],
+             # Leading with price is only half of it -- that reply also asked him
+             # nothing, so we learned nothing about a buyer who had just arrived.
+             "require": [r"\?"]},
+        ],
+    },
+    {
+        "name": "value before price — the button label too",
         "turns": [
             {"say": "Need More Details",
-             "forbid": [r"\d+\s*(cr|crore|lakh)"]},
+             "forbid": [r"\d+(\.\d+)?\s*(cr\b|crore|lakh)", r"Rs\s*\d"],
+             "require": [r"\?"]},
         ],
     },
 ]
