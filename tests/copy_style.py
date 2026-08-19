@@ -30,17 +30,39 @@ import qualifier as q                  # noqa: E402
 r = Results()
 
 # --- 1. gate pacing -----------------------------------------------------------
-r.eq("default is one gate every 2 turns", config.GATE_EVERY_N_TURNS, 2)
+# REWRITTEN 2026-08-19. Pacing is earned, not clocked: the pause is spent on a buyer
+# who just dodged, never on one who is engaging. The old rule gagged the bot for two
+# turns out of three regardless, which is what lost lead 9840168185.
+r.eq("pause after a dodge defaults to 1 turn", config.PAUSE_AFTER_DODGE, 1)
+
 # A new conversation must still ask -- an opener that asks nothing gives the buyer
 # nothing to answer, and the first turn is the one everybody receives.
 r.check("a brand-new conversation may ask", cv.may_ask_gate({"turns_since_gate": 99}))
 r.check("no conversation row at all may ask", cv.may_ask_gate(None))
 r.check("missing counter is treated as eligible", cv.may_ask_gate({}))
-r.check("the turn right after an ask may NOT ask",
-        not cv.may_ask_gate({"turns_since_gate": 0}))
-r.check("one turn later still may not", not cv.may_ask_gate({"turns_since_gate": 1}))
-r.check("two turns later may ask again", cv.may_ask_gate({"turns_since_gate": 2}))
-r.check("long silence may ask", cv.may_ask_gate({"turns_since_gate": 7}))
+
+# ENGAGED BUYER -- they gave us something, so nothing holds the bot back.
+r.check("a buyer who just told us something may be asked again immediately",
+        cv.may_ask_gate({"turns_since_gate": 0, "unreciprocated": 0}))
+r.check("still true several turns on",
+        cv.may_ask_gate({"turns_since_gate": 3, "unreciprocated": 0}))
+
+# DODGING BUYER -- one turn of pure answering, then back at it from a new angle.
+r.check("the turn right after a dodged ask may NOT ask",
+        not cv.may_ask_gate({"turns_since_gate": 0, "unreciprocated": 1}))
+r.check("one turn of usefulness later, it may",
+        cv.may_ask_gate({"turns_since_gate": 1, "unreciprocated": 1}))
+r.check("a persistent dodger is still pursued",
+        cv.may_ask_gate({"turns_since_gate": 1, "unreciprocated": 3}))
+r.check("long silence may ask",
+        cv.may_ask_gate({"turns_since_gate": 7, "unreciprocated": 2}))
+
+# THE REGRESSION ITSELF. Lead 9840168185, turn 3: he had just named a configuration
+# ("send me for villas"), so the bot must be free to ask where he is buying -- the
+# gate that decides site visit against video walkthrough, and the one it never
+# reached. Under the old rule this returned False.
+r.check("lead 9840168185 turn 3 may ask",
+        cv.may_ask_gate({"turns_since_gate": 1, "unreciprocated": 0}))
 
 # --- 2. length ----------------------------------------------------------------
 r.eq("cap defaults to 300", config.MAX_REPLY_CHARS, 300)

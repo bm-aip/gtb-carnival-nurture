@@ -424,6 +424,25 @@ def run_turn(lead, message, history=None, conv=None):
                   f"promise a time. Set action='connect_sales' unless a colleague "
                   f"has already been told about this person.")
 
+    # THEY ASKED THE PRICE WITHOUT SAYING WHICH HOME (owner, 2026-08-19).
+    #
+    # "Pls share cost" is not a question for a colleague -- it is a question missing
+    # one word. Lead 9840168185 sent it, was told someone would come back to him,
+    # and had to ask a second time for a figure we hold. Told in code because the
+    # rulebook says the same thing and the model obeyed it once in two replays.
+    #
+    # It also heads off the price guard: with nothing retrieved to cite, the model
+    # reaches for a figure it half-remembers, _price_problem correctly refuses it,
+    # and the buyer gets an escalation instead of a question. Asking which home is
+    # the answer that needs no source at all.
+    if message and config.asks_price_without_product(message):
+        state += ("\n\nTHEY ASKED THE PRICE WITHOUT SAYING WHICH HOME. Do NOT hand "
+                  "this to a colleague and do NOT quote any figure this turn -- you "
+                  "have nothing retrieved to support one. ASK THEM WHICH: the "
+                  "apartments or the villas, and say you will give them the starting "
+                  "price for it. That is the whole reply. Set "
+                  "gate_asked='configuration' and report the framing you used.")
+
     # THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the
     # same name, so the model reads it as an ANSWER. It is a question.
     if message and config.ASKS_LOCATION.match(message.strip()):
@@ -816,12 +835,11 @@ def _ladder(conv):
     # judge it. Left to the prompt it asked something in 81% of turns.
     if not convmod.may_ask_gate(conv):
         lines.append(
-            "\nDO NOT ASK A QUALIFYING QUESTION THIS TURN. You asked one recently "
-            "and it is the buyer's turn to lead. Answer what they asked, warmly and "
-            "briefly, and stop there. Do not append a fact they did not ask for and "
-            "do not push a visit. Set gate_asked=null.\n"
-            "Ending a turn without a question is not a failure -- it is how a "
-            "conversation breathes, and those turns get answered more often.")
+            "\nDO NOT ASK A QUALIFYING QUESTION THIS TURN. They stepped around your "
+            "last one, so give them a turn of pure usefulness before you come back to "
+            "it -- you WILL come back to it, with a different question, next turn. "
+            "Answer what they asked, warmly and well. Set gate_asked=null.\n"
+            "Earn the next question by being worth talking to on this one.")
         return "\n".join(lines)
 
     remaining = convmod.unused_framings(conv, gate)

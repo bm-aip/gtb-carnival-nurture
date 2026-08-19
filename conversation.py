@@ -23,6 +23,18 @@ import db
 
 GATES = ("purpose", "location", "configuration", "budget")
 
+# WHAT A COLLEAGUE CANNOT DO WITHOUT. All three are still required before anyone is
+# booked -- see clears_the_bar, unchanged. Owner, 2026-08-19, asked what should
+# happen to a buyer who names a budget but never says apartment or villa: "keep it
+# hard - no config, no visit".
+REQUIRED_GATES = ("location", "configuration", "budget")
+
+# Purpose is not one of them, and that is the point (owner, 2026-08-19): "purpose
+# question is mostly for us to give the right benefits - the benefits for investment
+# product and benefits for weekend home isnt the same - so purpose is important -
+# only from that angle". It selects the PITCH, not who is worth selling to.
+SOFT_GATE = "purpose"
+
 
 def get_or_create(lead):
     row = db.q("SELECT * FROM conversations WHERE lead_id=%s", (lead["id"],), one=True)
@@ -37,42 +49,75 @@ def get_or_create(lead):
 def may_ask_gate(conv):
     """Is this turn allowed to ask a qualifying question?
 
-    THE PACING RULE, decided in code rather than asked for in prose. Owner,
-    2026-08-17: ask a gate only every second or third turn.
+    PACING IS EARNED, NOT CLOCKED (owner, 2026-08-19: "be fucking goal focussed").
 
-    Measured the same day across 623 turns: the bot carried a question in 81% of
-    them, and turns with a question were replied to at 47.9% against 70.6% for turns
-    with none. The reference conversation the owner supplied -- a competitor's bot
-    that sustained 26 exchanges -- carried a question in 30% of its messages and
-    qualified nobody, so this is a trade, not a free win: fewer asks means slower
-    qualification in exchange for a conversation that survives long enough to have
-    one.
+    This was a blanket gag -- ask, then stay silent for two turns whatever the buyer
+    did. It cost lead 9840168185 an entire conversation: he asked about price twice
+    while the bot was under orders to ask him nothing, and reached a salesperson
+    unqualified. A buyer engaging with us is the moment to move, not the moment to
+    wait.
 
-    The confound is worth stating: a turn with no question is often the bot ANSWERING
-    something, so the buyer was already engaged and the causation may run backwards.
-    Three independent cuts pointed the same way, which is suggestive, not proof. This
-    is reversible in one config value if the reply rate does not move.
+    So the pause is spent only where it was earned:
+
+      * The buyer told us something this turn -- ANY new information, not necessarily
+        what we asked for. `unreciprocated` is zero, they are talking, keep going.
+      * Our last ask got nothing back. Give them PAUSE_AFTER_DODGE turns of pure
+        answering before coming at it again -- and thanks to next_gate it will be a
+        different question, in a framing they have not heard.
+
+    The 2026-08-17 measurement behind the old rule (a question dropped the reply rate
+    to 47.9% from 70.6%) is not repudiated. It was read too broadly: the bot asked
+    the same gate bluntly and had nowhere to go when ignored. Silence is not the
+    remedy for a bad ask -- a better ask is. Still reversible in one config value.
 
     The FIRST turn always asks -- `turns_since_gate` defaults to 99 -- because an
     opener that asks nothing gives the buyer nothing to answer.
     """
     if not conv:
         return True
-    return (conv.get("turns_since_gate") if conv.get("turns_since_gate") is not None
-            else 99) >= config.GATE_EVERY_N_TURNS
+    since = (conv.get("turns_since_gate")
+             if conv.get("turns_since_gate") is not None else 99)
+    # They are giving us something. Never sit on our hands through that.
+    if not (conv.get("unreciprocated") or 0):
+        return True
+    return since >= config.PAUSE_AFTER_DODGE
 
 
 def next_gate(conv):
-    """The next thing to ask, in the locked order.
+    """The next thing to ask. Nothing an unanswered gate can block.
 
-    Purpose → Location → Configuration → Budget. That is the INVERSE of gate
-    hardness on purpose: budget is the sharpest filter but a brutal opening line,
-    so it is earned by having been useful first (design §2).
+    THE LOCKED ORDER WAS THE BUG (owner, 2026-08-19: "it is a damn conversation").
+    This walked GATES in sequence and returned the first one unanswered, so a buyer
+    who talked over the FIRST question could never be asked the other three. Lead
+    9840168185 is why this changed: he ignored purpose, asked about price twice, and
+    the next gate stayed `purpose` for the whole conversation. Location, size and
+    budget were unreachable behind a soft question he had already declined to
+    answer, and he reached a salesperson with nothing known about him.
+
+    So purpose is offered FIRST but never blocks: once it has been asked, an
+    unanswered purpose is stepped over. It comes back round only when the three
+    required gates are in, where it costs nothing and still sharpens the pitch.
+
+    Budget still comes last of the required three -- the sharpest filter and a
+    brutal opening line, earned by having been useful first (design §2).
     """
     checklist = conv["checklist"] or {}
-    for g in GATES:
+    asked = conv.get("asked") or {}
+
+    # Purpose leads, because it decides which benefits the whole conversation
+    # pitches -- but only until it has been put once. After that it waits.
+    if not checklist.get(SOFT_GATE) and not asked.get(SOFT_GATE):
+        return SOFT_GATE
+
+    for g in REQUIRED_GATES:
         if not checklist.get(g):
             return g
+
+    # Everything a colleague needs is in. If purpose is still missing, now is when
+    # asking it is free -- and it is worth having: sales pitches an investment buyer
+    # differently from a weekend-home buyer.
+    if not checklist.get(SOFT_GATE) and unused_framings(conv, SOFT_GATE):
+        return SOFT_GATE
     return None
 
 
@@ -180,10 +225,11 @@ def record_turn(conv, decision, gate_asked, framing_index):
     flag_now = (unrec >= config.UNRECIPROCATED_LIMIT
                 and not conv.get("human_flagged_at"))
 
-    # Pacing. Reset the moment we ask, count up on every turn that does not, so the
-    # next ask is at least GATE_EVERY_N_TURNS turns later. Counted on TURNS TAKEN
-    # rather than time: the rule is about how often the buyer is questioned, and a
-    # conversation that pauses overnight has not earned another ask by waiting.
+    # Pacing. Reset the moment we ask, count up on every turn that does not. Read
+    # with `unreciprocated` by may_ask_gate, which only spends the pause on a buyer
+    # who dodged. Counted on TURNS TAKEN rather than time: the rule is about how
+    # often the buyer is questioned, and a conversation that pauses overnight has
+    # not earned another ask by waiting.
     since = 0 if gate_asked else (conv.get("turns_since_gate") or 0) + 1
 
     db.x("""UPDATE conversations
