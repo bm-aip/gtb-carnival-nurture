@@ -611,6 +611,46 @@ ASKS_LOCATION = re.compile(
     r"^\W*(location|address|where|where is (it|this|the (site|project))|"
     r"how far|which (area|place|part)|exact location|site location)\W*$", re.I)
 
+# --- The map (owner's own link, 2026-08-19) -----------------------------------
+#
+# CODE ATTACHES THIS. THE MODEL MAY NEVER TYPE A URL -- see qualifier rule 4b and
+# the "Never say these" list. Lead 1413 received a correct maps link that the model
+# had copied out of a voice sample; correct that time, and one keystroke from a link
+# that does not resolve. A buyer who taps a dead link stops trusting the message.
+#
+# ONE VENUE ONLY. The Experience Centre at Express Avenue is retired (owner,
+# 2026-08-11) and rule 0 strips any mention, so there is no second pin to confuse
+# this with and no way to send someone 25 km wrong.
+SITE_MAP_URL = os.environ.get(
+    "SITE_MAP_URL", "https://maps.app.goo.gl/RpzjkiwQ4j8iAEAh9")
+SITE_MAP_LINE = f"Here is the exact location: {SITE_MAP_URL}"
+
+# --- They have put you off (2026-08-19) ---------------------------------------
+#
+# Lead 1413 was asked for a day for his site visit and said "Will tell you later".
+# The bot replied "Sure, whenever you're ready" -- correct -- and then volunteered
+# the possession dates for both phases, which he had not asked about. The rulebook
+# has said "do not add a fact they did not ask about" since it was written; this
+# makes it true for the one moment where the temptation is strongest, because a
+# deferral leaves the model with nothing to say and something to fill.
+DEFERS = re.compile(
+    r"\b(later|not (now|yet|sure yet)|another time|some other time|"
+    r"will (tell|let you know|get back|revert|confirm)|"
+    r"(i'?ll|i will) (tell|let you know|get back|revert|check|confirm)|"
+    r"give me (a|some) time|need (to )?think|think(ing)? about it|"
+    r"after (some|a few) days?)\b", re.I)
+
+# A buyer asking how to get there, in the middle of a longer message -- ASKS_LOCATION
+# only matches when the whole message is the question.
+ASKS_DIRECTIONS = re.compile(
+    r"exact location|share (the )?location|send (the )?location|"
+    r"google maps?|maps? link|pin\b|how do i (reach|get)|directions|"
+    r"where exactly", re.I)
+
+# Any link at all. Used to strip URLs the model produced before the map is attached,
+# so the one below is the only URL that can reach a buyer.
+ANY_URL = re.compile(r"https?://\S+|\bwww\.\S+", re.I)
+
 # --- "Pls share cost" (owner, 2026-08-19) -------------------------------------
 #
 # A price question with no product named. Lead 9840168185 sent exactly this and was
@@ -1000,6 +1040,17 @@ RETRIEVE_OVERFETCH = int(os.environ.get("RETRIEVE_OVERFETCH", "40"))
 RETRY_MAX_RECIPIENT = int(os.environ.get("RETRY_MAX_RECIPIENT", "3"))
 RETRY_MAX_TRANSIENT = int(os.environ.get("RETRY_MAX_TRANSIENT", "6"))
 RETRY_WINDOW_DAYS = int(os.environ.get("RETRY_WINDOW_DAYS", "30"))
+
+# --- Staff cards: retry the template before the fallback (2026-08-19) ---------
+#
+# One `Read timed out (read timeout=30)` lost the card telling sales that a buyer
+# had asked to speak to them. A timeout is the ABSENCE of a verdict -- it says
+# nothing about whether the template is approved or the number is good, and those
+# are the only reasons the free-text fallback exists. Falling through to it on a
+# timeout spends the reliable route and lands on the one that only reaches someone
+# who messaged us in the last 24h, which a salesperson never has.
+STAFF_CARD_ATTEMPTS = int(os.environ.get("STAFF_CARD_ATTEMPTS", "3"))
+STAFF_CARD_RETRY_SECONDS = float(os.environ.get("STAFF_CARD_RETRY_SECONDS", "3"))
 
 # --- Job-queue backoff when the PROVIDER is busy (2026-08-19) ------------------
 #

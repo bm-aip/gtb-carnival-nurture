@@ -65,9 +65,15 @@ LIBRARY = {
     "apartment": ("ron_render_apartment_courtyard.jpg",
                   "The apartment courtyards. A render - they are still being built."),
 
+    # --- a visit is an abstraction until they can see the place they would be
+    #     standing in. Fires when a day actually goes in the diary, never on the
+    #     invitation itself -- an image attached to every "shall I set up a visit?"
+    #     would be the padding the rulebook forbids.
+    "visit": ("ron_photo_villa_exterior.jpg",
+              "This is where you will be walking around."),
+
     # --- held back deliberately. Available to send by hand from /admin/test-media,
     #     not wired to any trigger yet.
-    "villa_exterior": ("ron_photo_villa_exterior.jpg", "Evening, by the garden."),
     "balcony_couple": ("ron_photo_balcony_couple.jpg", "One of the balconies."),
     "balcony_coffee": ("ron_photo_balcony_coffee.jpg", "Coffee outside."),
     "terrace_cat": ("ron_photo_terrace_cat.jpg", "A quiet corner."),
@@ -87,7 +93,7 @@ SLUGS = set(LIBRARY)
 
 # What actually fires today. Everything else in LIBRARY is reachable only by hand.
 WIRED = ("hero", "purpose_weekend", "purpose_primary", "purpose_investment",
-         "villa", "apartment")
+         "villa", "apartment", "visit")
 
 
 def path_for(slug):
@@ -202,6 +208,12 @@ def pick(lead_id, before, after):
         candidates.append(_purpose_slug(after["purpose"]))
     if not before.get("configuration") and after.get("configuration"):
         candidates.append(_config_slug(after["configuration"]))
+    # A day is in the diary. Only for the site -- someone booked a video walkthrough
+    # is not going to be standing anywhere, and a photo of a garden path would be
+    # answering a question they did not ask.
+    if not before.get("visit_day") and after.get("visit_day") \
+            and after.get("visit_venue") in (None, "", "site"):
+        candidates.append("visit")
 
     sent = already_sent(lead_id)
     for slug in candidates:

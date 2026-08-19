@@ -70,7 +70,9 @@ def send_template(phone, template_name, params=None, broadcast=None):
             f"{config.WATI_BASE}/api/v1/sendTemplateMessage",
             headers={**_auth_headers(), "Content-Type": "application/json"},
             params={"whatsappNumber": phone},
-            json=payload, timeout=30)
+            # 60, not 30: a staff card was lost on 2026-08-19 to a read timeout
+            # that was only Wati being slow. Nothing here is urgent to the second.
+            json=payload, timeout=60)
         ok = r.status_code in (200, 201) and _result_ok(r)
         # 1000, not 300: the provider message id lives in this body and
         # extract_msg_id() needs it intact to join delivery callbacks back to the
@@ -88,7 +90,7 @@ def send_text(phone, body):
         r = requests.post(
             f"{config.WATI_BASE}/api/v1/sendSessionMessage/{phone}",
             headers=_auth_headers(),
-            params={"messageText": body}, timeout=30)
+            params={"messageText": body}, timeout=60)
         ok = r.status_code in (200, 201) and _result_ok(r)
         # 1000, not 300: the provider message id lives in this body and
         # extract_msg_id() needs it intact to join delivery callbacks back to the

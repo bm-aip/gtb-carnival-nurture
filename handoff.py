@@ -29,6 +29,7 @@ The card content is identical either way — only the delivery channel changed.
 Flagged for the owner rather than silently substituted.
 """
 import logging
+import time
 
 import config
 import conversation
@@ -202,9 +203,30 @@ def _notify(phones, slots, kind, lead_id=None):
         pseudo = {"id": None, "phone": phone, "project": None, "send_attempts": 0}
         # msg_type is NOT prefixed 'knock' -- a card to our own team must never
         # consume the buyer-facing messaging tier or count toward anyone's fatigue.
-        ok = sequencer._send(pseudo, f"handoff_{kind}", body=body,
-                             template=config.STAFF_TEMPLATE, params=slots,
-                             log_lead_id=lead_id)
+        # RETRY THE TEMPLATE BEFORE REACHING FOR THE FALLBACK (2026-08-19).
+        #
+        # On 2026-08-19 a card for a buyer who had asked to speak to sales was lost
+        # to this: `Read timed out (read timeout=30)`. Wati was slow, once. The
+        # template got no second attempt and fell straight through to the free-text
+        # path -- which is the path that only reaches someone who messaged us in the
+        # last 24 hours, and salespeople never do. So one slow response spent the
+        # reliable route and landed on the unreliable one.
+        #
+        # A timeout is not a verdict; it is the absence of one. It says nothing
+        # about whether the template is approved or the number is good, and those
+        # are the only reasons the fallback exists. Same lesson as the 529 in
+        # jobs.retry_plan: a transient failure treated as final.
+        ok = False
+        for attempt in range(1, config.STAFF_CARD_ATTEMPTS + 1):
+            ok = sequencer._send(pseudo, f"handoff_{kind}", body=body,
+                                 template=config.STAFF_TEMPLATE, params=slots,
+                                 log_lead_id=lead_id)
+            if ok:
+                break
+            if attempt < config.STAFF_CARD_ATTEMPTS:
+                log.warning("%s card to %s: template attempt %s failed, retrying",
+                            kind, phone, attempt)
+                time.sleep(config.STAFF_CARD_RETRY_SECONDS)
         if not ok:
             log.warning("%s card to %s: template send failed, trying session text",
                         kind, phone)
@@ -412,12 +434,36 @@ def notify_human_flagged(lead, conv):
     message_log still compares against itself.
     """
     c = conv["checklist"] or {}
+
+    # SAY WHICH QUESTION, NOT JUST HOW MANY TIMES (2026-08-19).
+    #
+    # This read "Asked 3 times with no answer. The bot is still replying to their
+    # questions." Lead 1413 shows how badly that misleads: he had given his purpose,
+    # his area and the home he wanted, said the price was fine and agreed to a call.
+    # The only thing he had not given was a budget figure. A salesperson triaging on
+    # that card would deprioritise one of the best leads of the week.
+    #
+    # The counter is per-conversation, not per-gate, so the missing gate is derived
+    # from the checklist -- which is the honest thing to report anyway: what we know
+    # and what we do not.
+    missing = [g for g in conversation.REQUIRED_GATES if not c.get(g)]
+    have = [g for g in conversation.GATES if c.get(g)]
+    if have and missing:
+        detail = (f"Has given {', '.join(have)}. Still no {', '.join(missing)} "
+                  f"after {conv['unreciprocated']} asks. Engaged and still talking "
+                  f"-- the bot keeps answering.")
+    elif missing:
+        detail = (f"No {', '.join(missing)} yet after {conv['unreciprocated']} asks. "
+                  f"The bot is still replying to their questions.")
+    else:
+        detail = (f"Asked {conv['unreciprocated']} times with no answer. The bot is "
+                  f"still replying to their questions.")
+
     slots = [
         _slot(f"No answers yet — {lead.get('project')}"),
         _slot(lead.get("name"), "name not given"),
         _slot(lead.get("phone")),
         _slot(_facts(c)),
-        _slot(f"Asked {conv['unreciprocated']} times with no answer. The bot is "
-              f"still replying to their questions."),
+        _slot(detail),
     ]
     _notify(config.STAFF_PHONES, slots, "stalling", lead_id=lead["id"])

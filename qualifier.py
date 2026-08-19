@@ -443,6 +443,18 @@ def run_turn(lead, message, history=None, conv=None):
                   "price for it. That is the whole reply. Set "
                   "gate_asked='configuration' and report the framing you used.")
 
+    # THEY HAVE PUT YOU OFF. A deferral leaves the model with nothing to say and
+    # something to fill, which is where padding comes from. Lead 1413 said "Will
+    # tell you later" about his visit day and was given the possession dates for
+    # both phases, unasked. Decided in code for the same reason as the rest of this
+    # block: "do not pad" has been in the rulebook since it was written.
+    if message and config.DEFERS.search(message) and not config.WANTS_CALL.search(message):
+        state += ("\n\nTHEY HAVE PUT YOU OFF FOR NOW. Say one warm line -- that is "
+                  "fine, whenever suits them -- and STOP. Do NOT add a fact they "
+                  "did not ask for, do NOT restate anything, do NOT ask another "
+                  "question, and do NOT push the visit again. Leaving them alone is "
+                  "the reply. Set gate_asked=null.")
+
     # THEY ASKED WHERE IT IS. A bare "Location" collides with our own gate of the
     # same name, so the model reads it as an ANSWER. It is a question.
     if message and config.ASKS_LOCATION.match(message.strip()):
@@ -655,6 +667,23 @@ def _already_quoted(history):
                   "briefly if you must ('as I mentioned') and otherwise move on. "
                   "Quote a price again ONLY if they ask again, or for a "
                   "configuration you have not priced yet."]
+        # A YES TO THE FIT-CHECK IS THE BUDGET (2026-08-19).
+        #
+        # The rulebook now says to quote a starting figure and then ask, plainly,
+        # whether it sits in the range they had in mind -- far better salesmanship
+        # than "what is your budget?". But budget is stored as a NUMBER, so lead
+        # 1413's "Yes it sound fine" landed nowhere: the hardest fact to get out of
+        # a buyer, given freely, recorded as another dodge, and it tripped the
+        # third-strike alarm on a man who had answered everything else.
+        #
+        # The figure is one he has now confirmed he can reach, so it IS his budget
+        # as far as the affordability sum is concerned. Told explicitly, with the
+        # numbers, because the model must not have to infer which price it meant.
+        out += ["If they confirm that price works for them -- 'yes', 'that's fine', "
+                "'that works', 'sounds ok' -- that IS their budget. Set "
+                f"budget_inr to the figure they just agreed to, in rupees "
+                f"({', '.join('Rs ' + s + ' Cr' for s in said)}). Do NOT record it "
+                "if they said the price is too high, or said nothing about it."]
 
     # THE SAME DEFECT, ON FACTS RATHER THAN PRICES. Owner, 2026-08-07: "the 32 acre
     # thing is over emphasised - in some chats I see upto 6 mentions of the same
@@ -668,10 +697,20 @@ def _already_quoted(history):
     #
     # Counted rather than trusted, exactly like the price rule above: telling the
     # model what it has already said beats asking it to remember.
-    repeated = [f"{n} ({facts.count(n)}x)" for n in dict.fromkeys(facts)
-                if facts.count(n) >= 2]
+    # ONCE IS ENOUGH -- the threshold used to be >= 2 (2026-08-19).
+    #
+    # That warned only about a fact ALREADY said twice, so the second telling was
+    # never prevented; the guard could only ever stop the third. Lead 1413 shows the
+    # cost: the opener gave 32 acres, Kovalam Junction, the clubhouse size and the
+    # amenity list, and the very next message gave all four again, unprompted. By
+    # the time this fired, the buyer had heard it twice, which is the repetition the
+    # owner was complaining about in the first place.
+    # The count is kept where there IS one to report -- six times is a different
+    # problem from twice, and the model should feel the difference.
+    repeated = [n if facts.count(n) == 1 else f"{n} ({facts.count(n)}x)"
+                for n in dict.fromkeys(facts)]
     if repeated:
-        out += ["", "ALREADY TOLD this buyer, more than once: " + ", ".join(repeated)
+        out += ["", "ALREADY TOLD this buyer: " + ", ".join(repeated)
                 + ". They have heard it. Do NOT say it again in this reply -- find "
                   "something they do not know yet, or just answer the question "
                   "without the scene-setting. Repeating the same headline every "
@@ -687,6 +726,12 @@ _SIGNATURE_FACTS = (
     ("the clubhouse size",  re.compile(r"1,?00,?000\+?\s*(sq\s*ft|sqft)", re.I)),
     ("near Kovalam Junction", re.compile(r"kovalam\s+junction", re.I)),
     ("the man-made beach/lagoon", re.compile(r"man[\s-]*made\s+beach|lagoon", re.I)),
+    # Added 2026-08-19: lead 1413 got the whole amenity list verbatim in two
+    # consecutive messages. It travels as one block, so it is one fact.
+    ("the clubhouse amenities",
+     re.compile(r"(pool|gym).{0,40}(mini\s*theatre|theatre|spa)", re.I | re.S)),
+    ("the ECR distances",
+     re.compile(r"(covelong|mahabalipuram|\d+\s*kms?\s+from)", re.I)),
 )
 
 
@@ -995,13 +1040,22 @@ def _dedash(reply):
 # A buyer message that carries nothing: a bare acknowledgement, not an answer.
 _EMPTY_REPLY = re.compile(
     r"^\s*(y(es|eah|ep|a)?|ok(ay)?|k|sure|fine|hmm+|hm|nice|got it|alright|"
-    r"right|good|👍|ok\.)\s*[.!]?\s*$", re.I)
+    r"right|good|👍|ok\.|"
+    # A warm reaction is still no information -- and it is exactly the message the
+    # model most wants to congratulate. Lead 1413 sent "This looks good..." after
+    # the villa photo and got "Glad to hear that." back (2026-08-19).
+    r"(this |that |it )?(looks?|sounds?) (good|nice|great|lovely|interesting)|"
+    r"cool|wow|super|beautiful|"
+    r"very (nice|good)|thank ?s?( you)?)\s*[.!…]*\s*$", re.I)
 
 # How the model opens when it thinks it heard something useful.
 _AFFIRMATION = re.compile(
     r"^\s*(great|perfect|good to know|excellent|wonderful|lovely|"
     r"that'?s (great|good|helpful)|noted|understood|good choice|"
-    r"thanks for (that|sharing))\b[\s,.!:—-]*", re.I)
+    # Added 2026-08-19: the same move in different words, which is how this list
+    # keeps being escaped. "Glad to hear that." on a reply that told us nothing.
+    r"(so |very )?(glad|happy|pleased) to (hear|know)( that| it)?|"
+    r"thanks for (that|sharing|letting me know))\b[\s,.!:—-]*", re.I)
 
 
 def _strip_empty_affirmation(reply, message):
@@ -1391,6 +1445,30 @@ def _enforce(d, chunks, lead, message=None, history=None):
             return _forced_escalation("tried to book a Tuesday (team's day off)", chunks)
         if day.startswith("mon") and "after" not in (d.get("visit_time") or "").lower():
             return _forced_escalation("tried to book Monday morning (team meeting)", chunks)
+
+    # 4b. THE MAP. Code attaches it; the model is forbidden to type a URL.
+    #
+    #     Lead 1413 got a correct maps link -- typed by the model, copied out of a
+    #     voice sample in the rulebook. It was right that time. A model willing to
+    #     type a URL will eventually type one that does not resolve, and a buyer who
+    #     taps a dead link stops trusting the rest of the message. Exactly the
+    #     argument for never letting it invent a price.
+    #
+    #     Any link the model produced is stripped first, so this is the only route a
+    #     URL can reach a buyer. Sent when they ask where we are, or when a visit is
+    #     booked -- directions belong with the booking, not with a callback a day
+    #     later. The venue is no longer ambiguous: the Experience Centre is retired
+    #     and rule 0 above strips it, so there is one place to send anyone.
+    stripped = config.ANY_URL.sub("", d["reply"]).strip()
+    if stripped != d["reply"]:
+        d["reply"] = re.sub(r"[ \t]{2,}", " ", stripped)
+        d["internal_note"] = ((d.get("internal_note") or "")
+                              + " | stripped a URL the model typed")
+    wants_map = bool(message and config.ASKS_LOCATION.match(message.strip())) \
+        or bool(message and config.ASKS_DIRECTIONS.search(message)) \
+        or bool(day and d.get("visit_venue") in (None, "", "site"))
+    if wants_map and config.SITE_MAP_URL and config.SITE_MAP_URL not in d["reply"]:
+        d["reply"] = d["reply"].rstrip() + f"\n\n{config.SITE_MAP_LINE}"
 
     # 5. BUDGET GATE — arithmetic, not judgement. The model reports the number it
     #    heard; Python decides. Only the floor rejects: someone above the ceiling
