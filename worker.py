@@ -34,6 +34,7 @@ import conversation
 import db
 import handoff
 import jobs
+import media
 import qualifier
 import sequencer
 import wati
@@ -44,6 +45,31 @@ POLL_SECONDS = float(os.environ.get("WORKER_POLL_SECONDS", "2"))
 RECLAIM_EVERY = 60  # seconds between stale-job sweeps
 
 _stop = threading.Event()
+
+
+def _send_media(lead, before, conv):
+    """One image, if this turn earned one. Never at the cost of the reply.
+
+    AFTER the text, always. The buyer's answer is the thing they are waiting for and
+    it must never queue behind a 6MB upload, nor be lost to one failing. Every error
+    here is swallowed for the same reason: an image is a nicety, a reply is the job.
+    The picture is chosen in code from the checklist -- see media.pick -- because an
+    image is a claim with no words for a guard to read.
+    """
+    try:
+        slug = media.pick(lead["id"], before, (conv or {}).get("checklist"))
+        if not slug:
+            return
+        ok, detail = wati.send_file(lead["phone"], media.path_for(slug),
+                                    media.caption_for(slug))
+        media.record(lead["id"], slug, ok, detail)
+        if not ok:
+            log.warning("lead %s: image %s did not send: %s",
+                        lead["id"], slug, str(detail)[:200])
+    except Exception:
+        # Never let a picture cost a buyer their answer -- which has already been
+        # delivered by the time we get here.
+        log.exception("lead %s: media step failed", (lead or {}).get("id"))
 
 
 def handle(job):
@@ -227,9 +253,12 @@ def _handle_inbound(job):
         log.warning("lead %s: reply not delivered; state unchanged", lead["id"])
         return
 
+    before = dict((conv or {}).get("checklist") or {})
     conv = conversation.record_turn(conv, decision,
                                     decision.get("gate_asked"),
                                     decision.get("framing_used"))
+
+    _send_media(lead, before, conv)
 
     # Three asks, no answers. A person should look -- the bot keeps answering.
     if conv.get("_newly_flagged"):

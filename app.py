@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-19-value-before-price"
+CODE_VERSION = "2026-08-19-images-in-replies"
 import db
 import selldo
 import meta
@@ -28,6 +28,7 @@ import optout
 import fatigue
 import failures
 import kb
+import media
 import embed
 import jobs
 import worker
@@ -1074,6 +1075,39 @@ def admin_test_send():
     # it, but the API response in `detail` still confirms token/URL wiring.
     ok, detail = wati.send_text(phone, j.get("body", "Test from GTB Carnival system."))
     return jsonify({"ok": ok, "detail": detail})
+
+
+@app.route("/admin/media", methods=["GET"])
+@auth
+def admin_media_list():
+    """What the bot can send, and what it weighs. Read-only.
+
+    Names carry their own provenance: `ron_photo_*` is a photograph, `ron_render_*`
+    is CGI. Nothing may caption a render as the site as it stands today.
+    """
+    return jsonify(media.stats())
+
+
+@app.route("/admin/test-media", methods=["POST"])
+@auth
+def admin_test_media():
+    """Send ONE image to a number, to see it land before any trigger is wired.
+
+    Through the same send gate as every other outbound message -- an admin
+    convenience is not a reason to skip opt-out and fatigue checks.
+    """
+    j = request.get_json() or {}
+    phone = meta.normalize_phone(j.get("phone", ""))
+    slug = j.get("slug") or ""
+    path = media.path_for(slug)
+    if not path:
+        return jsonify({"ok": False, "detail": f"unknown slug:{slug}",
+                        "available": sorted(media.SLUGS)}), 404
+    allowed, reason = sendgate.check(phone, "test", project=j.get("project"))
+    if not allowed:
+        return jsonify({"ok": False, "detail": f"blocked:{reason}"}), 409
+    ok, detail = wati.send_file(phone, path, j.get("caption"))
+    return jsonify({"ok": ok, "slug": slug, "detail": detail})
 
 
 # Serializes the scheduled tick against a manual Poll-now pass so bulk sends
