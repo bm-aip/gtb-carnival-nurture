@@ -1023,9 +1023,18 @@ def test_the_same_fact_is_not_repeated_every_message():
     def hist(*replies):
         return [{"role": "assistant", "content": r} for r in replies]
 
-    once = q._already_quoted(hist("It's a 32-acre community on ECR."))
-    R.check("one mention is not nagged about",
-            not any("ALREADY TOLD" in s for s in once), once)
+    # REVERSED 2026-08-19. This used to assert that ONE mention is not reported
+    # back, on the reasoning that saying a thing once is fine. It is -- but the
+    # warning is not about the mention that happened, it is about the next one, and
+    # withholding it until a fact had been said TWICE meant the second telling could
+    # never be prevented. Lead 1413: the opener gave 32 acres, Kovalam Junction, the
+    # clubhouse size and the amenity list, and the very next message gave all four
+    # again. By the time the old threshold fired, the buyer had already heard it
+    # twice, which is the repetition the owner was complaining about.
+    once = " ".join(q._already_quoted(hist("It's a 32-acre community on ECR.")))
+    R.check("one mention is already enough to warn", "ALREADY TOLD" in once, once)
+    R.check("...and is reported without a count, having happened once",
+            "(1x)" not in once, once)
 
     twice = q._already_quoted(hist("It's a 32-acre community on ECR.",
                                    "Only a handful of homes across the 32 acres."))

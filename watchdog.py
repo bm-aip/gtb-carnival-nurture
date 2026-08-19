@@ -140,7 +140,7 @@ def _check_undelivered_cards():
     eating them. This is the check that tells us if that stopped being true.
     """
     wm = _int_setting(_WM_CARDS)
-    rows = db.q("""SELECT id, msg_type, detail
+    rows = db.q("""SELECT id, msg_type, lead_id, detail
                    FROM message_log
                    WHERE direction='out' AND msg_type LIKE 'handoff%%'
                      AND ok IS NOT TRUE AND id > %s
@@ -150,9 +150,22 @@ def _check_undelivered_cards():
     if _muted("cards"):
         return f"{len(rows)} undelivered staff cards (muted)"
 
+    # COUNT CARDS, NOT LOG ROWS (2026-08-19).
+    #
+    # One card writes two rows when it retries -- the template attempt and the
+    # free-text fallback, the second with a `_text` suffix. On 2026-08-19 that
+    # reported "2 card(s) did not reach anyone" for ONE card to one recipient, while
+    # the other recipient had received it. An alert that doubles the damage is read
+    # at the exact moment someone is deciding how alarmed to be.
+    # `lead_id` here is WHO THE CARD IS ABOUT -- sequencer stores `log_lead_id`
+    # in that column, because the recipient is a salesperson with no lead row.
+    cards = {(r.get("lead_id"), (r.get("msg_type") or "").replace("_text", ""))
+             for r in rows}
+    n = len(cards)
+
     ok = _alert("cards",
-                f"HANDOFF FAILED - {len(rows)} card(s) did not reach anyone",
-                f"{len(rows)} staff card(s) were rejected. Latest: "
+                f"HANDOFF FAILED - {n} card(s) did not reach anyone",
+                f"{n} staff card(s) were rejected after retrying. Latest: "
                 f"{_clean(rows[-1].get('detail'))[:150]}",
                 "A buyer asked for a human and nobody was told. Check the Wati "
                 "Team Inbox for these leads.")

@@ -127,10 +127,32 @@ r.check("and Kovalam Junction is named", "Kovalam" in out["reply"],
 r.check("and never Vadanemmeli", "Vadanemmeli" not in out["reply"],
         detail=out["reply"])
 
-# A reply that already gives the location is left alone.
+# A reply that already gives the location keeps its own words -- and now carries the
+# map, which CODE attaches (2026-08-19). Lead 1413 received a correct maps link that
+# the model had typed itself, copied out of a voice sample; correct that time, and
+# one keystroke from a link that does not resolve.
 told = "We're on ECR, near Kovalam Junction."
 out = enforced(told, "Where is it")
-r.eq("an answered location question is untouched", out["reply"], told)
+r.check("an answered location question keeps its wording",
+        out["reply"].startswith(told), detail=out["reply"])
+r.check("...and the map is attached to it",
+        config.SITE_MAP_URL in out["reply"], detail=out["reply"])
+r.check("...exactly once", out["reply"].count(config.SITE_MAP_URL) == 1,
+        detail=out["reply"])
+
+# THE MODEL MAY NOT TYPE A URL. Whatever it produces is stripped, so the configured
+# link is the only one that can reach a buyer.
+out = enforced("We're on ECR. See https://maps.example.com/wrong-pin for the map.",
+               "Where is it")
+r.check("a URL the model typed is stripped",
+        "maps.example.com" not in out["reply"], detail=out["reply"])
+r.check("...and replaced with the real one",
+        config.SITE_MAP_URL in out["reply"], detail=out["reply"])
+
+# No map where none was wanted -- it would be the padding the rulebook forbids.
+out = enforced("The 3 bed villas are 2552 sqft.", "how big is the 3 bed")
+r.check("no map on a question that did not ask for one",
+        config.SITE_MAP_URL not in out["reply"], detail=out["reply"])
 
 # A bare location question must NOT be recorded as their answer to the gate --
 # that is the collision that caused the failure in the first place.

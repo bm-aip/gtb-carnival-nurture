@@ -112,6 +112,38 @@ def test_failed_jobs_alert():
     R.eq("the card says how to answer them", "replay" in card.lower(), True)
 
 
+def test_undelivered_cards_count_cards_not_rows():
+    """One card that retries writes two rows. 2026-08-19 that reported "2 card(s)
+    did not reach anyone" for ONE card to one recipient, while the other recipient
+    had received it. An alert that doubles the damage is read at the exact moment
+    someone is deciding how alarmed to be."""
+    sent = []
+    fake = FakeDB(rows={"FROM message_log": [
+        {"id": 3667, "msg_type": "handoff_wants_sales", "lead_id": 1413,
+         "detail": "Read timed out. (read timeout=30)"},
+        {"id": 3668, "msg_type": "handoff_wants_sales_text", "lead_id": 1413,
+         "detail": '{"result":false,"message":"Ticket has been expired."}'},
+    ]})
+    _patch(fake, sent)
+    w._check_undelivered_cards()
+    R.eq("one card raises one alert", len(sent), 1)
+    card = " ".join(sent[0]["slots"])
+    R.eq("and it says ONE card, not two", "1 card(s)" in card, True)
+    R.eq("...not the row count", "2 card(s)" in card, False)
+
+
+def test_undelivered_cards_two_real_cards_still_count_two():
+    sent = []
+    fake = FakeDB(rows={"FROM message_log": [
+        {"id": 10, "msg_type": "handoff_escalation", "lead_id": 1, "detail": "x"},
+        {"id": 11, "msg_type": "handoff_escalation", "lead_id": 2, "detail": "y"},
+    ]})
+    _patch(fake, sent)
+    w._check_undelivered_cards()
+    R.eq("two different leads are two cards",
+         "2 card(s)" in " ".join(sent[0]["slots"]), True)
+
+
 def test_failed_jobs_watermark_blocks_repeat():
     sent = []
     # Same two rows, but both already reported.
@@ -231,6 +263,8 @@ if __name__ == "__main__":
     test_mute_does_not_lose_the_backlog()
     test_queue_stall()
     test_undelivered_cards()
+    test_undelivered_cards_count_cards_not_rows()
+    test_undelivered_cards_two_real_cards_still_count_two()
     test_check_survives_a_broken_signal()
     test_daily_report()
     sys.exit(0 if R.report("WATCHDOG RULES") else 1)

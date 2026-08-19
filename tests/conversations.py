@@ -286,9 +286,15 @@ SCENARIOS = [
         # call you shortly", which is the right sentence, and the assertion refused it
         # on the article. A test that fails on a word the bot was never told to use is
         # a test that will be silenced rather than believed.
+        # WIDENED AGAIN 2026-08-19, for the same reason. The bot wrote "I'll arrange
+        # for a call from our sales person" -- which is MARKETING'S OWN approved
+        # wording from the voice sheet, and the assertion refused it because the
+        # list only knew "team" and "colleague". A test that fails on the exact
+        # sentence marketing asked for is a test that will be silenced, not believed.
         "require_anywhere": [r"(call|speak to|get in touch)",
                              r"(someone|colleague|a member) (from |of )?(our |the )?"
-                             r"team|(our|the) team|a colleague"],
+                             r"team|(our|the) team|a colleague|"
+                             r"(our|the) sales ?(person|team|colleague)"],
     },
     {
         "name": "the budget refuser — offered a call, and says no",
@@ -389,6 +395,56 @@ SCENARIOS = [
              # Leading with price is only half of it -- that reply also asked him
              # nothing, so we learned nothing about a buyer who had just arrived.
              "require": [r"\?"]},
+        ],
+    },
+    {
+        "name": "lead 1413 — his real conversation, the repetition and the budget yes",
+        "why": ("2026-08-19, 15:46-15:53. He gave purpose, area and configuration, "
+                "said the price was fine and agreed to a call -- and the bot told "
+                "him the 32 acres, Kovalam Junction, the clubhouse size and the "
+                "amenity list in TWO CONSECUTIVE messages, then threw away his "
+                "'Yes it sound fine' and reported him to sales as unresponsive."),
+        "turns": [
+            {"say": "Hi"},
+            # THE REPETITION. Everything below was in the opener he just received.
+            {"say": "Primary",
+             "forbid": [r"32[\s-]*acre", r"1,?00,?000", r"kovalam\s+junction",
+                        r"mini\s*theatre"]},
+            {"say": "I'm looking at ecr"},
+            {"say": "Villa"},
+        ],
+    },
+    {
+        "name": "the budget yes — 'sounds fine' is an answer, not a dodge",
+        "why": ("Lead 1413 was asked whether the villa price sat in his range and "
+                "said 'Yes it sound fine.' Nothing was recorded, it counted as his "
+                "third dodge, and sales was told he would not answer."),
+        "start": {"checklist": {"purpose": "primary_residence", "location": "ECR",
+                                "configuration": "villa"},
+                  "asked": {"purpose": [0], "location": [0], "configuration": [1]}},
+        "turns": [
+            {"say": "what do the villas cost"},
+            {"say": "Yes it sound fine", "qualifies": True},
+        ],
+    },
+    {
+        "name": "deferral — 'will tell you later' must not be padded",
+        "why": ("He was asked for a visit day, said 'Will tell you later', and was "
+                "given the possession dates for both phases, unasked."),
+        "start": {"checklist": {"purpose": "primary_residence", "location": "ECR",
+                                "configuration": "villa"}},
+        "turns": [
+            {"say": "Will tell you later",
+             "forbid": [r"december 2027", r"june 2028", r"possession", r"\?"]},
+        ],
+    },
+    {
+        "name": "the map is attached by code, never typed",
+        "why": ("Lead 1413 got a correct maps link the MODEL typed, copied from a "
+                "voice sample. Correct that time; one keystroke from a dead link."),
+        "turns": [
+            {"say": "But I' will need to know the exact location",
+             "require": [r"maps\.app\.goo\.gl/RpzjkiwQ4j8iAEAh9"]},
         ],
     },
     {
