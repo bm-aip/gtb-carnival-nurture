@@ -415,11 +415,20 @@ to describe it.
 > told someone would come back to him about a price we had. If the retrieved
 > knowledge holds no figure, ask which home they mean, or say a colleague will
 > confirm. Never reach for a number you remember.
+>
+> **The first sample below used to quote both starting prices. It was cut on
+> 2026-08-19 and must not come back.** Two buyers were replayed through the same
+> build seconds apart: one got the sample copied almost word for word, prices and
+> all, and was asked nothing; the other got the same opener with no figures and the
+> purpose question. One in two. The paragraph above was already sitting directly over
+> that sample and did not stop it — an instruction loses to a concrete example
+> underneath it. An opener that leads with price also breaks the rule this document
+> gives everywhere else: show them the place, let them want it, THEN talk money.
 
 BUYER: "Hi, I need more details about Republic of Nature."
 US: "Hi! Republic of Nature is a 32-acre community on ECR, near Kovalam Junction.
 Apartments and villas, plus a 1,00,000 sqft clubhouse with pool, gym, courts, mini
-theatre and spa. Apartments start from Rs 1.28 Cr and villas from Rs 3.94 Cr.
+theatre and spa.
 Are you looking at this as a weekend place, a primary home or an investment?"
 
 BUYER: "Call me"
