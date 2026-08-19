@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-19-goal-driven-qualification"
+CODE_VERSION = "2026-08-19-outlive-the-outage"
 import db
 import selldo
 import meta
@@ -1005,6 +1005,27 @@ def api_queue():
     `recent_failures` is the important number: each one is a customer message that
     was never answered, and nothing else in the system will surface that."""
     return jsonify(jobs.stats())
+
+
+@app.route("/api/queue/replay", methods=["POST"])
+@auth
+def api_queue_replay():
+    """Put a job that gave up back in the queue. The buyer gets their answer.
+
+    Until this existed, `recent_failures` was a list of people we had decided not to
+    answer: `fail()` was terminal and nothing re-ran a dead job. On 2026-08-18 two
+    buyers hit a 529 and stayed silent for good.
+
+    POST {} replays every failed job inside the window; POST {"id": 123} replays one.
+    Manual on purpose -- see jobs.replay. Nothing here bypasses the send gate: the
+    job re-enters the normal worker path and every reply leaves by the one door.
+    """
+    j = request.get_json(silent=True) or {}
+    revived = jobs.replay(j.get("id"))
+    return jsonify({"ok": True, "replayed": len(revived), "jobs": revived,
+                    "note": (f"Only failures newer than {jobs.REPLAY_MAX_AGE_HOURS}h "
+                             "are eligible -- past that WhatsApp will not deliver a "
+                             "free-text reply.")})
 
 
 @app.route("/api/kb")
