@@ -1001,6 +1001,31 @@ RETRY_MAX_RECIPIENT = int(os.environ.get("RETRY_MAX_RECIPIENT", "3"))
 RETRY_MAX_TRANSIENT = int(os.environ.get("RETRY_MAX_TRANSIENT", "6"))
 RETRY_WINDOW_DAYS = int(os.environ.get("RETRY_WINDOW_DAYS", "30"))
 
+# --- Job-queue backoff when the PROVIDER is busy (2026-08-19) ------------------
+#
+# Distinct from the two ceilings above, which count SEND failures against a lead.
+# This is jobs.fail(): the model call itself failed and no reply was produced.
+#
+# On 2026-08-18 two buyers got nothing. Anthropic returned 529 Overloaded, and the
+# rule at the time SHORTENED the wait for a transient error -- 5s, 10s, 15s, 20s --
+# so all five attempts burned inside about a minute, which was the same minute the
+# provider was saturated. The bot then gave up permanently. Overloads clear in
+# minutes; it never lived long enough to find out.
+#
+# The instinct behind the fast retry was right and is kept: a buyer is watching a
+# chat window, and 30 seconds there is an eternity (2026-08-02, a real lead typed
+# "You there ?"). So the ladder stays fast at the START and only stretches once it
+# is clear this is an outage rather than a hiccup. First four attempts land inside
+# 85 seconds; the tail reaches roughly half an hour, which is what actually spans a
+# provider incident. Well inside the 24h window in which a reply is still allowed.
+JOB_BACKOFF_TRANSIENT = [5, 15, 45, 120, 300, 600, 900]
+
+# Transient failures get their own, higher ceiling. `max_attempts` on the row stays
+# 5 and still governs real faults -- a bug that throws every time must not be
+# retried for half an hour.
+JOB_MAX_ATTEMPTS_TRANSIENT = int(
+    os.environ.get("JOB_MAX_ATTEMPTS_TRANSIENT", str(len(JOB_BACKOFF_TRANSIENT) + 1)))
+
 # --- Fatigue cap (Phase 0, task 3) ---
 # Owner decision 2026-07-30: a new reason RESETS the knock counter. Because "a new
 # reason" is loose and hard to police, that generosity is made safe by a second

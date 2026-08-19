@@ -101,7 +101,7 @@ def _alert(kind, headline, detail, action):
 def _check_failed_jobs():
     """Jobs that exhausted their retries. Each one is a buyer owed a reply."""
     wm = _int_setting(_WM_JOBS)
-    rows = db.q("""SELECT id, kind, attempts, last_error
+    rows = db.q("""SELECT id, kind, phone, attempts, last_error
                    FROM job_queue
                    WHERE status='failed' AND id > %s
                    ORDER BY id""", (wm,)) or []
@@ -112,12 +112,21 @@ def _check_failed_jobs():
         # whole backlog rather than losing what happened while muted.
         return f"{len(rows)} failed jobs (muted)"
 
-    err = _clean(rows[-1].get("last_error"))[:180]
+    err = _clean(rows[-1].get("last_error"))[:120]
+    # NAME THEM (2026-08-19). The card used to carry only a count, so the first
+    # question it raised -- WHICH buyer is sitting there unanswered -- could only be
+    # answered by logging into the dashboard. On 2026-08-18 two people went
+    # unanswered overnight and nobody could tell who they were from the alert.
+    who = ", ".join(str(r.get("phone") or "?") for r in rows[:5])
+    if len(rows) > 5:
+        who += f" +{len(rows) - 5} more"
+
     ok = _alert("jobs",
                 f"BOT PROBLEM - {len(rows)} buyer(s) got no reply",
-                f"{len(rows)} job(s) gave up after retrying. Latest error: {err}",
-                "Check /api/queue. If it is credit or an API key, fix it and the "
-                "buyers can still be answered by hand inside 24h.")
+                f"{who}. Gave up after retrying. Latest error: {err}",
+                "POST /api/queue/replay to have the bot answer them now. It only "
+                "works inside 24h of their message -- after that, reply by hand in "
+                "the Wati inbox.")
     if ok:
         db.set_setting(_WM_JOBS, rows[-1]["id"])
         _mark_alerted("jobs")

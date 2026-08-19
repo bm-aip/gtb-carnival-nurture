@@ -36,6 +36,7 @@ people are fully parallel.
 import json
 import re
 
+import config
 import db
 
 # The provider is busy, not broken. Worth retrying in seconds rather than minutes.
@@ -170,33 +171,89 @@ def complete(job_id):
          (DONE, job_id))
 
 
+def retry_plan(attempts, err, max_attempts):
+    """(give_up, backoff_seconds) for a job that just failed. Pure, so it is testable.
+
+    `attempts` is the count INCLUDING the one that just failed.
+
+    TWO LADDERS, because "the provider is busy" and "this code throws" want opposite
+    treatment. A real fault should be retried a few times, slowly, and then left
+    alone. A busy provider should be retried quickly at first -- a buyer is watching
+    a chat window -- and then patiently, because the outage outlives the hiccup.
+
+    2026-08-18 is why the patient tail exists. Anthropic returned 529 Overloaded for
+    two buyers; the transient rule at the time SHORTENED the wait (5s, 10s, 15s, 20s)
+    so all five attempts burned inside one minute -- the same minute the provider was
+    saturated -- and the bot gave up for good. Nothing re-runs a dead job, so both
+    people simply never heard back. The old rule was written for OUR rate limits,
+    where retrying sooner is right because the block is per-second. Applied to a
+    provider-wide outage it is exactly backwards.
+    """
+    if _TRANSIENT.search(err or ""):
+        ladder = config.JOB_BACKOFF_TRANSIENT
+        # Never LOWER a ceiling the row asked for; only raise it for this case.
+        ceiling = max(max_attempts, config.JOB_MAX_ATTEMPTS_TRANSIENT)
+        if attempts >= ceiling:
+            return True, 0
+        return False, ladder[min(attempts - 1, len(ladder) - 1)]
+
+    if attempts >= max_attempts:
+        return True, 0
+    return False, 30 * (2 ** (attempts - 1))          # 30s, 60s, 120s, 240s...
+
+
 def fail(job, error):
-    """Retry with exponential backoff, or give up.
+    """Retry per retry_plan, or give up.
 
     A job that has exhausted its attempts is marked failed and LEFT IN THE TABLE.
     Deleting it would hide the fact that a customer message was never answered --
     the one failure in this system that a person is waiting on.
     """
-    attempts = job["attempts"]
     err = str(error)[:1000]
-    if attempts >= job["max_attempts"]:
+    give_up, backoff = retry_plan(job["attempts"], err, job["max_attempts"])
+    if give_up:
         db.x("""UPDATE job_queue SET status=%s, last_error=%s, updated_at=now()
                 WHERE id=%s""", (FAILED, err, job["id"]))
         return False
-    # 30s, 60s, 120s, 240s...
-    backoff = 30 * (2 ** (attempts - 1))
-    # ...EXCEPT for a provider that is merely busy. On 2026-08-02 Anthropic
-    # returned 529 Overloaded mid-conversation; the buyer got nothing for two
-    # minutes and typed "You there ?". Thirty seconds is an eternity to somebody
-    # watching a chat, and an overloaded API is usually fine seconds later. Retry
-    # those almost immediately and keep the long backoff for real faults.
-    if _TRANSIENT.search(err):
-        backoff = min(5 * attempts, 20)
     db.x("""UPDATE job_queue SET status=%s, last_error=%s, claimed_at=NULL,
                                  run_after = now() + (%s * interval '1 second'),
                                  updated_at=now()
             WHERE id=%s""", (QUEUED, err, backoff, job["id"]))
     return True
+
+
+# A dead job may only be put back if a reply could still legally reach the buyer.
+# WhatsApp allows a free-text message for 24h after THEIR last message; past that a
+# replay would burn a turn producing something that cannot be delivered, and answer
+# a question the buyer asked yesterday as though no time had passed.
+REPLAY_MAX_AGE_HOURS = 20
+
+
+def replay(job_id=None):
+    """Put failed job(s) back in the queue. Returns the ids actually revived.
+
+    THE MISSING SECOND CHANCE (2026-08-19). `fail()` was terminal and nothing
+    anywhere re-ran a dead job -- `/api/queue` only DISPLAYED them. So on
+    2026-08-18, when two jobs gave up against a 529, both buyers were silent for
+    good unless a human opened the Wati inbox and typed a reply by hand.
+
+    Deliberately manual, and deliberately not part of the worker loop. An automatic
+    resurrection would re-run whatever killed the job -- for a real bug that is an
+    infinite loop dressed as a feature -- and it would put a message in front of a
+    buyer with nobody having looked at why the first attempt died.
+
+    `attempts` resets to 0, so a replayed job gets a full ladder rather than landing
+    on the last rung and dying again immediately.
+    """
+    rows = db.q(f"""UPDATE job_queue
+                    SET status=%s, attempts=0, claimed_at=NULL, run_after=now(),
+                        updated_at=now()
+                    WHERE status=%s
+                      AND created_at > now() - interval '{REPLAY_MAX_AGE_HOURS} hours'
+                      AND (%s IS NULL OR id = %s)
+                    RETURNING id, kind, phone""",
+                (QUEUED, FAILED, job_id, job_id)) or []
+    return rows
 
 
 def reclaim_stale():

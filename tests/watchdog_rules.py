@@ -88,8 +88,10 @@ def test_clean():
 def test_failed_jobs_alert():
     sent = []
     fake = FakeDB(rows={"FROM job_queue": [
-        {"id": 11, "kind": "reply", "attempts": 5, "last_error": "credit balance is too low"},
-        {"id": 12, "kind": "reply", "attempts": 5, "last_error": "credit balance is too low"},
+        {"id": 11, "kind": "reply", "phone": "919840168185", "attempts": 5,
+         "last_error": "credit balance is too low"},
+        {"id": 12, "kind": "reply", "phone": "919003044700", "attempts": 5,
+         "last_error": "credit balance is too low"},
     ]})
     _patch(fake, sent)
     w._check_failed_jobs()
@@ -100,6 +102,14 @@ def test_failed_jobs_alert():
          "credit" in " ".join(sent[0]["slots"]).lower(), True)
     R.eq("watermark advances so the same rows never re-alert",
          fake.settings.get(w._WM_JOBS), "12")
+
+    # WHICH BUYER IS SITTING THERE UNANSWERED (2026-08-19). The card used to carry
+    # a count and nothing else, so on 2026-08-18 two people went unanswered
+    # overnight and the alert could not say who. Nobody can act on a number.
+    card = " ".join(sent[0]["slots"])
+    R.eq("the buyer's number reaches the owner", "919840168185" in card, True)
+    R.eq("...and the second one too", "919003044700" in card, True)
+    R.eq("the card says how to answer them", "replay" in card.lower(), True)
 
 
 def test_failed_jobs_watermark_blocks_repeat():
