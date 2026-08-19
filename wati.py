@@ -15,6 +15,7 @@ approval time), so there is no separate poll send -- sending the template
 renders its buttons.
 """
 import json
+import os
 import re
 from datetime import datetime, timezone
 import requests
@@ -92,6 +93,38 @@ def send_text(phone, body):
         # 1000, not 300: the provider message id lives in this body and
         # extract_msg_id() needs it intact to join delivery callbacks back to the
         # send. At 300 chars Wati's echo of the message could truncate first.
+        return ok, r.text[:1000]
+    except Exception as e:
+        return False, str(e)
+
+
+def send_file(phone, path, caption=None):
+    """Send one image/file into an open session. Returns (ok, detail).
+
+    Uploads the FILE ITSELF, multipart. Deliberately not sendSessionFileViaUrl:
+    hosting the images somewhere public would mean a bucket to keep alive, links
+    that can rot, and a second place for a media set to drift out of step with the
+    code that references it. These ship in the repo, so the file a release sends is
+    the file that release was tested with.
+
+    Like send_text, this only delivers inside the 24h window -- which is fine,
+    because every caller is answering a message the buyer just sent.
+
+    THE CAPTION IS A QUERY PARAMETER, not JSON. Same trap as sendSessionMessage:
+    2026-08-05 a rupee sign went out mangled because free text on this path is URL
+    encoded. Captions stay plain and money is written "Rs".
+    """
+    if not os.path.exists(path):
+        return False, f"missing file: {path}"
+    try:
+        with open(path, "rb") as fh:
+            r = requests.post(
+                f"{config.WATI_BASE}/api/v1/sendSessionFile/{phone}",
+                headers=_auth_headers(),
+                params={"caption": caption} if caption else None,
+                files={"file": (os.path.basename(path), fh, "image/jpeg")},
+                timeout=60)
+        ok = r.status_code in (200, 201) and _result_ok(r)
         return ok, r.text[:1000]
     except Exception as e:
         return False, str(e)
