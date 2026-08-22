@@ -21,6 +21,11 @@ from datetime import datetime, timezone
 import requests
 import config
 import db
+# For is_proactive() only. fatigue imports nothing but config and db, so this
+# cannot close a cycle -- and the proactive/reactive split must have ONE
+# definition, or the reserve below would protect a different set of messages
+# than the fatigue cap exempts.
+import fatigue
 
 
 def _auth_headers():
@@ -246,14 +251,56 @@ def fetch_referral(phone, max_pages=6):
 
 
 def sends_last_hour():
+    """Messages that actually went on the wire in the last hour.
+
+    `matched` is EXCLUDED. It is a bookkeeping row written when a lead is paired
+    with a phone number -- nothing is sent -- but it is stored as direction='out'
+    with ok=TRUE, so it was consuming the hourly allowance. Four of the hundred
+    slots on 2026-08-22 went to rows that never touched WhatsApp.
+    """
     r = db.q("""SELECT count(*) AS n FROM message_log
-                WHERE direction='out' AND ok AND ts > now() - interval '1 hour'""",
+                WHERE direction='out' AND ok AND msg_type <> 'matched'
+                  AND ts > now() - interval '1 hour'""",
              one=True)
     return r["n"] if r else 0
 
 
-def rate_ok():
-    return sends_last_hour() < config.MAX_SENDS_PER_HOUR
+def rate_ok(msg_type=None):
+    """Is there hourly capacity for this message?
+
+    A PROACTIVE send may only use the first part of the hour's allowance; the rest
+    is held back for people who are actually talking to us.
+
+    2026-08-22, and this is why: the knock backlog sent 172 templates and used
+    exactly 100 of 100 slots in one hour. Sanjay Agarwalla read his message, pressed
+    "Need More Details", and got nothing -- his reply arrived at slot 101. Vivek
+    Chordia hit the same wall thirteen minutes earlier. A marketing blast outranked
+    two live buyers because it got there first and the budget was shared.
+
+    Someone who read our message and asked a question is worth more than the 173rd
+    cold template. The reserve encodes that, cheaply: knocks stop early, replies
+    keep the remainder.
+    """
+    used = sends_last_hour()
+    if msg_type is not None and is_business_initiated(msg_type):
+        return used < max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
+    return used < config.MAX_SENDS_PER_HOUR
+
+
+# The carnival first-touch types. Cold business-initiated templates, exactly like a
+# knock -- but fatigue.is_proactive() matches only "knock*", so they read as replies.
+#
+# NOT folded into fatigue.is_proactive(), deliberately. Widening that would also
+# subject m1/m2/m3 to the 4-per-journey and 2-per-7-day fatigue caps for the first
+# time, which is a different decision with its own consequences and nobody has asked
+# for it. Volume is ~3 a day, so the honest fix is to name them here rather than
+# quietly change what fatigue means.
+_COLD_FIRST_TOUCH = ("m1", "m2", "m3")
+
+
+def is_business_initiated(msg_type):
+    """True for business-initiated sends, which must leave the reserve alone."""
+    return fatigue.is_proactive(msg_type) or msg_type in _COLD_FIRST_TOUCH
 
 
 # --- Phase 0 task 5: delivery status callbacks ---------------------------------

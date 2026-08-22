@@ -42,6 +42,11 @@ import db
 # The provider is busy, not broken. Worth retrying in seconds rather than minutes.
 _TRANSIENT = re.compile(
     r"overloaded|529|rate.?limit|429|timeout|timed out|temporarily unavailable|"
+    # Our OWN hourly allowance, not the provider's. Added 2026-08-22 with
+    # sequencer.RateCapped: an hour of saturation outlasts the default ladder
+    # (30s..240s, five attempts), whereas the transient one stretches to ~33
+    # minutes over eight -- which is what a buyer waiting on an answer needs.
+    r"rate.?capped|hourly cap|"
     r"503|502|connection reset|connection aborted", re.I)
 
 KIND_INBOUND = "inbound_message"
