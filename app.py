@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-08-22-watchdog-outcomes"
+CODE_VERSION = "2026-08-22-poller-anchor"
 import db
 import selldo
 import meta
@@ -1242,6 +1242,20 @@ def start_scheduler():
 
 
 db.init_db()
+
+# WHEN THIS PROCESS STARTED. The watchdog's poller check needs it.
+#
+# `meta_leads_last_ok` is written only when a poll run REACHES ITS END, so a run
+# that hangs writes nothing -- which is the signal. But on a fresh deploy there is
+# no previous heartbeat either, and the check could not tell "hung on its first
+# run" from "has not run yet". Without an anchor it answers "fine" forever: a check
+# that passes because it has nothing to look at, which is the exact shape of
+# failure the watchdog exists to remove.
+#
+# Set HERE rather than inside db.init_db() on purpose -- ad-hoc scripts under
+# `railway run` import db and would otherwise stamp a fresh boot time on every run,
+# quietly resetting the clock this depends on. Only the service imports app.py.
+db.set_setting("app_boot_at", _dt.datetime.now(_dt.timezone.utc).isoformat())
 
 # Knowledge-base schema runs SEPARATELY and never raises. `CREATE EXTENSION vector`
 # needs a privilege the database user may not have, and the `vector` column type
