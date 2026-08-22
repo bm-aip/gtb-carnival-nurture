@@ -249,6 +249,20 @@ def poll_meta_leads():
     if sweep and swept_clean:
         db.set_setting(_SWEEP_KEY, datetime.now(timezone.utc).isoformat())
 
+    # HEARTBEAT. Written only on reaching the end of a run, so a hung run writes
+    # nothing and goes stale -- which is the whole point.
+    #
+    # 2026-08-21: one run hung and held the only slot for 24 hours. APScheduler
+    # logged "maximum number of running instances reached (1)" every minute and
+    # the system looked healthy from every angle we were watching: no exception,
+    # no failed job, meta_leads_error empty. Form submissions simply stopped
+    # arriving. watchdog._check_poller_wedged reads this timestamp.
+    #
+    # Deliberately NOT gated on swept_clean. A partial sweep still proves the
+    # poller is alive and cycling, which is the only thing this claims; a broken
+    # token is already reported through meta_leads_error_<project>.
+    db.set_setting("meta_leads_last_ok", datetime.now(timezone.utc).isoformat())
+
 
 def fetch_lead(project_key, leadgen_id):
     """One lead, by the id Meta hands us in a leadgen webhook.

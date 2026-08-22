@@ -182,6 +182,85 @@ def _min_gap_days(step_index):
     return KNOCK_SCHEDULE[step_index][0] - KNOCK_SCHEDULE[step_index - 1][0]
 
 
+# The eligibility and due-ness test, written ONCE and shared.
+#
+# due() takes a page of it; due_count() counts all of it, and the watchdog
+# compares that count against what actually went out. A monitor that measures
+# something subtly different from the engine it watches is worse than no monitor:
+# it reports healthy while the engine starves -- which is the exact failure it
+# exists to catch. So the two share these strings rather than resembling them.
+#
+# Split in three because the CTE must precede the SELECT, and the two callers
+# need different SELECT lists over the same FROM/WHERE.
+_DUE_CTE = r"""
+        WITH ks AS (
+            -- Phone-keyed, exactly like knock_state(): one human is routinely
+            -- several lead rows, and a knock reaches the person, not the row.
+            SELECT l2.phone,
+                   count(*) FILTER (WHERE ml.ok)   AS sent,
+                   max(ml.ts) FILTER (WHERE ml.ok) AS last_at
+            FROM message_log ml
+            JOIN leads l2 ON l2.id = ml.lead_id
+            WHERE ml.direction = 'out' AND ml.msg_type LIKE 'knock\_%%'
+            GROUP BY l2.phone
+        )
+"""
+
+_DUE_SELECT = " SELECT l.*, COALESCE(l.selldo_response_at, l.created_at) AS anchor "
+
+_DUE_FROM_WHERE = """
+        FROM leads l
+        LEFT JOIN conversations c ON c.lead_id = l.id
+        LEFT JOIN ks ON ks.phone = l.phone
+        WHERE l.phone IS NOT NULL
+          AND NOT l.suppressed
+          -- Ten refusals and we stopped. Excluded here rather than checked per
+          -- lead so a lost number cannot occupy a slot in the batch forever.
+          AND l.knock_lost_at IS NULL
+          AND lower(trim(l.campaign)) = ANY(%s)
+          -- task 18: ANY inbound ends the sequence, permanently.
+          AND l.last_inbound_at IS NULL
+          AND c.outcome IS NULL
+          AND COALESCE(ks.sent, 0) < %s
+          -- Clock 1: time since they signed up. Array is 1-based, hence sent+1;
+          -- a subscript past the end yields NULL, which fails the comparison and
+          -- drops the row -- the same answer the loop gives for a finished journey.
+          AND now() >= COALESCE(l.selldo_response_at, l.created_at)
+                     + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval
+          -- Clock 2: time since we last knocked. A backlog lead must not receive
+          -- the whole sequence in four days.
+          AND (ks.last_at IS NULL
+               OR now() >= ks.last_at
+                         + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval)
+"""
+
+
+def _due_params():
+    """The four bind values _DUE_FROM_WHERE expects, or None if nothing is live."""
+    campaigns = [c.lower() for c in config.SELLDO
+                 .get(config.DIRECT_INBOUND_PROJECT, {}).get("campaigns") or []]
+    if not campaigns:
+        return None
+    return (campaigns,
+            min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY),
+            [step[0] for step in KNOCK_SCHEDULE],
+            [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))])
+
+
+def due_count():
+    """How many lead rows are due for a knock RIGHT NOW, ignoring batch size.
+
+    The watchdog's contradiction test: leads are due and nothing is going out.
+    That pair cannot both be true in a healthy system, which is what makes it
+    safe to alert on -- it has no quiet-day false positive.
+    """
+    params = _due_params()
+    if not params:
+        return 0
+    r = db.q(_DUE_CTE + " SELECT count(*) AS n " + _DUE_FROM_WHERE, params, one=True)
+    return (r or {}).get("n") or 0
+
+
 def due(limit=None):
     """Leads whose next knock is due right now. Oldest signup first."""
     limit = limit or config.SEND_BATCH_PER_TICK
@@ -207,49 +286,10 @@ def due(limit=None):
     # The Python loop below still re-checks everything and remains the authority;
     # this is a candidate filter, not a replacement for it. The retry bookkeeping in
     # particular is not modelled here, which is why LIMIT still takes headroom.
-    days_after = [step[0] for step in KNOCK_SCHEDULE]
-    gap_days = [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))]
-    max_knocks = min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY)
-
-    rows = db.q(r"""
-        WITH ks AS (
-            -- Phone-keyed, exactly like knock_state(): one human is routinely
-            -- several lead rows, and a knock reaches the person, not the row.
-            SELECT l2.phone,
-                   count(*) FILTER (WHERE ml.ok)   AS sent,
-                   max(ml.ts) FILTER (WHERE ml.ok) AS last_at
-            FROM message_log ml
-            JOIN leads l2 ON l2.id = ml.lead_id
-            WHERE ml.direction = 'out' AND ml.msg_type LIKE 'knock\_%%'
-            GROUP BY l2.phone
-        )
-        SELECT l.*, COALESCE(l.selldo_response_at, l.created_at) AS anchor
-        FROM leads l
-        LEFT JOIN conversations c ON c.lead_id = l.id
-        LEFT JOIN ks ON ks.phone = l.phone
-        WHERE l.phone IS NOT NULL
-          AND NOT l.suppressed
-          -- Ten refusals and we stopped. Excluded here rather than checked per
-          -- lead so a lost number cannot occupy a slot in the batch forever.
-          AND l.knock_lost_at IS NULL
-          AND lower(trim(l.campaign)) = ANY(%s)
-          -- task 18: ANY inbound ends the sequence, permanently.
-          AND l.last_inbound_at IS NULL
-          AND c.outcome IS NULL
-          AND COALESCE(ks.sent, 0) < %s
-          -- Clock 1: time since they signed up. Array is 1-based, hence sent+1;
-          -- a subscript past the end yields NULL, which fails the comparison and
-          -- drops the row -- the same answer the loop gives for a finished journey.
-          AND now() >= COALESCE(l.selldo_response_at, l.created_at)
-                     + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval
-          -- Clock 2: time since we last knocked. A backlog lead must not receive
-          -- the whole sequence in four days.
-          AND (ks.last_at IS NULL
-               OR now() >= ks.last_at
-                         + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval)
+    rows = db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
         ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
         LIMIT %s""",
-                (campaigns, max_knocks, days_after, gap_days, limit * 5)) or []
+                _due_params() + (limit * 5,)) or []
 
     now = datetime.now(timezone.utc)
     out = []

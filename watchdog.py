@@ -28,6 +28,7 @@ watching is still happening, so it is not decoration -- it is the thing that mak
 the silence trustworthy.
 """
 import logging
+import os
 from datetime import datetime, timedelta
 
 import config
@@ -40,6 +41,42 @@ log = logging.getLogger("watchdog")
 # The sequencer ticks every few minutes and the worker drains continuously, so
 # anything older than this is not backlog, it is a stopped process.
 QUEUE_STALE_MIN = 15
+
+# ---------------------------------------------------------------------------
+# THE THREE SIGNALS ABOVE WATCH PLUMBING. THESE THREE WATCH OUTCOMES.
+#
+# 2026-08-22. The knock engine sent one message in fourteen days while 293 people
+# waited, and the owner received fourteen consecutive daily reports saying
+# "nothing failed". Every word of that was true. Failed jobs were zero, the queue
+# was draining, staff cards were landing -- the three things being watched were
+# genuinely healthy. Nothing was watching whether anyone was being CONTACTED.
+#
+# The same blind spot hid two more faults: 45% of all sends bouncing off Meta's
+# quality restrictions, and poll_meta_leads wedged for 24 hours so new form
+# submissions stopped arriving.
+#
+# Plumbing checks pass in exactly the situation you most need warning about. So
+# each signal below is a CONTRADICTION -- a pair of facts that cannot both be
+# true in a working system. That is what makes them safe to alert on: there is
+# no quiet-day false positive to train anyone into ignoring them.
+# ---------------------------------------------------------------------------
+
+# Leads are due for a knock, and this many hours have passed with none sent.
+# Longer than one tick so a slow batch is not an alarm; far shorter than the
+# fortnight it actually took someone to notice.
+KNOCK_SILENT_HOURS = int(os.environ.get("WATCHDOG_KNOCK_SILENT_HOURS", "6"))
+
+# Delivery failure rate over 24h that means Meta is refusing us, not that one
+# number is bad. Measured at 45% on 2026-08-22, so the threshold is set where a
+# real deterioration trips it and ordinary noise does not.
+DELIVERY_FAIL_PCT = int(os.environ.get("WATCHDOG_DELIVERY_FAIL_PCT", "35"))
+DELIVERY_MIN_SENDS = int(os.environ.get("WATCHDOG_DELIVERY_MIN_SENDS", "20"))
+
+# How long poll_meta_leads may go without completing before new leads are
+# presumed to have stopped arriving. It runs every minute; a full sweep can
+# legitimately take several, so this is generous and still catches a 24h wedge.
+POLLER_STALE_MIN = int(os.environ.get("WATCHDOG_POLLER_STALE_MIN", "90"))
+_HB_META_LEADS = "meta_leads_last_ok"
 
 # One message per problem per hour. An alert that repeats every 15 minutes is an
 # alert people mute, and a muted alert is worse than none because it still looks
@@ -197,12 +234,123 @@ def _check_queue_stalled():
     return f"queue stalled {int(age_min)}m"
 
 
+def _check_nobody_contacted():
+    """Leads are due a knock and none has gone out. THE FORTNIGHT BUG.
+
+    Imported inside the function: knocks imports sequencer, and a module-level
+    import here would close a circle.
+
+    The contradiction is the whole point. "No knocks sent" alone is a normal
+    quiet day -- the ladder has 3, 7 and 15-day gaps built into it. "Leads are
+    due" alone is normal too. Together they are impossible in a working engine,
+    which is why this can shout without ever crying wolf.
+    """
+    import knocks
+
+    due = knocks.due_count()
+    if not due:
+        return None
+
+    # The interval is BOUND, not formatted in. db.q always passes a params tuple to
+    # psycopg2, so any bare % left in the SQL is read as a placeholder -- string
+    # formatting here turned 'knock%%' into 'knock%' and the query died with
+    # "IndexError: tuple index out of range" instead of watching anything.
+    row = db.q("""SELECT count(*) AS n, max(ts) AS last_at FROM message_log
+                  WHERE direction='out' AND msg_type LIKE 'knock%%'
+                    AND ts > now() - (%s || ' hours')::interval""",
+               (int(KNOCK_SILENT_HOURS),), one=True) or {}
+    if row.get("n"):
+        return None
+
+    if _muted("knocks_silent"):
+        return f"{due} due, none sent (muted)"
+
+    last = db.q("""SELECT max(ts) AS t FROM message_log
+                   WHERE direction='out' AND msg_type LIKE 'knock%%'""", one=True) or {}
+    when = last.get("t")
+    ago = "never" if not when else f"{int((datetime.now(when.tzinfo) - when).total_seconds() / 3600)}h ago"
+
+    ok = _alert("knocks_silent",
+                f"NOBODY IS BEING CONTACTED - {due} lead(s) waiting",
+                f"{due} lead(s) are due a knock right now and none has gone out in "
+                f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}.",
+                "The knock engine is running but sending nothing. Check "
+                "/admin/config-check and the knock_error setting.")
+    if ok:
+        _mark_alerted("knocks_silent")
+    return f"{due} due, none sent"
+
+
+def _check_delivery_collapse():
+    """Most of what we send is bouncing. Meta is refusing us, not one bad number."""
+    row = db.q("""SELECT count(*) AS n,
+                         count(*) FILTER (WHERE status='failed') AS bad
+                  FROM message_delivery
+                  WHERE created_at > now() - interval '24 hours'""", one=True) or {}
+    n, bad = row.get("n") or 0, row.get("bad") or 0
+    if n < DELIVERY_MIN_SENDS:
+        return None                      # too little traffic to mean anything
+    pct = round(100.0 * bad / n)
+    if pct < DELIVERY_FAIL_PCT:
+        return None
+    if _muted("delivery"):
+        return f"{pct}% of sends failing (muted)"
+
+    top = db.q("""SELECT COALESCE(reason,'(no reason given)') AS r, count(*) AS n
+                  FROM message_delivery
+                  WHERE status='failed' AND created_at > now() - interval '24 hours'
+                  GROUP BY 1 ORDER BY 2 DESC LIMIT 1""", one=True) or {}
+
+    ok = _alert("delivery",
+                f"MESSAGES ARE NOT ARRIVING - {pct}% failed in 24h",
+                f"{bad} of {n} sends failed. Most common: {_clean(top.get('r'))[:150]}",
+                "Meta is restricting the number. Sending harder makes it worse -- "
+                "consider pausing knocks until the quality rating recovers.")
+    if ok:
+        _mark_alerted("delivery")
+    return f"{pct}% of sends failing"
+
+
+def _check_poller_wedged():
+    """New leads stopped arriving because the Meta poller never finished.
+
+    Reads a heartbeat that poll_meta_leads writes on each SUCCESSFUL completion.
+    A run that hangs writes nothing, which is precisely the state that is
+    invisible from the outside -- APScheduler logs "maximum number of running
+    instances reached" and carries on looking healthy.
+    """
+    raw = db.get_setting(_HB_META_LEADS)
+    if not raw:
+        return None                      # never run yet; nothing to compare against
+    try:
+        last = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    age_min = (datetime.now(last.tzinfo) - last).total_seconds() / 60
+    if age_min < POLLER_STALE_MIN:
+        return None
+    if _muted("poller"):
+        return f"meta poller stale {int(age_min)}m (muted)"
+
+    ok = _alert("poller",
+                "NEW LEADS MAY HAVE STOPPED ARRIVING",
+                f"The Meta lead poller has not completed for {int(age_min)} minutes. "
+                f"Form submissions are probably not being picked up.",
+                "A poll run is hung and holding its slot. Redeploy the service to "
+                "clear it, then watch that this alert does not come back.")
+    if ok:
+        _mark_alerted("poller")
+    return f"meta poller stale {int(age_min)}m"
+
+
 def check():
-    """One pass over all three signals. Never raises -- a broken watchdog must
+    """One pass over every signal. Never raises -- a broken watchdog must
     not take the scheduler down with it, and each signal is independent so one
-    failing query must not hide the other two."""
+    failing query must not hide the others."""
     found = []
-    for fn in (_check_failed_jobs, _check_undelivered_cards, _check_queue_stalled):
+    for fn in (_check_failed_jobs, _check_undelivered_cards, _check_queue_stalled,
+               _check_nobody_contacted, _check_delivery_collapse,
+               _check_poller_wedged):
         try:
             r = fn()
             if r:
@@ -251,15 +399,53 @@ def daily_report(force=False):
                    AND ts > now() - interval '24 hours'""")
     failed = n("""SELECT count(*) AS n FROM job_queue WHERE status='failed'""")
 
-    verdict = "nothing failed" if not failed else f"{failed} FAILED JOBS - check /api/queue"
+    # THE VERDICT USED TO READ `"nothing failed" if not failed else ...`, where
+    # `failed` counted failed JOBS and nothing else. Failed jobs were zero all
+    # through the fortnight the knock engine sent nothing, so the report said
+    # "nothing failed" every morning -- accurately, about the only thing it looked
+    # at. A daily line that can only report on plumbing trains its reader to skim
+    # it. So the verdict is now assembled from the same outcome signals the alerts
+    # use, and says plainly when it has nothing bad to report.
+    # Aliased: `knocks` is already the local 24h knock COUNT above, and importing
+    # over it made the report print a module object where a number belonged.
+    import knocks as knocks_mod
+    try:
+        due = knocks_mod.due_count()
+    except Exception:                                # noqa: BLE001
+        due = 0
+    deliv = db.q("""SELECT count(*) AS n,
+                           count(*) FILTER (WHERE status='failed') AS bad
+                    FROM message_delivery
+                    WHERE created_at > now() - interval '24 hours'""", one=True) or {}
+    dn, dbad = deliv.get("n") or 0, deliv.get("bad") or 0
+    fail_pct = round(100.0 * dbad / dn) if dn else 0
+    stalled = n("""SELECT count(*) AS n FROM conversations
+                   WHERE outcome IS NULL AND last_turn_at < now() - interval '3 days'""")
+
+    problems = []
+    if failed:
+        problems.append(f"{failed} failed jobs")
+    if due and not knocks:
+        problems.append(f"{due} leads due a knock, none going out")
+    if dn >= DELIVERY_MIN_SENDS and fail_pct >= DELIVERY_FAIL_PCT:
+        problems.append(f"{fail_pct}% of sends not arriving")
+    if stalled:
+        problems.append(f"{stalled} conversations stalled 3d+")
+
+    verdict = ("ALL CLEAR - nothing needs you today" if not problems
+               else "NEEDS YOU: " + "; ".join(problems))
+
     ok = _alert("daily",
                 "RON bot - 24 hour report",
                 f"{convos} buyers talked to us, {replies} replies sent, "
-                f"{knocks} knocks out. {visits} visits booked, {qualified} qualified, "
-                f"{stuck} handed to a human.",
+                f"{knocks} knocks out ({due} still due). {visits} visits booked, "
+                f"{qualified} qualified, {stuck} handed to a human. "
+                f"{fail_pct}% of sends failed.",
                 verdict)
     if ok:
         db.set_setting(_LAST_DAILY, today)
     return {"conversations": convos, "replies": replies, "knocks": knocks,
             "visits": visits, "qualified": qualified, "stuck": stuck,
-            "failed_jobs": failed, "sent": bool(ok)}
+            "failed_jobs": failed, "due_now": due, "delivery_fail_pct": fail_pct,
+            "stalled_conversations": stalled, "problems": problems,
+            "sent": bool(ok)}
