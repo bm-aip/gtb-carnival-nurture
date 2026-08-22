@@ -56,6 +56,41 @@ DIRECT_INBOUND_ENABLED = _b(os.environ.get("DIRECT_INBOUND_ENABLED", "true"))
 DIRECT_INBOUND_PROJECT = os.environ.get("DIRECT_INBOUND_PROJECT", "RON")
 DIRECT_INBOUND_CAMPAIGN = os.environ.get("DIRECT_INBOUND_CAMPAIGN", "direct_whatsapp")
 
+# A TAP IS NOT A REPLY.
+#
+# When somebody clicks a click-to-WhatsApp ad, Meta pre-fills the message and their
+# phone sends it. They typed nothing. But it arrives as an ordinary inbound, sets
+# leads.last_inbound_at, and knocks.py excludes anyone with that field set -- task
+# 18, "ANY inbound ends the sequence, permanently". That rule is right for a person
+# who actually wrote something and wrong for a machine-generated tap.
+#
+# Measured 2026-08-22: of 278 conversations stalled with no outcome, 237 (85%)
+# opened with one of the strings below and 253 had answered NOTHING on the
+# checklist. All 278 were permanently excluded from every future knock. One tap
+# bought them a single reply and then silence forever.
+#
+# ANCHORED TO THE WHOLE MESSAGE, deliberately. A substring match on "need more
+# details" would also swallow "I need more details on the 3BHK price", which is a
+# real question from a real person. If it is not the entire message, it is not a
+# prefill.
+#
+# Env-overridable because marketing writes these strings when they build an ad, and
+# a new campaign with new wording must not need a deploy.
+#
+# SEPARATED BY ';;', NOT '|'. Splitting on '|' tears an alternation like
+# h(i|ii|ey|ello) into "^\s*h(i" and "ii" and "ello)[\s!.,]*$" -- fragments that are
+# not valid regexes, and Postgres rejects the whole query with "parentheses () not
+# balanced". Caught in testing; the separator must be something a regex cannot hold.
+_DEFAULT_PREFILLS = [
+    r"^\s*h(i+|ey|ello)[\s!.,]*$",
+    r"^\s*hi[\s!.,]*i?\s*need more details about republic of nature[\s!.]*$",
+    r"^\s*need more details[\s!.]*$",
+    r"^\s*kindly share more details about republic of nature.*$",
+]
+_prefill_env = os.environ.get("CTWA_PREFILL_PATTERNS", "").strip()
+CTWA_PREFILL_PATTERNS = ([p.strip() for p in _prefill_env.split(";;") if p.strip()]
+                         if _prefill_env else _DEFAULT_PREFILLS)
+
 # OUR OWN LEAD FORMS -- the live BM ones, verified against the Meta page
 # "Republic of Nature by GTB" (1144824778724398) on 2026-08-02. ONE list, THREE
 # uses, so they cannot drift apart:
