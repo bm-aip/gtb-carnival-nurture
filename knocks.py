@@ -190,10 +190,43 @@ def due(limit=None):
     if not campaigns:
         return []
 
-    rows = db.q("""
+    # THE FETCH WINDOW MUST BE FILTERED BEFORE IT IS LIMITED.
+    #
+    # This query used to select the oldest eligible leads and test due-ness in the
+    # Python loop below. That deadlocks, and did: on 2026-08-22 all 125 rows in the
+    # window were leads who had already had knocks 1-3 and were waiting out the
+    # 15-day gap before knock 4. They are the OLDEST by definition, so they sat at
+    # the front of the queue permanently and every tick returned an empty batch --
+    # while 293 rows (172 people) further back were due and unreachable. Knocks per
+    # day went 63 -> 35 -> 16 -> 1 with nothing erroring and nothing in the log.
+    #
+    # So the due-ness clocks are applied HERE, in SQL, and LIMIT now bounds the
+    # leads we could actually send to. Oldest-first is kept, because that is the
+    # right fairness rule AMONG due leads -- it was only ever wrong as a prefilter.
+    #
+    # The Python loop below still re-checks everything and remains the authority;
+    # this is a candidate filter, not a replacement for it. The retry bookkeeping in
+    # particular is not modelled here, which is why LIMIT still takes headroom.
+    days_after = [step[0] for step in KNOCK_SCHEDULE]
+    gap_days = [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))]
+    max_knocks = min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY)
+
+    rows = db.q(r"""
+        WITH ks AS (
+            -- Phone-keyed, exactly like knock_state(): one human is routinely
+            -- several lead rows, and a knock reaches the person, not the row.
+            SELECT l2.phone,
+                   count(*) FILTER (WHERE ml.ok)   AS sent,
+                   max(ml.ts) FILTER (WHERE ml.ok) AS last_at
+            FROM message_log ml
+            JOIN leads l2 ON l2.id = ml.lead_id
+            WHERE ml.direction = 'out' AND ml.msg_type LIKE 'knock\_%%'
+            GROUP BY l2.phone
+        )
         SELECT l.*, COALESCE(l.selldo_response_at, l.created_at) AS anchor
         FROM leads l
         LEFT JOIN conversations c ON c.lead_id = l.id
+        LEFT JOIN ks ON ks.phone = l.phone
         WHERE l.phone IS NOT NULL
           AND NOT l.suppressed
           -- Ten refusals and we stopped. Excluded here rather than checked per
@@ -203,8 +236,20 @@ def due(limit=None):
           -- task 18: ANY inbound ends the sequence, permanently.
           AND l.last_inbound_at IS NULL
           AND c.outcome IS NULL
+          AND COALESCE(ks.sent, 0) < %s
+          -- Clock 1: time since they signed up. Array is 1-based, hence sent+1;
+          -- a subscript past the end yields NULL, which fails the comparison and
+          -- drops the row -- the same answer the loop gives for a finished journey.
+          AND now() >= COALESCE(l.selldo_response_at, l.created_at)
+                     + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval
+          -- Clock 2: time since we last knocked. A backlog lead must not receive
+          -- the whole sequence in four days.
+          AND (ks.last_at IS NULL
+               OR now() >= ks.last_at
+                         + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval)
         ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
-        LIMIT %s""", (campaigns, limit * 5)) or []
+        LIMIT %s""",
+                (campaigns, max_knocks, days_after, gap_days, limit * 5)) or []
 
     now = datetime.now(timezone.utc)
     out = []
