@@ -1109,6 +1109,20 @@ FATIGUE_MAX_PER_WINDOW = int(os.environ.get("FATIGUE_MAX_PER_WINDOW", "2"))
 SEND_ENABLED = _b(os.environ.get("SEND_ENABLED", "false"))
 
 MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
+
+# SLOTS HELD BACK FROM PROACTIVE SENDS, so a marketing burst can never starve a
+# live conversation.
+#
+# 2026-08-22: the knock backlog used exactly 100 of 100 slots in one hour. Two
+# buyers who had just read their message and asked for details -- Sanjay Agarwalla
+# and Vivek Chordia -- arrived at slot 101 and were dropped with no reply and no
+# log row. Knocks now stop at MAX_SENDS_PER_HOUR minus this, and the remainder
+# belongs to whoever is actually typing.
+#
+# 20 of 100 is deliberately generous: replies are a small fraction of volume (19
+# inbound messages that whole day against 172 knocks), so the reserve costs the
+# knock engine almost nothing and buys a guarantee.
+REPLY_RESERVE_PER_HOUR = int(os.environ.get("REPLY_RESERVE_PER_HOUR", "20"))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
 # (250 -> 1K -> 10K). Acks don't count -- they're replies inside an open

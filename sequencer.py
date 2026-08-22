@@ -39,6 +39,15 @@ import jobs
 
 log = logging.getLogger("sequencer")
 
+
+class RateCapped(Exception):
+    """The hourly send allowance is used up and this message deserves a retry.
+
+    Raised only for REACTIVE sends -- an answer to somebody who just wrote to us.
+    Letting it out of the one door and up to the job runner is what turns "the
+    buyer never got a reply" into "the buyer got a reply a few minutes late".
+    """
+
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
@@ -128,8 +137,29 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None,
         db.log_msg(log_lead_id or lead["id"], "out", msg_type, body, ok=False,
                    detail=f"blocked:{reason}")
         return False
-    if not wati.rate_ok():
+    # THE HOURLY CAP USED TO DROP MESSAGES SILENTLY AND FOR GOOD.
+    #
+    # This branch wrote one setting and returned False. No message_log row -- alone
+    # among every refusal in this system, all of which log -- so the only trace of a
+    # lost message was a timestamp that the next loss overwrote. And the inbound job
+    # was marked done, so nothing retried: the buyer's question was gone.
+    #
+    # 2026-08-22 that cost two live buyers their reply. See config.REPLY_RESERVE_PER_HOUR
+    # for the reserve that should stop it happening; this is what happens if it does.
+    if not wati.rate_ok(msg_type):
         db.set_setting("rate_capped_at", now_ist().isoformat())
+        db.log_msg(log_lead_id or lead["id"], "out", msg_type, body, ok=False,
+                   detail=f"blocked:rate_capped:{wati.sends_last_hour()} sent in the "
+                          f"last hour (cap {config.MAX_SENDS_PER_HOUR}, reserve "
+                          f"{config.REPLY_RESERVE_PER_HOUR})")
+        # RAISED, not returned, for a reply to a live person. The caller is a queued
+        # job; an exception sends it back for retry, so the answer arrives late
+        # instead of never. A proactive knock needs no exception -- it stays due and
+        # the next tick picks it up -- and raising there would abort the whole batch.
+        # Same test the reserve uses, so the two can never disagree about which
+        # messages are worth retrying.
+        if not wati.is_business_initiated(msg_type):
+            raise RateCapped(f"{msg_type}: hourly cap reached, retry shortly")
         return False
 
     # No send jitter. It was defensive cover for Wasender -- an unofficial
