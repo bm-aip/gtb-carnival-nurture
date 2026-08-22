@@ -314,6 +314,32 @@ CREATE TABLE IF NOT EXISTS journey_resets (
 );
 CREATE INDEX IF NOT EXISTS idx_resets_phone ON journey_resets (phone);
 
+-- Sell.do stage movement, so "did our knock move this lead forward" is answerable.
+--
+-- selldo.poll_project OVERWRITES leads.selldo_status on every change, which meant
+-- the before-state was destroyed the instant presales advanced someone. The counts
+-- on 2026-08-22 were unreadable for exactly this reason: we could see 94 leads
+-- sitting in a qualified stage and had no way to know which of them got there
+-- after we knocked.
+--
+-- knocks_before and last_knock_at are SNAPSHOTTED HERE rather than joined later.
+-- Two reasons: the attribution query stays a simple read of one table, and the
+-- answer survives message_log being pruned or wiped (/admin/reset-test deletes a
+-- handset's whole history, which would silently rewrite the past otherwise).
+CREATE TABLE IF NOT EXISTS selldo_stage_history (
+    id BIGSERIAL PRIMARY KEY,
+    lead_id INT NOT NULL REFERENCES leads(id),
+    project TEXT NOT NULL,
+    selldo_lead_id TEXT,
+    from_stage TEXT,                   -- NULL on the first sighting of a lead
+    to_stage TEXT,
+    knocks_before INT NOT NULL DEFAULT 0,
+    last_knock_at TIMESTAMPTZ,
+    changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_stage_hist_lead ON selldo_stage_history (lead_id);
+CREATE INDEX IF NOT EXISTS idx_stage_hist_changed ON selldo_stage_history (changed_at);
+
 -- Joins a delivery callback back to the send that caused it.
 ALTER TABLE message_log ADD COLUMN IF NOT EXISTS provider_msg_id TEXT;
 CREATE INDEX IF NOT EXISTS idx_msglog_provider ON message_log (provider_msg_id);
