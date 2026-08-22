@@ -503,6 +503,85 @@ def admin_optout():
     return jsonify({"ok": True, "new": created, "leads_suppressed": affected})
 
 
+# The one number allowed to be wiped. HARDCODED, not a request parameter.
+#
+# This endpoint deletes message history, which is the one thing db.py's fatigue
+# design says must never be forgeable. That is acceptable for a test handset and
+# unacceptable for anyone else, and the only guarantee worth having is that the
+# route CANNOT be pointed at a customer -- not a convention, not a code review.
+TEST_PHONE = "919789988124"
+
+
+@app.route("/admin/reset-test", methods=["GET", "POST"])
+@auth
+def admin_reset_test():
+    """Wipe the test handset back to a cold stranger. Browser-friendly (GET).
+
+    Clears everything that makes the bot remember or refuse this number, then
+    guarantees a lead row exists with an allow-listed campaign so the next
+    WhatsApp message is answered as a first contact.
+    """
+    phone = meta.normalize_phone(request.args.get("phone")
+                                 or (request.get_json(silent=True) or {}).get("phone")
+                                 or TEST_PHONE)
+    if phone != TEST_PHONE:
+        return jsonify({"ok": False,
+                        "detail": f"refused: this route only resets {TEST_PHONE}"}), 403
+
+    ids = [r["id"] for r in (db.q("SELECT id FROM leads WHERE phone=%s",
+                                  (phone,)) or [])]
+    out = {"phone": phone, "lead_ids": ids}
+
+    if ids:
+        # conversations first: it is the FK child holding the checklist, the asked
+        # map and the outcome. Dropping the row is what makes get_or_create build a
+        # fresh one on the next inbound.
+        out["conversations"] = db.x("DELETE FROM conversations WHERE lead_id = ANY(%s)",
+                                    (ids,))
+        out["message_log"] = db.x("DELETE FROM message_log WHERE lead_id = ANY(%s)",
+                                  (ids,))
+        out["delivery"] = db.x("DELETE FROM message_delivery WHERE lead_id = ANY(%s)",
+                               (ids,))
+        out["leads_reset"] = db.x("""UPDATE leads
+                                        SET wa_state='queued', suppressed=FALSE,
+                                            send_attempts=0, selected_date=NULL,
+                                            m1_sent_at=NULL, m2_sent_at=NULL,
+                                            m3_sent_at=NULL,
+                                            last_inbound_at=NULL,
+                                            last_inbound_text=NULL,
+                                            knock_lost_at=NULL,
+                                            updated_at=now()
+                                      WHERE id = ANY(%s)""", (ids,))
+
+    # Phone-keyed gates. These survive any lead row, so they are cleared by phone.
+    out["optouts"] = db.x("DELETE FROM optouts WHERE phone=%s", (phone,))
+    out["journeys"] = db.x("DELETE FROM knock_journeys WHERE phone=%s", (phone,))
+    out["queued_jobs"] = db.x("DELETE FROM job_queue WHERE phone=%s", (phone,))
+    out["delivery_by_phone"] = db.x("DELETE FROM message_delivery WHERE phone=%s",
+                                    (phone,))
+
+    # A lead row must exist with an allow-listed campaign, or worker._handle_inbound
+    # drops the message as unattributed / out_of_scope and you get silence instead
+    # of a test.
+    campaigns = config.SELLDO["RON"]["campaigns"]
+    campaign = campaigns[0] if campaigns else None
+    if ids:
+        db.x("UPDATE leads SET campaign=%s, updated_at=now() WHERE id = ANY(%s)",
+             (campaign, ids))
+        out["lead_created"] = False
+    else:
+        db.x("""INSERT INTO leads (project, selldo_lead_id, name, phone, campaign,
+                                   inflow, wa_state)
+                VALUES ('RON', %s, 'Test Handset', %s, %s, 'direct', 'queued')
+                ON CONFLICT (project, selldo_lead_id) DO NOTHING""",
+             (f"TEST-{phone}", phone, campaign))
+        out["lead_created"] = True
+
+    out["campaign"] = campaign
+    out["ok"] = True
+    return jsonify(out)
+
+
 @app.route("/api/delivery")
 @auth
 def api_delivery():
