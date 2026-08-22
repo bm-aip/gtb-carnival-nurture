@@ -319,9 +319,26 @@ def _check_poller_wedged():
     invisible from the outside -- APScheduler logs "maximum number of running
     instances reached" and carries on looking healthy.
     """
+    # NO HEARTBEAT IS NOT THE SAME AS NO PROBLEM.
+    #
+    # This originally returned None whenever the heartbeat was missing, reasoning
+    # "never run yet, nothing to compare against". That made a poller which hangs on
+    # its FIRST run after a deploy permanently invisible: it never writes a
+    # heartbeat, so the check that exists to catch it stays silent forever. The bug
+    # this whole module was written to remove, reintroduced inside the fix for it.
+    #
+    # So when the heartbeat is absent we measure from process start instead. The
+    # poller runs every minute; if the service has been up far longer than
+    # POLLER_STALE_MIN and no run has ever finished, that is a wedge, not a warm-up.
     raw = db.get_setting(_HB_META_LEADS)
+    since = "completed"
     if not raw:
-        return None                      # never run yet; nothing to compare against
+        raw = db.get_setting("app_boot_at")
+        since = "started"
+        if not raw:
+            # Pre-dates the boot marker (first deploy of this code). Nothing
+            # trustworthy to measure against; the next boot supplies one.
+            return None
     try:
         last = datetime.fromisoformat(raw)
     except ValueError:
@@ -332,10 +349,18 @@ def _check_poller_wedged():
     if _muted("poller"):
         return f"meta poller stale {int(age_min)}m (muted)"
 
+    detail = (f"The Meta lead poller has not completed for {int(age_min)} minutes. "
+              f"Form submissions are probably not being picked up.")
+    if since == "started":
+        # Measured from boot, not from a previous success. Say so -- "has never
+        # completed" is a different and worse fact than "has stopped completing".
+        detail = (f"The Meta lead poller has NEVER completed since the service "
+                  f"started {int(age_min)} minutes ago. Form submissions are "
+                  f"probably not being picked up at all.")
+
     ok = _alert("poller",
                 "NEW LEADS MAY HAVE STOPPED ARRIVING",
-                f"The Meta lead poller has not completed for {int(age_min)} minutes. "
-                f"Form submissions are probably not being picked up.",
+                detail,
                 "A poll run is hung and holding its slot. Redeploy the service to "
                 "clear it, then watch that this alert does not come back.")
     if ok:
