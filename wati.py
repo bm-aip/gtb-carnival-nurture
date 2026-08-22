@@ -74,10 +74,11 @@ def send_template(phone, template_name, params=None, broadcast=None):
             # that was only Wati being slow. Nothing here is urgent to the second.
             json=payload, timeout=60)
         ok = r.status_code in (200, 201) and _result_ok(r)
-        # 1000, not 300: the provider message id lives in this body and
-        # extract_msg_id() needs it intact to join delivery callbacks back to the
-        # send. At 300 chars Wati's echo of the message could truncate first.
-        return ok, r.text[:1000]
+        # 2000, raised from 1000 on 2026-08-22. The id no longer DEPENDS on this
+        # -- extract_msg_id() lifts it out of a partial body with a regex -- but a
+        # response we can still read as JSON is worth having when diagnosing a
+        # failure, and Wati echoes the contact record after the message.
+        return ok, r.text[:2000]
     except Exception as e:
         return False, str(e)
 
@@ -92,10 +93,11 @@ def send_text(phone, body):
             headers=_auth_headers(),
             params={"messageText": body}, timeout=60)
         ok = r.status_code in (200, 201) and _result_ok(r)
-        # 1000, not 300: the provider message id lives in this body and
-        # extract_msg_id() needs it intact to join delivery callbacks back to the
-        # send. At 300 chars Wati's echo of the message could truncate first.
-        return ok, r.text[:1000]
+        # 2000, raised from 1000 on 2026-08-22. The id no longer DEPENDS on this
+        # -- extract_msg_id() lifts it out of a partial body with a regex -- but a
+        # response we can still read as JSON is worth having when diagnosing a
+        # failure, and Wati echoes the contact record after the message.
+        return ok, r.text[:2000]
     except Exception as e:
         return False, str(e)
 
@@ -474,6 +476,27 @@ def extract_msg_id(detail):
     """
     if not detail:
         return None
+
+    # REGEX FIRST, BECAUSE THE JSON IS USUALLY BROKEN BY THE TIME WE SEE IT.
+    #
+    # 2026-08-22: every one of 204 sends in a day stored provider_msg_id NULL. The
+    # id was sitting in plain sight inside `detail` -- but `detail` is r.text[:1000]
+    # (see send_template / send_text), and a JSON document cut off mid-string will
+    # not parse, so json.loads raised and this returned None every single time.
+    #
+    # The truncation limit had already been raised once, 300 -> 1000, by someone who
+    # spotted this exact risk and wrote "extract_msg_id() needs it intact". It was
+    # still short: Wati echoes the whole contact record after the message. Raising
+    # the number again would be the same guess with a bigger number, so instead this
+    # no longer depends on the body being complete.
+    #
+    # A WhatsApp message id is a `wamid.` token with a fixed alphabet, which makes it
+    # safe to lift out of a partial document. Tried before json.loads because a
+    # truncated body is the common case, not the exception.
+    m = re.search(r'"whatsappMessageId"\s*:\s*"(wamid\.[A-Za-z0-9+/=_-]+)"', detail)
+    if m:
+        return m.group(1)
+
     try:
         j = json.loads(detail)
     except Exception:
