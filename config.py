@@ -84,9 +84,25 @@ DIRECT_INBOUND_CAMPAIGN = os.environ.get("DIRECT_INBOUND_CAMPAIGN", "direct_what
 _DEFAULT_PREFILLS = [
     r"^\s*h(i+|ey|ello)[\s!.,]*$",
     r"^\s*hi[\s!.,]*i?\s*need more details about republic of nature[\s!.]*$",
-    r"^\s*need more details[\s!.]*$",
     r"^\s*kindly share more details about republic of nature.*$",
 ]
+
+# OUR OWN TEMPLATE BUTTONS. Pressing one is ENGAGEMENT, never silence.
+#
+# `ron_nurture_01/02/03/06` all carry a "Need More Details" button, and WhatsApp
+# sends the label back as an ordinary inbound message. An earlier version of the
+# prefill list above contained `^\s*need more details[\s!.]*$`, which would have
+# classified every one of those button presses as "this person typed nothing" and
+# kept knocking somebody who had just raised their hand.
+#
+# Measured 2026-08-22: 12 people sent exactly "Need More Details", 3 of them
+# immediately after we sent them a template, and several went on to answer
+# questions. The pattern is gone, and this list is the belt to that braces -- a
+# label here can never be read as a prefill, whatever the patterns say later.
+TEMPLATE_BUTTON_LABELS = [b.strip().lower() for b in os.environ.get(
+    "TEMPLATE_BUTTON_LABELS",
+    "Need More Details;;Plan a visit;;Plan a Site Visit;;Stop updates"
+).split(";;") if b.strip()]
 _prefill_env = os.environ.get("CTWA_PREFILL_PATTERNS", "").strip()
 CTWA_PREFILL_PATTERNS = ([p.strip() for p in _prefill_env.split(";;") if p.strip()]
                          if _prefill_env else _DEFAULT_PREFILLS)

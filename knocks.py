@@ -247,7 +247,14 @@ _DUE_FROM_WHERE = """
                        SELECT 1 FROM message_log im
                         WHERE im.lead_id = l.id
                           AND im.direction = 'in' AND im.msg_type = 'inbound'
-                          AND NOT (COALESCE(im.body, '') ~* ANY(%s)))
+                          -- Engaged if they typed something that is not a prefill,
+                          -- OR pressed one of our own template buttons. WhatsApp
+                          -- returns a button label as an ordinary inbound, so
+                          -- without the second clause a person tapping "Need More
+                          -- Details" on our nurture template reads as silence and
+                          -- keeps getting knocked after raising their hand.
+                          AND (NOT (COALESCE(im.body, '') ~* ANY(%s))
+                               OR lower(trim(COALESCE(im.body, ''))) = ANY(%s)))
           ))
           AND c.outcome IS NULL
           AND COALESCE(ks.sent, 0) < %s
@@ -273,6 +280,7 @@ def _due_params():
     return (campaigns,
             QUIET_DAYS,
             config.CTWA_PREFILL_PATTERNS,
+            config.TEMPLATE_BUTTON_LABELS,
             min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY),
             [step[0] for step in KNOCK_SCHEDULE],
             [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))])
