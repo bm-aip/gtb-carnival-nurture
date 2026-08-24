@@ -1141,14 +1141,48 @@ def _price_problem(reply, chunks, cited, message):
                           for c in (chunks or []) if c.get("id") in set(cited or []))
     buyer_figures = _money_figures(message or "")
 
+    # THE FIVE APPROVED STARTING PRICES ARE ALWAYS TRACEABLE.
+    #
+    # They are config.CONFIG_FLOORS -- the same figures the code already uses to
+    # decide whether a budget qualifies -- so quoting one is never an invention.
+    #
+    # Without this, a price answer depended on whether retrieval happened to return
+    # the chunk holding that number. Same question, different answer, no rule behind
+    # it: measured 2026-08-24, the bot quoted these five 135 times and deferred a
+    # price to a human 9 times, and nothing in the system decided which. The owner
+    # asked for consistency in the answering behaviour; this is where the randomness
+    # was coming from.
+    approved = {f"{floor / 10000000:g}" for _label, floor in config.CONFIG_FLOORS}
+
     from_corpus = False
+    quoted = set()
     for fig in figures:
         if fig in buyer_figures:
             continue                       # their number, handed back to them
+        if fig in approved:
+            from_corpus = True
+            quoted.add(fig)
+            continue
         if fig in _money_figures(cited_text) or fig in cited_text:
             from_corpus = True
+            quoted.add(fig)
             continue
         return f"reply contained an unsupported price figure ({fig})"
+
+    # NEVER A MENU. One question, one price.
+    #
+    # Owner 2026-08-24: "dont just hand them price of all the units without knowing
+    # what they are looking for - this is also a conversation where u can get enough
+    # of their inputs".
+    #
+    # A real buyer asked "Project price", was handed apartments from 1.28 Cr AND
+    # villas from 3.94 Cr in one reply, and answered "Very expensive sorry" seconds
+    # later. Two prices, no configuration learned, no budget learned, and a buyer
+    # talked out of the project by the larger number. The rules document tells the
+    # bot to ask which home first; this makes it so.
+    if len(quoted) > 1:
+        return (f"reply quoted {len(quoted)} prices at once "
+                f"({', '.join(sorted(quoted))}) -- ask which home first")
 
     if from_corpus and not _STARTING.search(reply or ""):
         return "quoted a price without saying from/starting/onwards"
