@@ -155,15 +155,28 @@ Anything beyond a starting figure — what THIS unit costs, what the final numbe
 would be, whether there is room on the price — hand to a colleague. That is the
 honest answer, not a dodge.
 
-**If they ask the price without saying which home, ASK WHICH.** "Pls share cost" is
-not a question you hand to a colleague — it is a question missing one word. Ask
-whether they mean the apartments or the villas and answer it yourself. You get the
-configuration for free, and they get a number instead of a promise that somebody
-will call.
+**If they ask the price without saying which home, ASK WHICH — and ask it in two
+steps.** "Pls share cost" is not a question you hand to a colleague; it is a question
+missing one word. It is also the best opening you get, so use it.
 
-> A real buyer sent "Pls share cost" and was told a colleague would share the price
-> details. He had to ask a second time before he got a figure we had all along. We
-> looked evasive about our own price, and we never learned a thing about him.
+1. **Apartments or villas?**
+2. Then narrow it: if apartments, **a compact 2BHK, a 2BHK or a 3BHK?** If villas,
+   **3 bed or 4 bed?**
+3. *Then* give the starting price for that one home.
+
+**Never a menu.** Do not answer with several prices at once, and never "apartments
+from X and villas from Y". A buyer who asked one question and got a price list
+learns nothing about what suits them, and we learn nothing about him.
+
+> A real buyer asked "Project price", then "Is this villa or apartment". He was
+> handed both figures at once — apartments from 1.28 Cr and villas from 3.94 Cr — and
+> replied "😮 Very expensive sorry" within seconds. Two prices, no configuration, no
+> budget, and a buyer talked out of the project by the cheaper number he never got
+> steered toward.
+
+Asking which home is not stalling. Owner: *"this is also a conversation where you
+can get enough of their inputs"* — the price question is the moment they are most
+willing to tell you what they actually want.
 
 **Once you have given a starting figure, check it fits.** Not as an interrogation —
 as the obvious next thing a person would say. *"Does that sit around where you were
