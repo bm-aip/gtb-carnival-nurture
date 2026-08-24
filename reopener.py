@@ -115,11 +115,15 @@ def due(limit=None):
     rows = db.q("""
         SELECT c.id AS conv_id, c.checklist, c.last_turn_at,
                l.id, l.phone, l.name, l.project, l.campaign,
-               (SELECT count(*) FROM message_log r
-                 WHERE r.lead_id = l.id AND r.direction='out'
+               -- PHONE-KEYED, like knocks.knock_state(). `leads` is UNIQUE
+               -- (project, selldo_lead_id), so the schema GUARANTEES one human can
+               -- be several rows; counting per row counts the rows, and the message
+               -- reaches the person.
+               (SELECT count(*) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
+                 WHERE l2.phone = l.phone AND r.direction='out'
                    AND r.msg_type = %s AND r.ok)              AS tries,
-               (SELECT max(r.ts) FROM message_log r
-                 WHERE r.lead_id = l.id AND r.direction='out'
+               (SELECT max(r.ts) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
+                 WHERE l2.phone = l.phone AND r.direction='out'
                    AND r.msg_type = %s AND r.ok)              AS last_try
         FROM conversations c
         JOIN leads l ON l.id = c.lead_id
@@ -145,8 +149,8 @@ def due(limit=None):
           -- the qualifier owns them again and a scheduled template would talk
           -- over a live person, which is the rule task 18 exists to protect.
           AND l.last_inbound_at <= COALESCE(
-                (SELECT max(r.ts) FROM message_log r
-                  WHERE r.lead_id = l.id AND r.direction='out'
+                (SELECT max(r.ts) FROM message_log r JOIN leads l3 ON l3.id = r.lead_id
+                  WHERE l3.phone = l.phone AND r.direction='out'
                     AND r.msg_type = %s AND r.ok),
                 l.last_inbound_at)
           AND c.last_turn_at < now() - (%s || ' days')::interval
@@ -158,7 +162,16 @@ def due(limit=None):
 
     now = datetime.now(timezone.utc)
     out = []
+    # PHONE-KEYED WITHIN THE BATCH TOO. The subqueries above read what has already
+    # been SENT, so two rows for one person both read zero tries and both qualify.
+    # On the first live run 916374295387 received two re-opens one second apart --
+    # "the 3BHK apartment" and "coming to see the 2BHK apartment" -- because that
+    # phone has two lead rows. knocks.due() has carried this same guard since
+    # lavanya was messaged twice on 2026-08-02; this lane needed it too.
+    claimed = set()
     for r in rows:
+        if r["phone"] in claimed:
+            continue
         tries = r.get("tries") or 0
         if tries >= REOPEN_MAX:
             continue
@@ -176,6 +189,7 @@ def due(limit=None):
         if (now - anchor).days < wait_days:
             continue
         out.append((r, tries, topic))
+        claimed.add(r["phone"])
         if len(out) >= limit:
             break
     return out
