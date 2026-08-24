@@ -187,7 +187,18 @@ def send_one(lead_row, tries, topic):
     if not template:
         log.warning("no REOPENER_TEMPLATE configured")
         return False
-    params = [knocks._first_name(lead_row.get("name")), topic]
+    # NAMED PARAMETERS, NOT NUMBERED. This template is not like the knocks.
+    #
+    # Verified against the live Wati account 2026-08-24:
+    #   t7_reopener_newac         custom_params: name, topic
+    #   ron_nurture_01_..._newac  custom_params: 1
+    #
+    # One account, two conventions. Passing a list sends them as "1" and "2", and
+    # Wati answers "Check your template, it cannot have typos or blank text" --
+    # which names neither the parameter nor the problem. Every one of the first 17
+    # re-opens failed that way. A dict makes wati.send_template use the keys as
+    # parameter names, which is what this template declares.
+    params = {"name": knocks._first_name(lead_row.get("name")), "topic": topic}
     lead = dict(lead_row)
     lead["id"] = lead_row["id"]
     ok = sequencer._send(lead, MSG_TYPE, template=template, params=params,
