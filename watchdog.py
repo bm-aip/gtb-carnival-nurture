@@ -368,6 +368,55 @@ def _check_poller_wedged():
     return f"meta poller stale {int(age_min)}m"
 
 
+def _check_unbacked_promises():
+    """The bot mentioned a person, and no card was ever sent. THE LOOSE NET.
+
+    handoff.route() force-escalates when a reply MATCHES a promise pattern, which
+    handles the phrasings we have seen. It cannot handle the ones we have not: every
+    round of widening that regex against the live corpus found another wording --
+    "let me get someone", "happy to have someone call you", "photos are on the way
+    from my colleague". A pattern over the model's own prose is never finished, and
+    this project already has a name for that ceiling: guards judge words, not facts.
+
+    So this asks a deliberately sloppier question -- did we mention a human at all,
+    and did anyone get told? -- and hands the answer to a person instead of acting on
+    it. A false positive costs one glance. A miss costs a buyer.
+    """
+    rows = db.q("""
+        SELECT DISTINCT l.phone, l.name, m.ts
+        FROM message_log m
+        JOIN leads l ON l.id = m.lead_id
+        LEFT JOIN conversations c ON c.lead_id = m.lead_id
+        WHERE m.direction='out' AND m.msg_type='qualifier_turn' AND m.ok
+          AND m.ts > now() - interval '48 hours'
+          AND m.body ~* '(colleague|our team|the team|someone|somebody|from my team)'
+          AND COALESCE(c.outcome,'') NOT IN
+              ('escalated','qualified','wants_sales','visit_booked')
+          AND NOT EXISTS (SELECT 1 FROM message_log h
+                           WHERE h.lead_id = m.lead_id
+                             AND h.msg_type LIKE 'handoff%%')
+        ORDER BY m.ts DESC""") or []
+    if not rows:
+        return None
+    if _muted("promises"):
+        return f"{len(rows)} unbacked promises (muted)"
+
+    who = ", ".join(str(r.get("phone") or "?") for r in rows[:5])
+    if len(rows) > 5:
+        who += f" +{len(rows) - 5} more"
+
+    ok = _alert("promises",
+                f"CHECK {len(rows)} BUYER(S) - we mentioned a person, nobody was told",
+                f"{who}. The bot referred to a colleague or the team in the last 48h "
+                f"and no handoff card exists for them.",
+                "Read these in the Wati inbox. If the bot promised contact, somebody "
+                "needs to make it -- the automatic escalation only catches wordings "
+                "we have seen before.")
+    if ok:
+        _mark_alerted("promises")
+    return f"{len(rows)} unbacked promises"
+
+
 def check():
     """One pass over every signal. Never raises -- a broken watchdog must
     not take the scheduler down with it, and each signal is independent so one
@@ -375,7 +424,7 @@ def check():
     found = []
     for fn in (_check_failed_jobs, _check_undelivered_cards, _check_queue_stalled,
                _check_nobody_contacted, _check_delivery_collapse,
-               _check_poller_wedged):
+               _check_poller_wedged, _check_unbacked_promises):
         try:
             r = fn()
             if r:
