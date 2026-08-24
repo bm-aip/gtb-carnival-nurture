@@ -29,6 +29,7 @@ The card content is identical either way — only the delivery channel changed.
 Flagged for the owner rather than silently substituted.
 """
 import logging
+import re
 import time
 
 import config
@@ -239,6 +240,48 @@ def _notify(phones, slots, kind, lead_id=None):
     return ok_any
 
 
+# A REPLY THAT COMMITS A HUMAN TO SOMETHING.
+#
+# Anchored on the promise, not on the topic: "someone will get back to you", "I'll
+# have a colleague send the brochure", "the team will call you".
+_WHO = r"(someone|somebody|a colleague|our team|the team|our sales|a member|somebody)"
+_DOES = (r"(get back|come back|reach out|call|contact|share|send|connect|"
+         r"be in touch|follow up|confirm)")
+_PROMISE = re.compile(
+    # "someone from our team will come back to you", "the team can share it"
+    _WHO + r".{0,40}\b(will|shall|can|would)\s+" + _DOES
+    # "I'll have someone come back", "let me have a colleague send it".
+    # The modal sits before `have`, not before the verb, so the branch above
+    # cannot see it -- "Let me have someone from our team come back to you on
+    # this" slipped through the first version of this guard and was only caught
+    # because the test swept every reply in the database rather than a sample.
+    # "I'll have someone come back", "let me get a colleague to call you",
+    # "happy to have someone call you". The modal sits before have/get/ask, so the
+    # branch above cannot see it.
+    + r"|(i'?ll|i will|let me|i can|we'?ll|we will|happy to|glad to)\s+"
+      r"(have|get|ask)\s+" + _WHO
+    # bare "they'll call you", "we'll get back to you"
+    + r"|\b(will|we'?ll|i'?ll|they'?ll|he'?ll|she'?ll)\s+" + _DOES
+      + r"\s+(to\s+)?you"
+    # "photos are on the way from my colleague"
+    + r"|on the way from (my|our)\s+(colleague|team)"
+    # A NAMED colleague: "let me have Vidya from our team come back to you".
+    # Lead 1458 asked for villa plot areas, was told exactly that, and Vidya was
+    # never notified -- he waited 23 hours. The branches above all key on a generic
+    # word for a person, and a regex cannot enumerate the team's names, so match the
+    # SHAPE instead: a capitalised first name followed by "from our/my team".
+    + r"|[A-Z][a-z]+\s+from\s+(our|my)\s+team", re.I)
+
+# Actions that already put a card in front of a person. Anything else leaves the
+# promise unbacked.
+_ACTIONS_THAT_NOTIFY = ("escalate", "qualified", "connect_sales", "visit_booked")
+
+
+def promises_human(reply):
+    """True if this reply commits a person to doing something."""
+    return bool(reply) and bool(_PROMISE.search(str(reply)))
+
+
 def route(lead, conv, decision):
     """Act on the qualifier's exit decision. Returns the outcome applied, or None.
 
@@ -247,6 +290,33 @@ def route(lead, conv, decision):
     (task 17). Treating it as an exit here would be the rev-1 mistake.
     """
     action = decision.get("action")
+
+    # IF WE SAID A PERSON WOULD DO SOMETHING, A PERSON GETS TOLD.
+    #
+    # The promise and the routing were independent: the model writes the reply AND
+    # picks the action, and it can do the first without the second. Measured over
+    # every conversation to 2026-08-24: 35 replies promised human contact, 6 had no
+    # card. Suresh (918667730429) was told "I'll have someone come back to you with
+    # the price" and nobody was ever told; Saranya (917871539284) was promised a
+    # villa brochure nine days before anyone noticed. Both read as answered from
+    # the buyer's side and as nothing at all from ours.
+    #
+    # So the words are now the trigger. Not because the model is untrustworthy, but
+    # because a promise to a buyer is an obligation on us, and an obligation should
+    # not depend on the same call also selecting the right enum.
+    #
+    # Escalate, rather than a gentler label: the buyer is owed contact, and that is
+    # what an escalation card asks for. `_promise_forced` marks it so the card and
+    # the logs say why it fired.
+    if action not in _ACTIONS_THAT_NOTIFY and promises_human(decision.get("reply")):
+        log.warning("lead %s: reply promised human contact but action was %r "
+                    "-- forcing escalation", lead["id"], action)
+        action = "escalate"
+        decision = dict(decision, action="escalate", _promise_forced=True,
+                        internal_note=(str(decision.get("internal_note") or "").strip()
+                                       + " | AUTO: the reply promised a person would "
+                                         "follow up, so this was escalated to make "
+                                         "sure somebody actually does.").strip(" |"))
 
     # A "qualified" WITH NO BUDGET, from someone who has been offered the call, is
     # describing exactly the person connect_sales exists for. Seen live: the buyer
