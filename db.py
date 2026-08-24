@@ -557,7 +557,18 @@ def mark_meta_refused(phone, event_ts=None, window_minutes=120):
                  FROM message_log ml JOIN leads l ON l.id = ml.lead_id
                 WHERE l.phone = %s
                   AND ml.direction = 'out' AND ml.ok
-                  AND ml.msg_type LIKE 'knock\\_%%'
+                  -- BOTH TEMPLATE LANES, not just knocks. The re-opener
+                  -- (reopener_t7) sends approved templates that Meta refuses the
+                  -- same way, and it was written long after this function.
+                  --
+                  -- Left out, a refused re-open stayed ok=TRUE: never retried with
+                  -- another wording, and it still burned one of that person's three
+                  -- tries, because reopener.due() counts tries on ok=TRUE. Five
+                  -- people were in exactly that state within hours of the lane
+                  -- going live. A message nobody received must not spend an
+                  -- allowance -- the same rule that put knocks here.
+                  AND (ml.msg_type LIKE 'knock\\_%%'
+                       OR ml.msg_type = 'reopener_t7')
                   AND ml.ts <= COALESCE(%s, now())
                   AND ml.ts > COALESCE(%s, now()) - (%s * interval '1 minute')
                 ORDER BY ml.ts DESC LIMIT 1""",
