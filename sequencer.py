@@ -237,6 +237,19 @@ def tick():
         log.exception("knock engine failed: %s", e)
         db.set_setting("knock_error", str(e)[:500])
 
+    # THE GHOST LANE. Separate from the knock engine on purpose: knocks are for
+    # people who never answered, this is for conversations that started and
+    # stopped. Its own try/except so a fault in one lane cannot silence the other
+    # -- the knock engine already spent a fortnight quiet without anyone noticing.
+    import reopener
+    try:
+        n = reopener.run()
+        if n:
+            log.info("re-opener sent %s", n)
+    except Exception as e:
+        log.exception("re-opener failed: %s", e)
+        db.set_setting("reopener_error", str(e)[:500])
+
 
 def _adopt_direct_inbound(phone, sender_name, opted_out=False, source=None):
     """A stranger messaged us. Make them a lead so the bot can answer.

@@ -295,7 +295,9 @@ def rate_ok(msg_type=None):
 # time, which is a different decision with its own consequences and nobody has asked
 # for it. Volume is ~3 a day, so the honest fix is to name them here rather than
 # quietly change what fatigue means.
-_COLD_FIRST_TOUCH = ("m1", "m2", "m3")
+# `reopener_t7` joins them: the 24h window is shut, so a re-open is an approved
+# template and a business-initiated conversation like any other knock.
+_COLD_FIRST_TOUCH = ("m1", "m2", "m3", "reopener_t7")
 
 
 def is_business_initiated(msg_type):
