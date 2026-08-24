@@ -497,7 +497,18 @@ def record_delivery(ev):
                      WHERE provider_msg_id=%s AND phone IS NOT NULL
                      ORDER BY id LIMIT 1""", (ev["provider_msg_id"],), one=True)
         if prior:
-            ev = dict(ev, phone=prior["phone"])
+            # IN PLACE, NOT A REBIND. This used to be `ev = dict(ev, phone=...)`,
+            # which fixed the phone for the INSERT below and left the caller's dict
+            # untouched -- and the caller needs it.
+            #
+            # app.py calls mark_meta_refused(ev.get("phone"), ...) immediately after
+            # this function returns, and mark_meta_refused opens with
+            # `if not phone: return None`. Wati drops the phone on every delivery
+            # callback, so that argument was None every single time and the refusal
+            # was never recorded. Measured 2026-08-24: 1,793 templateMessageFailed
+            # events in seven days, 0 knocks ever marked meta_refused, 0 retries.
+            # The whole retry-with-variants ladder was dead behind one rebind.
+            ev["phone"] = prior["phone"]
 
     lead = q("SELECT id FROM leads WHERE phone=%s ORDER BY updated_at DESC LIMIT 1",
              (ev.get("phone"),), one=True) if ev.get("phone") else None
