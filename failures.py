@@ -44,6 +44,7 @@ SYSTEM = "system"
 
 CEILING_RECIPIENT = "retry_ceiling_recipient"
 CEILING_TRANSIENT = "retry_ceiling_transient"
+CEILING_BURST = "retry_ceiling_burst"
 
 # Order of evaluation matters and is not alphabetical. SYSTEM is checked before
 # TRANSIENT because "Message failed to send because more than 24 hours have
@@ -171,6 +172,28 @@ def counts(phone, days=None):
     return out
 
 
+def burst_count(phone, msg_type):
+    """Failed attempts of THIS message type to THIS phone since it last worked.
+
+    Deliberately blind to fail_class. Every class-aware ceiling above answers
+    "should we give up on this person", which is a judgement and can be wrong in
+    a way that costs a buyer. This one answers a narrower question -- "are we in
+    a loop" -- and the answer does not depend on having classified anything
+    correctly.
+    """
+    if not phone or not msg_type:
+        return 0
+    since = last_delivered_at(phone)
+    r = db.q("""SELECT count(*) AS n
+                  FROM message_log ml JOIN leads l ON l.id = ml.lead_id
+                 WHERE l.phone = %s AND ml.direction='out' AND ml.ok = FALSE
+                   AND ml.msg_type = %s
+                   AND ml.ts > now() - (%s * interval '1 day')
+                   AND (%s IS NULL OR ml.ts > %s)""",
+             (phone, msg_type, config.RETRY_WINDOW_DAYS, since, since), one=True)
+    return (r or {}).get("n") or 0
+
+
 def check(phone, msg_type=None, project=None):
     """(allowed, reason) for the retry ceiling.
 
@@ -186,7 +209,26 @@ def check(phone, msg_type=None, project=None):
         return False, CEILING_RECIPIENT
     if c.get(TRANSIENT, 0) >= config.RETRY_MAX_TRANSIENT:
         return False, CEILING_TRANSIENT
-    # SYSTEM deliberately absent. No ceiling, by design.
+    # SYSTEM deliberately absent from the CLASS ceilings. No ceiling, by design:
+    # our own misconfiguration must never discard a buyer.
+    #
+    # THE BACKSTOP, added 2026-08-25. "No ceiling on system failures" was read by
+    # the reopener lane as "send forever", and lead 801 received the same template
+    # 1,178 times in 32 hours -- every one refused with "Meta has restricted
+    # marketing messages to US recipients", which contains "restrict" and is
+    # therefore SYSTEM, therefore uncapped.
+    #
+    # Both halves of that policy are right and they were never in conflict:
+    #
+    #     do not give up on the PERSON   != keep hammering the SAME SEND
+    #
+    # So this cap is per (phone, msg_type) and class-agnostic. The lead stays
+    # alive, every other lane may still reach them, and one send that keeps being
+    # refused stops after RETRY_MAX_BURST attempts instead of forever. It is last
+    # because it is the widest, and it exists so the NEXT unrecognised refusal
+    # costs five messages rather than one thousand.
+    if msg_type and burst_count(phone, msg_type) >= config.RETRY_MAX_BURST:
+        return False, CEILING_BURST
     return True, None
 
 
@@ -205,4 +247,5 @@ def rollup(days=7):
     return {"window_days": days, "counts": out, "total": sum(out.values()),
             "limits": {"recipient": config.RETRY_MAX_RECIPIENT,
                        "transient": config.RETRY_MAX_TRANSIENT,
-                       "system": None}}
+                       "system": None,
+                       "burst_per_msg_type": config.RETRY_MAX_BURST}}

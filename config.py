@@ -1040,6 +1040,14 @@ RETRIEVE_OVERFETCH = int(os.environ.get("RETRIEVE_OVERFETCH", "40"))
 RETRY_MAX_RECIPIENT = int(os.environ.get("RETRY_MAX_RECIPIENT", "3"))
 RETRY_MAX_TRANSIENT = int(os.environ.get("RETRY_MAX_TRANSIENT", "6"))
 RETRY_WINDOW_DAYS = int(os.environ.get("RETRY_WINDOW_DAYS", "30"))
+# RETRY_MAX_BURST -- the class-agnostic backstop. How many times one message type
+# may fail to one phone, since that phone last received anything, before that send
+# stops being retried. Applies to EVERY failure class including SYSTEM, which the
+# class ceilings deliberately leave uncapped.
+#
+# Five, because three is within the range of ordinary transient noise and a
+# thousand is what happened on 2026-08-25 without it.
+RETRY_MAX_BURST = int(os.environ.get("RETRY_MAX_BURST", "5"))
 
 # --- Staff cards: retry the template before the fallback (2026-08-19) ---------
 #

@@ -29,8 +29,11 @@ WHAT STOPS A RE-OPEN, in order:
   * no context               -- nothing to put in {{2}}; not our lane
   * a terminal outcome       -- they are with a human, or we know the answer
   * they came back           -- any inbound after the last re-open ends the lane
-  * REOPEN_MAX tries         -- then dormant, and dormant is silent forever
-  * sendgate.check()         -- master switch, pause, opt-out, retry ceiling
+  * REOPEN_MAX tries         -- then dormant, and dormant is silent forever.
+                                Counted as ATTEMPTS, not deliveries -- see due().
+  * sendgate.check()         -- master switch, pause, opt-out, retry ceiling,
+                                and the class-agnostic burst cap added after the
+                                2026-08-25 runaway (failures.burst_check)
 
 The send goes through sequencer._send like everything else. One door.
 """
@@ -119,12 +122,24 @@ def due(limit=None):
                -- (project, selldo_lead_id), so the schema GUARANTEES one human can
                -- be several rows; counting per row counts the rows, and the message
                -- reaches the person.
+               -- ATTEMPTS, NOT DELIVERIES. `AND r.ok` used to be here and it
+               -- sent lead 801 the same template 1,178 times in 32 hours: every
+               -- send was refused by Meta ("marketing messages restricted to US
+               -- recipients"), so `tries` stayed 0, the REOPEN_MAX cap never bit,
+               -- and the lane re-picked them on every tick.
+               --
+               -- A delivery ladder counts successes. A RETRY CAP COUNTS ATTEMPTS.
+               -- The lesson from never-arrived-must-not-count -- "only count what
+               -- was really delivered" -- is exactly wrong for this counter.
                (SELECT count(*) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
                  WHERE l2.phone = l.phone AND r.direction='out'
-                   AND r.msg_type = %s AND r.ok)              AS tries,
+                   AND r.msg_type = %s)                       AS tries,
+               -- Spacing anchors on the last ATTEMPT for the same reason: anchored
+               -- on the last success it stayed NULL through 1,178 failures, fell
+               -- back to `last_turn_at` (days old), and every tick looked due.
                (SELECT max(r.ts) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
                  WHERE l2.phone = l.phone AND r.direction='out'
-                   AND r.msg_type = %s AND r.ok)              AS last_try
+                   AND r.msg_type = %s)                       AS last_try
         FROM conversations c
         JOIN leads l ON l.id = c.lead_id
         WHERE (
@@ -148,10 +163,13 @@ def due(limit=None):
           -- THEY CAME BACK. Any inbound after our last re-open ends this lane:
           -- the qualifier owns them again and a scheduled template would talk
           -- over a live person, which is the rule task 18 exists to protect.
+          -- Attempts again, not deliveries: with `AND r.ok` this COALESCE
+          -- returned the buyer's own timestamp during the runaway, and
+          -- `x <= x` is true, so the guard passed on a technicality every tick.
           AND l.last_inbound_at <= COALESCE(
                 (SELECT max(r.ts) FROM message_log r JOIN leads l3 ON l3.id = r.lead_id
                   WHERE l3.phone = l.phone AND r.direction='out'
-                    AND r.msg_type = %s AND r.ok),
+                    AND r.msg_type = %s),
                 l.last_inbound_at)
           AND c.last_turn_at < now() - (%s || ' days')::interval
           AND c.last_turn_at > now() - (%s || ' days')::interval
