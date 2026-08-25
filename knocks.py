@@ -47,12 +47,58 @@ log = logging.getLogger("knocks")
 QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 
 # (days_after_signup, config.KNOCK_TEMPLATES key)
+#
+# FIFTEEN DAYS, NOT TWENTY-FIVE. Owner, 2026-08-25. The visit invitation sat on
+# day 25 and had therefore NEVER BEEN SENT -- not once in the life of the system,
+# while t2 and t3 went out 83 and 80 times. Almost no journey survives 25 days
+# intact, so the one template whose job is asking for a site visit never fired.
+#
+# WHY THESE DAYS AND NOT TIGHTER. FATIGUE_MAX_PER_WINDOW is 2 per 7 days and
+# nothing can reset it. This ladder sits exactly on that ceiling -- 0+3, then
+# 3+8, then 8+15 -- so every step can actually go out. Compressing further, e.g.
+# (0, 2, 7, 14), puts three sends inside the first week: the third is silently
+# refused by the fatigue cap, so the sequence would look faster and deliver LESS.
+# The gaps are the schedule's own guardrail, not a preference.
+#
+# The order is unchanged and deliberate: three selling points, then the ask.
 KNOCK_SCHEDULE = [
     (0,  "t1_lifestyle"),
     (3,  "t2_location"),
-    (10, "t3_low_density"),
-    (25, "t6_visit"),
+    (8,  "t3_low_density"),
+    (15, "t6_visit"),
 ]
+
+# STEPS HELD BACK. Comma-separated KNOCK_SCHEDULE keys, e.g. "t1_lifestyle".
+#
+# WHY A PER-STEP HOLD AND NOT A PAUSE. Owner, 2026-08-25, after the first honest
+# measurement of the sequence: t1 woke 5.5% of 309 people, t2 2.4% of 83, t3 5.0%
+# of 80, and t6_visit had never been sent at all -- it sat on day 25 of a cycle
+# almost nobody survives. Moving the cycle to 15 days makes 72 people due for that
+# visit invitation at once.
+#
+# Sending those 72 asks alongside 127 more t1s would bury the only untested
+# template in the one we have just measured as weak, and the dashboard could not
+# tell the two apart afterwards. So t1 is held while the visit ask goes out alone.
+#
+# This is a SEQUENCING tool, not a kill switch: a held step blocks nobody's
+# journey permanently, it just stops NEW sends of that one step until the hold is
+# lifted. sendgate's pause remains the way to stop everything.
+KNOCK_STEPS_PAUSED = tuple(
+    x.strip() for x in os.environ.get("KNOCK_STEPS_PAUSED", "").split(",")
+    if x.strip())
+
+
+def _paused_step_positions():
+    """1-based positions of held steps, matching the SQL's `sent + 1` subscript.
+
+    Returned as a list so the same fact reaches the SQL candidate filter AND the
+    Python loop. Both must agree: due_count() is SQL-only and the watchdog alerts
+    when leads are due and nothing goes out, so a hold the count cannot see would
+    look exactly like a starving engine.
+    """
+    return [i + 1 for i, (_, key) in enumerate(KNOCK_SCHEDULE)
+            if key in KNOCK_STEPS_PAUSED]
+
 
 # Templates and the variables they actually declare in Wati, verified against the
 # live account 2026-08-02. A wrong parameter count is a failed send, so this is
@@ -268,11 +314,14 @@ _DUE_FROM_WHERE = """
           AND (ks.last_at IS NULL
                OR now() >= ks.last_at
                          + ((%s::int[])[COALESCE(ks.sent, 0) + 1] || ' days')::interval)
+          -- Held steps. Same 1-based subscript as the two clocks above, so the
+          -- count the watchdog reads and the batch the engine sends agree.
+          AND NOT (COALESCE(ks.sent, 0) + 1 = ANY (%s::int[]))
 """
 
 
 def _due_params():
-    """The four bind values _DUE_FROM_WHERE expects, or None if nothing is live."""
+    """The bind values _DUE_FROM_WHERE expects, or None if nothing is live."""
     campaigns = [c.lower() for c in config.SELLDO
                  .get(config.DIRECT_INBOUND_PROJECT, {}).get("campaigns") or []]
     if not campaigns:
@@ -283,7 +332,8 @@ def _due_params():
             config.TEMPLATE_BUTTON_LABELS,
             min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY),
             [step[0] for step in KNOCK_SCHEDULE],
-            [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))])
+            [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))],
+            _paused_step_positions())
 
 
 def due_count():
@@ -344,6 +394,10 @@ def due(limit=None):
         if sent >= len(KNOCK_SCHEDULE) or sent >= config.KNOCK_MAX_PER_JOURNEY:
             continue
         days_after, step_key = KNOCK_SCHEDULE[sent]
+        # The loop is the authority; the SQL above is a candidate filter. A held
+        # step is re-checked here so a stale query string can never send one.
+        if step_key in KNOCK_STEPS_PAUSED:
+            continue
         anchor = lead["anchor"]
         if anchor is None:
             continue
