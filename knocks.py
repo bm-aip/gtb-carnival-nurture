@@ -29,6 +29,7 @@ The last two are not re-implemented here. There is one door and this walks throu
 it like everything else.
 """
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -38,6 +39,12 @@ import fatigue
 import sequencer
 
 log = logging.getLogger("knocks")
+
+# How long an ad-tapper must have been silent before the ladder may treat them as
+# somebody who never spoke. Short enough that the lead is still warm, long enough
+# that nobody mid-conversation is interrupted -- their anchor is the tap itself, so
+# without this t1 would be due the moment they went quiet.
+QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 
 # (days_after_signup, config.KNOCK_TEMPLATES key)
 KNOCK_SCHEDULE = [
@@ -218,8 +225,37 @@ _DUE_FROM_WHERE = """
           -- lead so a lost number cannot occupy a slot in the batch forever.
           AND l.knock_lost_at IS NULL
           AND lower(trim(l.campaign)) = ANY(%s)
-          -- task 18: ANY inbound ends the sequence, permanently.
-          AND l.last_inbound_at IS NULL
+          -- task 18: ANY inbound ends the sequence, permanently -- UNLESS the only
+          -- thing that ever arrived was an ad prefill the buyer never typed.
+          --
+          -- 2026-08-22: 278 conversations were stalled with no outcome, and every
+          -- one of them was excluded here. 237 had opened with a click-to-WhatsApp
+          -- prefill ("Hi! Need more details about republic of nature.") and 253 had
+          -- answered nothing at all. A tap on an ad had bought them one reply and
+          -- then permanent silence. Owner's call: treat them as a lead who has not
+          -- spoken, because they have not.
+          --
+          -- THREE GUARDS, all required, so this can never talk over a live person:
+          --   * every inbound they have sent matches a prefill pattern in full
+          --   * they have answered nothing on the checklist
+          --   * they have been quiet for QUIET_DAYS -- someone who tapped an hour
+          --     ago may be mid-conversation, and their anchor makes t1 due at once
+          AND (l.last_inbound_at IS NULL OR (
+                   l.last_inbound_at < now() - (%s || ' days')::interval
+               AND c.checklist = '{}'::jsonb
+               AND NOT EXISTS (
+                       SELECT 1 FROM message_log im
+                        WHERE im.lead_id = l.id
+                          AND im.direction = 'in' AND im.msg_type = 'inbound'
+                          -- Engaged if they typed something that is not a prefill,
+                          -- OR pressed one of our own template buttons. WhatsApp
+                          -- returns a button label as an ordinary inbound, so
+                          -- without the second clause a person tapping "Need More
+                          -- Details" on our nurture template reads as silence and
+                          -- keeps getting knocked after raising their hand.
+                          AND (NOT (COALESCE(im.body, '') ~* ANY(%s))
+                               OR lower(trim(COALESCE(im.body, ''))) = ANY(%s)))
+          ))
           AND c.outcome IS NULL
           AND COALESCE(ks.sent, 0) < %s
           -- Clock 1: time since they signed up. Array is 1-based, hence sent+1;
@@ -242,6 +278,9 @@ def _due_params():
     if not campaigns:
         return None
     return (campaigns,
+            QUIET_DAYS,
+            config.CTWA_PREFILL_PATTERNS,
+            config.TEMPLATE_BUTTON_LABELS,
             min(len(KNOCK_SCHEDULE), config.KNOCK_MAX_PER_JOURNEY),
             [step[0] for step in KNOCK_SCHEDULE],
             [_min_gap_days(i) for i in range(len(KNOCK_SCHEDULE))])
