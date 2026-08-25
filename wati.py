@@ -258,8 +258,16 @@ def sends_last_hour():
     with ok=TRUE, so it was consuming the hourly allowance. Four of the hundred
     slots on 2026-08-22 went to rows that never touched WhatsApp.
     """
+    # ATTEMPTS THAT TOUCHED THE WIRE, not deliveries. `AND ok` alone meant a
+    # refused template consumed no allowance, so a lane whose sends were being
+    # refused could retry every tick without ever exhausting the hour -- which is
+    # what a 40/hour cap failed to stop on 2026-08-25.
+    #
+    # A gate block is still excluded: sendgate stopped it and nothing was sent.
+    # Same three states as failures.burst_count().
     r = db.q("""SELECT count(*) AS n FROM message_log
-                WHERE direction='out' AND ok AND msg_type <> 'matched'
+                WHERE direction='out' AND msg_type <> 'matched'
+                  AND (ok OR COALESCE(detail, '') NOT LIKE 'blocked:%%')
                   AND ts > now() - interval '1 hour'""",
              one=True)
     return r["n"] if r else 0

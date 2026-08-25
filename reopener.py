@@ -29,8 +29,10 @@ WHAT STOPS A RE-OPEN, in order:
   * no context               -- nothing to put in {{2}}; not our lane
   * a terminal outcome       -- they are with a human, or we know the answer
   * they came back           -- any inbound after the last re-open ends the lane
-  * REOPEN_MAX tries         -- then dormant, and dormant is silent forever.
-                                Counted as ATTEMPTS, not deliveries -- see due().
+  * REOPEN_MAX delivered     -- then dormant, and dormant is silent forever.
+                                DELIVERIES, not attempts: a refusal must never
+                                spend somebody's allowance (#71). Loops are bound
+                                by SPACING on attempts instead -- see due().
   * sendgate.check()         -- master switch, pause, opt-out, retry ceiling,
                                 and the class-agnostic burst cap added after the
                                 2026-08-25 runaway (failures.burst_check)
@@ -122,21 +124,36 @@ def due(limit=None):
                -- (project, selldo_lead_id), so the schema GUARANTEES one human can
                -- be several rows; counting per row counts the rows, and the message
                -- reaches the person.
-               -- ATTEMPTS, NOT DELIVERIES. `AND r.ok` used to be here and it
-               -- sent lead 801 the same template 1,178 times in 32 hours: every
-               -- send was refused by Meta ("marketing messages restricted to US
-               -- recipients"), so `tries` stayed 0, the REOPEN_MAX cap never bit,
-               -- and the lane re-picked them on every tick.
+               -- TWO COUNTERS, BECAUSE THERE ARE TWO QUESTIONS.
                --
-               -- A delivery ladder counts successes. A RETRY CAP COUNTS ATTEMPTS.
-               -- The lesson from never-arrived-must-not-count -- "only count what
-               -- was really delivered" -- is exactly wrong for this counter.
+               -- PR #71 and #72 each fixed this one counter in the direction that
+               -- broke the other, and both were right:
+               --
+               --   #71  a send nobody received must not spend this person's
+               --        allowance of three re-opens
+               --   #72  a send that keeps being refused must still stop, or the
+               --        lane loops -- lead 801 got 1,178 sends in 32 hours
+               --
+               -- They only conflict while one number answers both. So:
+               --
+               --   delivered  -- reached them. Drives the LADDER: which rung we
+               --                 are on, and when the three are spent.
+               --   attempts   -- everything we tried. Drives SPACING, which is
+               --                 what actually bounds a loop: at least
+               --                 REOPEN_AFTER_DAYS[0] days between attempts means
+               --                 a permanently-refused number costs one send every
+               --                 three days, not one per tick.
+               --
+               -- The class-agnostic burst cap in failures.check() sits under both.
                (SELECT count(*) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
                  WHERE l2.phone = l.phone AND r.direction='out'
-                   AND r.msg_type = %s)                       AS tries,
-               -- Spacing anchors on the last ATTEMPT for the same reason: anchored
-               -- on the last success it stayed NULL through 1,178 failures, fell
-               -- back to `last_turn_at` (days old), and every tick looked due.
+                   AND r.msg_type = %s AND r.ok)              AS delivered,
+               (SELECT count(*) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
+                 WHERE l2.phone = l.phone AND r.direction='out'
+                   AND r.msg_type = %s)                       AS attempts,
+               -- Anchored on the last ATTEMPT. Anchored on the last delivery it
+               -- stayed NULL through 1,178 failures, fell back to `last_turn_at`
+               -- (days old), and every tick looked due.
                (SELECT max(r.ts) FROM message_log r JOIN leads l2 ON l2.id = r.lead_id
                  WHERE l2.phone = l.phone AND r.direction='out'
                    AND r.msg_type = %s)                       AS last_try
@@ -175,7 +192,7 @@ def due(limit=None):
           AND c.last_turn_at > now() - (%s || ' days')::interval
         ORDER BY c.last_turn_at ASC
         LIMIT %s""",
-        (MSG_TYPE, MSG_TYPE, MSG_TYPE,
+        (MSG_TYPE, MSG_TYPE, MSG_TYPE, MSG_TYPE,
          REOPEN_AFTER_DAYS[0], DORMANT_DAYS, limit * 5)) or []
 
     now = datetime.now(timezone.utc)
@@ -190,14 +207,20 @@ def due(limit=None):
     for r in rows:
         if r["phone"] in claimed:
             continue
-        tries = r.get("tries") or 0
-        if tries >= REOPEN_MAX:
+        # THE LADDER counts what they received. A refusal must not cost them a
+        # chance -- 16 people were sitting at 6 attempts and 1 delivery when this
+        # was one counter, silently dormant after a single re-open.
+        delivered = r.get("delivered") or 0
+        if delivered >= REOPEN_MAX:
             continue
+        tries = delivered
         topic = topic_for(r)
         if not topic:
             continue                       # no context -> not our lane
         # Spacing: measured from the last try if there is one, otherwise from the
         # moment the conversation went quiet.
+        # SPACING counts what we tried. This is the loop bound: a number that
+        # refuses forever costs one send per REOPEN_AFTER_DAYS, not one per tick.
         anchor = r.get("last_try") or r.get("last_turn_at")
         if anchor is None:
             continue
