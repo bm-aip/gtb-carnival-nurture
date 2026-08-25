@@ -1141,7 +1141,7 @@ JOB_MAX_ATTEMPTS_TRANSIENT = int(
 # reason" is loose and hard to police, that generosity is made safe by a second
 # ceiling that NOTHING can reset.
 #
-#   KNOCK_MAX_PER_JOURNEY -- resettable. The 4-knock sequence (day 0/3/10/25).
+#   KNOCK_MAX_PER_JOURNEY -- resettable. The 4-knock sequence (day 0/3/8/15).
 #   FATIGUE_MAX_PER_WINDOW -- NOT resettable, ever. A rolling ceiling, so even an
 #       immediate reset cannot produce a burst. Matches the RON nurture plan's own
 #       guardrail: never more than two nurture messages in the same week.

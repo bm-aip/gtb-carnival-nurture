@@ -28,6 +28,7 @@ import optout
 import fatigue
 import failures
 import kb
+import knocks
 import media
 import embed
 import jobs
@@ -896,6 +897,147 @@ def _framing_rates(gate):
              "closed": closed[i],
              "close_rate": round(100.0 * closed[i] / used[i], 1) if used[i] else None}
             for i in range(len(framings))]
+
+
+@app.route("/admin/nurture-effect")
+@auth
+def admin_nurture_effect():
+    """Is the nurturing DOING anything -- and does it end in visits and qualified leads.
+
+    THE QUESTION THIS ANSWERS, and why /admin/ads does not answer it. That page
+    shows where people stop, per ad: it measures a STATE. This one measures an
+    EFFECT -- we sent a template into somebody's silence, did they come back, did
+    they then tell us something new, and did any of it end in a site visit.
+
+    Owner, 2026-08-25: "we need to specifically know how the bot is helping get
+    qualified leads and site visits - both the new leads as well as the 4 marketing
+    templates". Two different populations, reported apart: people who talked and
+    were answered by the qualifier, and people who went quiet and were sent a
+    template.
+
+    THE COUNTING RULES. Each was learned by publishing a wrong number first.
+
+      1. A TAP IS NOT A REPLY. A CTWA ad pre-fills the buyer's first message and
+         our own buttons echo their label back as an inbound. 173 of 236 CTWA
+         "repliers" in the 28 days to 2026-08-24 said nothing but "Need More
+         Details". `spoke` excludes anything matching a prefill pattern in full.
+      2. NEVER ARRIVED, NEVER COUNTED. Denominators are delivered sends only. A
+         template Meta refused says nothing about the buyer.
+      3. A GATE BLOCK IS NOT A SEND. Rows whose detail starts "blocked:" never
+         touched WhatsApp -- 721 of them in one hour on 2026-08-25 -- and `ok` is
+         false on every one, so they are already outside these denominators.
+      4. AN EMPTY SLOT IS NOT AN ANSWER. '' and 'null' do not count, matching how
+         conversation.py reads the checklist.
+      5. NEVER READ A RATE UNSPLIT. Everything groups by inflow: CTWA and
+         landing-page buyers behave nothing alike.
+
+    ATTRIBUTION IS WEAK AND SAYS SO. `progressed` means a new checklist answer
+    appeared within `hours` of a delivered template. Correlation, not proof -- the
+    person may have been coming back anyway. The honest comparison is in
+    `outcomes`: `n - after_nurture` is the same outcome reached by people no
+    template ever touched.
+
+    Sends nothing, writes nothing.
+    """
+    GATES = ("purpose", "location", "configuration", "budget")
+    ATTRIB_HOURS = int(request.args.get("hours", 48))
+    DAYS = int(request.args.get("days", 30))
+    prefills = config.CTWA_PREFILL_PATTERNS or []
+
+    # --- band 1: the template scoreboard -------------------------------------
+    # One row per template per inflow. `delivered` is printed beside every rate,
+    # because a 100% rate on two sends is not evidence of anything.
+    templates = db.q("""
+        WITH sent AS (
+            SELECT m.id, m.lead_id, m.msg_type, m.ts, l.phone,
+                   COALESCE(l.inflow, 'lp/wa') AS inflow
+              FROM message_log m JOIN leads l ON l.id = m.lead_id
+             WHERE m.direction = 'out' AND m.ok
+               AND (m.msg_type LIKE 'knock%%' OR m.msg_type = 'reopener_t7')
+               AND m.ts > now() - (%s * interval '1 day')
+        )
+        SELECT s.msg_type, s.inflow, count(*) AS delivered,
+               count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM message_log i JOIN leads l2 ON l2.id = i.lead_id
+                    WHERE l2.phone = s.phone AND i.direction = 'in'
+                      AND i.body IS NOT NULL AND length(btrim(i.body)) > 1
+                      AND NOT (lower(btrim(i.body)) ~ ANY (%s))
+                      AND i.ts > s.ts
+                      AND i.ts < s.ts + (%s * interval '1 hour')
+               )) AS spoke,
+               count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM conversations c
+                    WHERE c.lead_id = s.lead_id
+                      AND c.last_turn_at > s.ts
+                      AND c.last_turn_at < s.ts + (%s * interval '1 hour')
+                      AND (SELECT count(*) FROM jsonb_each_text(c.checklist) kv
+                            WHERE kv.key = ANY (%s)
+                              AND kv.value NOT IN ('', 'null')) > 0
+               )) AS progressed
+          FROM sent s
+         GROUP BY 1, 2 ORDER BY 3 DESC""",
+        (DAYS, prefills, ATTRIB_HOURS, ATTRIB_HOURS, list(GATES))) or []
+
+    # --- band 2: outcomes, and whether a template preceded them --------------
+    # THE ANSWER TO "IS NURTURING HELPING". Every outcome, split by whether a
+    # nurture template had ever been delivered to that person before they got
+    # there. n - after_nurture is the control: conversation alone did it.
+    outcomes = db.q("""
+        SELECT COALESCE(l.inflow, 'lp/wa') AS inflow, c.outcome, count(*) AS n,
+               count(*) FILTER (WHERE EXISTS (
+                   SELECT 1 FROM message_log m
+                    WHERE m.lead_id = c.lead_id AND m.direction = 'out' AND m.ok
+                      AND (m.msg_type LIKE 'knock%%' OR m.msg_type = 'reopener_t7')
+                      AND m.ts < COALESCE(c.outcome_at, now())
+               )) AS after_nurture,
+               count(*) FILTER (WHERE c.checklist ? 'visit_day') AS with_visit_day,
+               count(*) FILTER (WHERE c.checklist ? 'visit_venue') AS with_visit_venue
+          FROM conversations c JOIN leads l ON l.id = c.lead_id
+         WHERE c.outcome IS NOT NULL
+           AND c.outcome_at > now() - (%s * interval '1 day')
+         GROUP BY 1, 2 ORDER BY 1, 3 DESC""", (DAYS,)) or []
+
+    # --- band 3: how far down the ladder anyone actually gets -----------------
+    # t6_visit sat on day 25 and had NEVER been sent once. The ladder moved to
+    # 0/3/8/15 on 2026-08-25, so this is the row that proves the visit ask
+    # reaches somebody. All time, deliberately: it is a lifetime fact.
+    ladder = db.q("""
+        SELECT m.msg_type, count(*) FILTER (WHERE m.ok) AS delivered,
+               count(DISTINCT l.phone) FILTER (WHERE m.ok) AS people,
+               max(m.ts) FILTER (WHERE m.ok) AS last_sent
+          FROM message_log m JOIN leads l ON l.id = m.lead_id
+         WHERE m.direction = 'out' AND m.msg_type LIKE 'knock%%'
+         GROUP BY 1 ORDER BY 1""") or []
+
+    def rate(a, b):
+        return round(100.0 * a / b, 1) if b else None
+
+    return jsonify({
+        "window_days": DAYS,
+        "attribution_hours": ATTRIB_HOURS,
+        "schedule": [{"day": d, "template": k} for d, k in knocks.KNOCK_SCHEDULE],
+        "templates": [dict(r, spoke_pct=rate(r["spoke"], r["delivered"]),
+                           progressed_pct=rate(r["progressed"], r["delivered"]))
+                      for r in map(dict, templates)],
+        "outcomes": [dict(r) for r in outcomes],
+        "ladder_all_time": [dict(r) for r in ladder],
+        "reading_it": {
+            "spoke": ("came back in their OWN words inside the window. Ad prefills"
+                      " and our own button labels are excluded -- those are taps."),
+            "progressed": ("had a qualifier turn inside the window that left at"
+                           " least one of purpose/location/configuration/budget"
+                           " filled. Correlation, not proof."),
+            "after_nurture": ("a nurture template reached them before this outcome."
+                              " Compare with n - after_nurture: the same outcome"
+                              " with no template at all."),
+            "denominators": ("delivered sends only -- refused sends and gate blocks"
+                             " are excluded, so no rate here can be inflated by"
+                             " messages nobody received."),
+            "caution": ("outcome volume is tiny: 1 qualified and 1 visit booked"
+                        " lifetime as of 2026-08-25. Read the template rates, not"
+                        " the outcome counts, until the numbers grow."),
+        },
+    })
 
 
 @app.route("/admin/drip")

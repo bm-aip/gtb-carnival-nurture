@@ -47,11 +47,25 @@ log = logging.getLogger("knocks")
 QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 
 # (days_after_signup, config.KNOCK_TEMPLATES key)
+#
+# FIFTEEN DAYS, NOT TWENTY-FIVE. Owner, 2026-08-25. The visit invitation sat on
+# day 25 and had therefore NEVER BEEN SENT -- not once in the life of the system,
+# while t2 and t3 went out 83 and 80 times. Almost no journey survives 25 days
+# intact, so the one template whose job is asking for a site visit never fired.
+#
+# WHY THESE DAYS AND NOT TIGHTER. FATIGUE_MAX_PER_WINDOW is 2 per 7 days and
+# nothing can reset it. This ladder sits exactly on that ceiling -- 0+3, then
+# 3+8, then 8+15 -- so every step can actually go out. Compressing further, e.g.
+# (0, 2, 7, 14), puts three sends inside the first week: the third is silently
+# refused by the fatigue cap, so the sequence would look faster and deliver LESS.
+# The gaps are the schedule's own guardrail, not a preference.
+#
+# The order is unchanged and deliberate: three selling points, then the ask.
 KNOCK_SCHEDULE = [
     (0,  "t1_lifestyle"),
     (3,  "t2_location"),
-    (10, "t3_low_density"),
-    (25, "t6_visit"),
+    (8,  "t3_low_density"),
+    (15, "t6_visit"),
 ]
 
 # Templates and the variables they actually declare in Wati, verified against the
