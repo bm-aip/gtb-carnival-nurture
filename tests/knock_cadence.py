@@ -54,5 +54,33 @@ r.check("later gaps match the schedule's own spacing",
 r.check("no gap is zero, so a backlog cannot fire the ladder in one day",
         all(g >= 1 for g in gaps[1:]), detail=str(gaps))
 
+# --- the per-step hold --------------------------------------------------------
+# A hold must be visible to BOTH the SQL candidate filter and the Python loop.
+# due_count() is SQL-only and the watchdog alerts when leads are due and nothing
+# goes out, so a hold only the loop could see would look like a starving engine.
+ksrc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                         "knocks.py"), encoding="utf-8").read()
+r.check("the SQL filters held steps",
+        "COALESCE(ks.sent, 0) + 1 = ANY (%s::int[])" in ksrc,
+        detail="the count the watchdog reads must match the batch that sends")
+r.check("the loop re-checks held steps",
+        "if step_key in KNOCK_STEPS_PAUSED:" in ksrc,
+        detail="the loop is the authority; SQL is only a candidate filter")
+
+held = knocks.KNOCK_STEPS_PAUSED
+pos = knocks._paused_step_positions()
+r.eq("positions are 1-based and match the held keys", len(pos), len(held))
+r.check("every held key is a real step",
+        all(k in KEYS for k in held), detail=str(held))
+r.check("holding nothing yields an empty list, not a null",
+        isinstance(pos, list), detail=str(pos))
+if held:
+    for k in held:
+        r.eq(f"held step {k} maps to position {KEYS.index(k) + 1}",
+             KEYS.index(k) + 1 in pos, True)
+r.check("the visit ask is never held by default",
+        "t6_visit" not in held,
+        detail="holding the only untested template would defeat the purpose")
+
 if __name__ == "__main__":
     sys.exit(0 if r.report("KNOCK CADENCE") else 1)
