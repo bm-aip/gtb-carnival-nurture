@@ -82,9 +82,18 @@ finally:
 SQL = reopener.due.__doc__ or ""
 src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
                         "reopener.py"), encoding="utf-8").read()
-tries_block = src.split("AS tries")[0].split("SELECT count(*) FROM message_log")[-1]
-r.check("`tries` no longer filters on r.ok", "AND r.ok" not in tries_block,
-        detail="a retry cap counts attempts; only a delivery ladder counts ok")
+# TWO counters, each answering its own question.
+delivered_block = src.split("AS delivered")[0].split("SELECT count(*) FROM message_log")[-1]
+r.check("`delivered` DOES filter on r.ok", "AND r.ok" in delivered_block,
+        detail="the ladder counts what reached them -- a refusal must not spend a chance (#71)")
+
+attempts_block = src.split("AS attempts")[0].split("SELECT count(*) FROM message_log")[-1]
+r.check("`attempts` does NOT filter on r.ok", "AND r.ok" not in attempts_block,
+        detail="spacing counts everything we tried -- that is what bounds a loop (#72)")
+
+r.check("the ladder cap reads `delivered`, not `attempts`",
+        "delivered >= REOPEN_MAX" in src and "attempts >= REOPEN_MAX" not in src,
+        detail="16 people were dormant at 6 attempts and 1 delivery")
 
 last_try_block = src.split("AS last_try")[0].split("SELECT max(r.ts)")[-1]
 r.check("`last_try` no longer filters on r.ok", "AND r.ok" not in last_try_block,
@@ -97,6 +106,31 @@ r.check("the came-back guard no longer filters on r.ok",
 
 r.eq("three tries then dormant, unchanged", reopener.REOPEN_MAX,
      len(reopener.REOPEN_AFTER_DAYS))
+
+# The loop bound with the ladder back on deliveries: spacing is anchored on the
+# last ATTEMPT, so a number that refuses forever costs one send per interval
+# rather than one per tick. 1,178 sends in 32 hours becomes at most 11.
+r.check("spacing is measured in days, so a refusing number cannot loop per-tick",
+        min(reopener.REOPEN_AFTER_DAYS) >= 1,
+        detail=str(reopener.REOPEN_AFTER_DAYS))
+
+# --- three states, not two ----------------------------------------------------
+# delivered / refused-on-the-wire / never-sent. Collapsing the last two is what
+# made the burst cap poison itself and the hourly cap unenforceable.
+fsrc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                         "failures.py"), encoding="utf-8").read()
+wsrc = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                         "wati.py"), encoding="utf-8").read()
+burst_sql = fsrc.split("def burst_count")[1].split("def check")[0]
+r.check("burst_count ignores gate blocks", "NOT LIKE 'blocked:" in burst_sql,
+        detail="a block never touched WhatsApp, so it is not evidence about the send")
+
+hour_sql = wsrc.split("def sends_last_hour")[1].split("def rate_ok")[0]
+r.check("the hourly cap counts refused sends, not just delivered ones",
+        "ok OR COALESCE" in hour_sql,
+        detail="with AND ok alone a refused lane never exhausts its hour")
+r.check("the hourly cap still ignores gate blocks",
+        "NOT LIKE 'blocked:" in hour_sql)
 
 if __name__ == "__main__":
     sys.exit(0 if r.report("REOPENER RUNAWAY") else 1)

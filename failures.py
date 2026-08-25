@@ -184,10 +184,25 @@ def burst_count(phone, msg_type):
     if not phone or not msg_type:
         return 0
     since = last_delivered_at(phone)
+    # A GATE BLOCK IS NOT A FAILED SEND. `_send` writes a message_log row with
+    # ok=FALSE and detail "blocked:..." when sendgate refuses -- nothing touched
+    # WhatsApp. Counting those made this cap poison itself: five blocks put a
+    # phone over the limit, the cap then blocked the sixth attempt, which logged
+    # another "failure", and the phone could never come back. 58 numbers were in
+    # that state within 20 minutes of #62 going live.
+    #
+    # Three states, and the codebase keeps collapsing them into two:
+    #
+    #   delivered      ok = TRUE
+    #   refused        we sent it, the provider said no      <-- evidence
+    #   never sent     our own gate stopped it               <-- not evidence
+    #
+    # Only the middle one is evidence about this send.
     r = db.q("""SELECT count(*) AS n
                   FROM message_log ml JOIN leads l ON l.id = ml.lead_id
                  WHERE l.phone = %s AND ml.direction='out' AND ml.ok = FALSE
                    AND ml.msg_type = %s
+                   AND COALESCE(ml.detail, '') NOT LIKE 'blocked:%%'
                    AND ml.ts > now() - (%s * interval '1 day')
                    AND (%s IS NULL OR ml.ts > %s)""",
              (phone, msg_type, config.RETRY_WINDOW_DAYS, since, since), one=True)
