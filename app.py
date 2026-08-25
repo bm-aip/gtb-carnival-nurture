@@ -899,9 +899,9 @@ def _framing_rates(gate):
             for i in range(len(framings))]
 
 
-@app.route("/admin/nurture-effect")
+@app.route("/admin/nurture-results")
 @auth
-def admin_nurture_effect():
+def admin_nurture_results():
     """Is the nurturing DOING anything -- and does it end in visits and qualified leads.
 
     THE QUESTION THIS ANSWERS, and why /admin/ads does not answer it. That page

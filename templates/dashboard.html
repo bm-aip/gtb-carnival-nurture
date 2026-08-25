@@ -84,6 +84,7 @@
   <button data-tab="funnel" class="active">Where people stop</button>
   <button data-tab="sources">Sources &amp; ads</button>
   <button data-tab="drip">Follow-ups</button>
+  <button data-tab="effect">Follow-up results</button>
   <button data-tab="system">System</button>
 </nav>
 <main>
@@ -178,6 +179,63 @@
   </section>
 
   <!-- ================= SYSTEM ================= -->
+  <!-- ================= FOLLOW-UP RESULTS ================= -->
+  <section id="tab-effect" class="hidden">
+    <div class="cards" id="effectCards"></div>
+    <div class="note">
+      The Follow-ups tab covers what was sent and whether it was delivered. This tab
+      covers what happened next: after a follow-up reached someone who had gone
+      quiet, did they reply, and did they go on to answer one of the qualifying
+      questions.
+      <br><br>
+      <b>How these are counted.</b> <b>Replied</b> counts messages a buyer typed
+      themselves. Click-to-WhatsApp opens a chat with text already filled in, and
+      tapping a template button also arrives as an incoming message; neither is
+      counted here, so the figures reflect genuine responses only.
+      <b>Answered a question</b> means one of the four qualifying details —
+      purpose, location, configuration or budget — was captured within the window
+      shown. It records what followed the message rather than establishing that the
+      message caused it.
+      <br><br>
+      All rates are shares of messages <b>delivered</b>, and each rate is shown
+      beside the number it is based on. Small volumes move percentages a long way,
+      so please read the two together.
+    </div>
+
+    <h2>Response by follow-up</h2>
+    <div class="wrap"><table id="effectTable">
+      <thead><tr><th>Follow-up</th><th>Source</th><th class="num">Delivered</th>
+        <th class="num">Replied</th><th class="num">Answered a question</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+
+    <h2>Outcomes</h2>
+    <div class="note">
+      <b>Had a follow-up first</b> is the number who had already received one of the
+      sequence messages before reaching this outcome. The remainder reached it
+      through conversation alone, which gives a like-for-like comparison between the
+      two paths.
+    </div>
+    <div class="wrap"><table id="effectOutcomes">
+      <thead><tr><th>Source</th><th>Outcome</th><th class="num">People</th>
+        <th class="num">Had a follow-up first</th><th class="num">Visit day set</th>
+        <th class="num">Visit discussed</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+
+    <h2>Sequence coverage</h2>
+    <div class="note">
+      Every step of the sequence and how many people have reached it. The sequence
+      runs on days 0, 3, 8 and 15, so the later steps carry lower volumes than the
+      earlier ones.
+    </div>
+    <div class="wrap"><table id="effectLadder">
+      <thead><tr><th>Follow-up</th><th class="num">Delivered</th>
+        <th class="num">People</th><th>Last sent</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </section>
+
   <section id="tab-system" class="hidden">
     <div class="cards" id="sysCards"></div>
     <h2>Conversation states</h2>
@@ -219,7 +277,7 @@ const GATE_LABEL = {
 
 function barClass(r){ return r === null ? "" : (r < 10 ? "low" : (r < 25 ? "mid" : "")); }
 
-const TABS = ["funnel","sources","drip","system"];
+const TABS = ["funnel","sources","drip","effect","system"];
 const NAV = document.querySelector("nav");
 NAV.querySelectorAll("button").forEach(b => b.onclick = () => {
   NAV.querySelectorAll("button").forEach(x => x.classList.remove("active"));
@@ -241,13 +299,14 @@ function card(k, v, sub){
 }
 
 async function load(){
-  let ads, sum, queue, drip;
+  let ads, sum, queue, drip, effect;
   try {
-    [ads, sum, queue, drip] = await Promise.all([
+    [ads, sum, queue, drip, effect] = await Promise.all([
       fetch("/admin/ads").then(r => r.json()),
       fetch("/api/summary").then(r => r.json()),
       fetch("/api/queue").then(r => r.json()).catch(() => ({})),
-      fetch("/admin/drip").then(r => r.json()).catch(() => ({}))
+      fetch("/admin/drip").then(r => r.json()).catch(() => ({})),
+      fetch("/admin/nurture-results").then(r => r.json()).catch(() => ({}))
     ]);
   } catch (e) {
     $("#errbar").style.display = "block";
@@ -401,6 +460,70 @@ async function load(){
   // unnoticed for a day.
   $("#errbar").style.display = alerts.length ? "block" : "none";
   $("#errbar").textContent = alerts.join(" · ") + (alerts.length ? " — see System tab" : "");
+
+// ---- follow-up results -------------------------------------------------
+// Every rate is printed next to the number it is based on: a step delivered
+// twice that produced one reply is 50%, and the percentage alone would mislead.
+(function renderEffect(){
+  const e = effect || {};
+  const rows = e.templates || [];
+  const src = k => k === "ctwa" ? "Ad click" : "Landing page / WhatsApp";
+
+  const totalSent = rows.reduce((a, r) => a + (r.delivered || 0), 0);
+  const totalBack = rows.reduce((a, r) => a + (r.spoke || 0), 0);
+  const totalTold = rows.reduce((a, r) => a + (r.progressed || 0), 0);
+  const outs = e.outcomes || [];
+  const nOut = outs.reduce((a, r) => a + (r.n || 0), 0);
+  const nAfter = outs.reduce((a, r) => a + (r.after_nurture || 0), 0);
+
+  $("#effectCards").innerHTML = [
+    card("Follow-ups delivered", totalSent,
+         "last " + (e.window_days || "?") + " days"),
+    card("Replied", totalBack,
+         totalSent ? pct(100 * totalBack / totalSent) + " of delivered" : ""),
+    card("Answered a question", totalTold,
+         totalSent ? pct(100 * totalTold / totalSent) + " of delivered" : ""),
+    card("Reached an outcome", nOut,
+         nAfter + " had a follow-up first")
+  ].join("");
+
+  const tb = $("#effectTable").querySelector("tbody");
+  tb.innerHTML = rows.length ? rows.map(r => `<tr>
+      <td>${esc(stepLabel(r.msg_type))}</td>
+      <td>${esc(src(r.inflow))}</td>
+      <td class="num">${r.delivered}</td>
+      <td class="num ${barClass(r.spoke_pct)}">${r.spoke} &middot; ${pct(r.spoke_pct)}</td>
+      <td class="num ${barClass(r.progressed_pct)}">${r.progressed} &middot; ${pct(r.progressed_pct)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="5">No follow-ups delivered in this period.</td></tr>`;
+
+  const ob = $("#effectOutcomes").querySelector("tbody");
+  ob.innerHTML = outs.length ? outs.map(r => `<tr>
+      <td>${esc(src(r.inflow))}</td>
+      <td>${esc(String(r.outcome || "").replace(/_/g, " "))}</td>
+      <td class="num">${r.n}</td>
+      <td class="num">${r.after_nurture}</td>
+      <td class="num">${r.with_visit_day}</td>
+      <td class="num">${r.with_visit_venue}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="6">No outcomes recorded in this period.</td></tr>`;
+
+  const lb = $("#effectLadder").querySelector("tbody");
+  const sched = (e.schedule || []);
+  // Every scheduled step is listed, including those with no sends yet: an absent
+  // row would read as missing data rather than a step still to reach anyone.
+  lb.innerHTML = sched.length ? sched.map(st => {
+    const hit = (e.ladder_all_time || [])
+                  .find(l => l.msg_type === "knock_" + st.template) || {};
+    return `<tr>
+      <td>${esc(stepLabel("knock_" + st.template))} <span class="dates">day ${st.day}</span></td>
+      <td class="num">${hit.delivered || 0}</td>
+      <td class="num">${hit.people || 0}</td>
+      <td>${hit.last_sent ? esc(String(hit.last_sent).slice(0, 16).replace("T", " ")) : "\u2014"}</td>
+    </tr>`;
+  }).join("")
+    : `<tr><td colspan="4">No sequence configured.</td></tr>`;
+})();
 }
 
 load();
