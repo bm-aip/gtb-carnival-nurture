@@ -46,6 +46,12 @@ log = logging.getLogger("knocks")
 # without this t1 would be due the moment they went quiet.
 QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 
+# How far down the candidate queue due() will walk looking for a sendable lead,
+# and in what size steps. Bounded so a tick cannot turn into a table scan, but far
+# larger than any plausible backlog of rejects sitting at the front of the queue.
+SCAN_PAGE = int(os.environ.get("KNOCK_SCAN_PAGE", "250"))
+SCAN_MAX = int(os.environ.get("KNOCK_SCAN_MAX", "3000"))
+
 # (days_after_signup, config.KNOCK_TEMPLATES key)
 #
 # FIFTEEN DAYS, NOT TWENTY-FIVE. Owner, 2026-08-25. The visit invitation sat on
@@ -375,72 +381,167 @@ def due(limit=None):
     # The Python loop below still re-checks everything and remains the authority;
     # this is a candidate filter, not a replacement for it. The retry bookkeeping in
     # particular is not modelled here, which is why LIMIT still takes headroom.
-    rows = db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
-        ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
-        LIMIT %s""",
-                _due_params() + (limit * 5,)) or []
-
+    # PAGE, DO NOT TAKE ONE FIXED WINDOW.
+    #
+    # 2026-08-26: 129 people were owed a t2 and the engine sent nothing for eleven
+    # hours. The query took the oldest `limit * 5` = 125 candidates; the Python loop
+    # then rejected 220 of them on things the SQL does not model -- 133 waiting out
+    # the 24h retry gap after Meta refused a day of sends with code 131049, and 87
+    # duplicate phone rows. Those rejects are the OLDEST rows by definition, so they
+    # filled the whole window and the sendable leads behind them were never seen.
+    #
+    # The old comment called `limit * 5` "headroom". Headroom is a guess, and a
+    # refusal storm falsifies it: any fixed multiple starves once the reject backlog
+    # exceeds it. So we walk pages until the batch is full or SCAN_MAX rows have
+    # been examined -- bounded work, and no amount of stale rejects can hide a
+    # sendable lead behind them.
+    #
+    # Same failure as the fortnight-long knock deadlock: FILTER BEFORE YOU LIMIT.
     now = datetime.now(timezone.utc)
     out = []
+    rows = []
+    offset, scanned = 0, 0
+    while scanned < SCAN_MAX:
+        page = db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
+            ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
+            LIMIT %s OFFSET %s""",
+                    _due_params() + (SCAN_PAGE, offset)) or []
+        if not page:
+            break
+        rows.extend(page)
+        scanned += len(page)
+        offset += SCAN_PAGE
+        # Enough candidates to fill the batch even if every one is sendable? Then
+        # stop fetching; the loop below decides. Otherwise keep walking.
+        if len(page) < SCAN_PAGE:
+            break
+        if len(rows) >= limit and scanned >= SCAN_PAGE:
+            # Cheap pre-check: how many of what we hold are actually sendable.
+            probe, seen = 0, set()
+            for cand in rows:
+                if _verdict(cand, now, seen)[2] is None:
+                    probe += 1
+                    seen.add(cand["phone"])
+                if probe >= limit:
+                    break
+            if probe >= limit:
+                break
+
     # Phone-keyed within the batch too. knock_state reads what has already been
     # SENT, so two rows for one person both read zero and both qualify -- which is
     # exactly how lavanya was messaged twice. The database check stops it across
     # runs; this stops it inside one.
     claimed = set()
     for lead in rows:
-        if lead["phone"] in claimed:
+        step_index, step_key, reason = _verdict(lead, now, claimed)
+        if reason == "ceiling":
+            # The ONE side effect in this loop, and it belongs to the engine, not
+            # to anything merely counting: ten attempts refused means stop forever.
+            _give_up(lead, step_key, config.KNOCK_RETRY_MAX)
             continue
-        sent, last_at = knock_state(lead["phone"])
-        if sent >= len(KNOCK_SCHEDULE) or sent >= config.KNOCK_MAX_PER_JOURNEY:
+        if reason:
             continue
-        days_after, step_key = KNOCK_SCHEDULE[sent]
-        # The loop is the authority; the SQL above is a candidate filter. A held
-        # step is re-checked here so a stale query string can never send one.
-        if step_key in KNOCK_STEPS_PAUSED:
-            continue
-        anchor = lead["anchor"]
-        if anchor is None:
-            continue
-        if anchor.tzinfo is None:
-            anchor = anchor.replace(tzinfo=timezone.utc)
-        # Due against BOTH clocks: time since they signed up, and time since we
-        # last knocked. A backlog lead must not receive the whole sequence at once.
-        if now < anchor + timedelta(days=days_after):
-            continue
-        if last_at is not None:
-            if last_at.tzinfo is None:
-                last_at = last_at.replace(tzinfo=timezone.utc)
-            if now < last_at + timedelta(days=_min_gap_days(sent)):
-                continue
-
-        # RETRY BOOKKEEPING. Only reached when the step is otherwise due.
-        #
-        # ENTIRELY INSIDE THE SWITCH, on purpose. A knock blocked by the fatigue cap
-        # already leaves an ok=FALSE row and is correctly retried once the window
-        # clears; guarding on attempt count regardless of the switch would kill that
-        # -- the lead would lose the knock permanently. So with the switch off this
-        # block does nothing at all and the engine behaves exactly as before.
-        #
-        # With it on, both guards are load-bearing: without the ceiling a
-        # permanently-refused number is retried forever, and without the gap the
-        # refused attempt is invisible to the clock above (knock_state cannot see it)
-        # so the same knock fires on every tick of the day.
-        if config.KNOCK_RETRY_ENABLED:
-            attempts, last_try = attempt_state(lead["phone"], step_key)
-            if attempts >= config.KNOCK_RETRY_MAX:
-                _give_up(lead, step_key, attempts)
-                continue
-            if attempts and last_try is not None:
-                if last_try.tzinfo is None:
-                    last_try = last_try.replace(tzinfo=timezone.utc)
-                if now < last_try + timedelta(hours=config.KNOCK_RETRY_GAP_HOURS):
-                    continue
-
-        out.append((lead, sent, step_key))
+        out.append((lead, step_index, step_key))
         claimed.add(lead["phone"])
         if len(out) >= limit:
             break
     return out
+
+
+def _verdict(lead, now, claimed):
+    """(step_index, step_key, reason) for ONE lead. reason is None if sendable.
+
+    THE ENGINE'S DECISION, IN ONE PLACE, BECAUSE TWO COPIES DRIFTED.
+
+    due_count() counts what the SQL accepts; due() sends what this loop accepts.
+    They are legitimately different numbers -- duplicate phone rows, both clocks,
+    a held step, the retry gap -- and on 2026-08-26 that difference was 349 against
+    129. The watchdog was reading the first and alerting "NOBODY IS BEING CONTACTED"
+    while the engine was correctly waiting out a 24h retry gap after Meta refused
+    1,688 marketing messages with code 131049.
+
+    The comment above the shared SQL already warned about this exact failure in the
+    other direction -- "a monitor that measures something subtly different from the
+    engine it watches is worse than no monitor". So the monitor now calls THIS.
+
+    Deliberately free of side effects. `ceiling` is REPORTED rather than acted on,
+    and only due() turns it into _give_up(); a counter must never mark a lead lost.
+    """
+    if lead["phone"] in claimed:
+        return None, None, "duplicate phone in batch"
+    sent, last_at = knock_state(lead["phone"])
+    if sent >= len(KNOCK_SCHEDULE) or sent >= config.KNOCK_MAX_PER_JOURNEY:
+        return None, None, "journey complete"
+    days_after, step_key = KNOCK_SCHEDULE[sent]
+    # The loop is the authority; the SQL is a candidate filter. A held step is
+    # re-checked here so a stale query string can never send one.
+    if step_key in KNOCK_STEPS_PAUSED:
+        return sent, step_key, f"held:{step_key}"
+    anchor = lead["anchor"]
+    if anchor is None:
+        return sent, step_key, "no anchor"
+    if anchor.tzinfo is None:
+        anchor = anchor.replace(tzinfo=timezone.utc)
+    # Due against BOTH clocks: time since they signed up, and time since we last
+    # knocked. A backlog lead must not receive the whole sequence at once.
+    if now < anchor + timedelta(days=days_after):
+        return sent, step_key, "waiting on the signup clock"
+    if last_at is not None:
+        if last_at.tzinfo is None:
+            last_at = last_at.replace(tzinfo=timezone.utc)
+        if now < last_at + timedelta(days=_min_gap_days(sent)):
+            return sent, step_key, "waiting on the spacing gap"
+
+    # RETRY BOOKKEEPING. Only reached when the step is otherwise due.
+    #
+    # ENTIRELY INSIDE THE SWITCH, on purpose. A knock blocked by the fatigue cap
+    # already leaves an ok=FALSE row and is correctly retried once the window
+    # clears; guarding on attempt count regardless of the switch would kill that --
+    # the lead would lose the knock permanently. So with the switch off this block
+    # does nothing at all and the engine behaves exactly as before.
+    #
+    # With it on, both guards are load-bearing: without the ceiling a
+    # permanently-refused number is retried forever, and without the gap the refused
+    # attempt is invisible to the clock above (knock_state cannot see it) so the same
+    # knock fires on every tick of the day.
+    if config.KNOCK_RETRY_ENABLED:
+        attempts, last_try = attempt_state(lead["phone"], step_key)
+        if attempts >= config.KNOCK_RETRY_MAX:
+            return sent, step_key, "ceiling"
+        if attempts and last_try is not None:
+            if last_try.tzinfo is None:
+                last_try = last_try.replace(tzinfo=timezone.utc)
+            if now < last_try + timedelta(hours=config.KNOCK_RETRY_GAP_HOURS):
+                return sent, step_key, "waiting out the retry gap"
+    return sent, step_key, None
+
+
+def sendable_count(limit=2000):
+    """(how many the engine WOULD send right now, why the rest are waiting).
+
+    What the watchdog must alert on. due_count() answers a different question --
+    how many rows the SQL accepts -- and alerting on it cried wolf the morning
+    after Meta refused a day's worth of marketing messages.
+
+    Writes nothing. `ceiling` leads are counted as waiting rather than given up:
+    only the engine may end somebody's journey.
+    """
+    params = _due_params()
+    if params is None:
+        return 0, {}
+    rows = db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
+        ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
+        LIMIT %s""", params + (limit,)) or []
+    now = datetime.now(timezone.utc)
+    claimed, n, why = set(), 0, {}
+    for lead in rows:
+        _idx, _key, reason = _verdict(lead, now, claimed)
+        if reason:
+            why[reason] = why.get(reason, 0) + 1
+            continue
+        n += 1
+        claimed.add(lead["phone"])
+    return n, why
 
 
 def send_knock(lead, step_index, step_key):

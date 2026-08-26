@@ -247,7 +247,12 @@ def _check_nobody_contacted():
     """
     import knocks
 
-    due = knocks.due_count()
+    # WHAT THE ENGINE WOULD ACTUALLY SEND, not what the SQL accepts. due_count()
+    # counts candidates; the engine then applies both clocks, the held-step check
+    # and the retry gap. On 2026-08-26 that was 349 against 129, and this alert
+    # fired "NOBODY IS BEING CONTACTED" while the engine was correctly waiting out
+    # a 24h retry gap after Meta refused 1,688 messages with code 131049.
+    due, waiting = knocks.sendable_count()
     if not due:
         return None
 
@@ -270,10 +275,16 @@ def _check_nobody_contacted():
     when = last.get("t")
     ago = "never" if not when else f"{int((datetime.now(when.tzinfo) - when).total_seconds() / 3600)}h ago"
 
+    # Why everyone ELSE is waiting, biggest reason first. Without it the reader
+    # cannot tell a stuck engine from a lane that is correctly cooling off, which
+    # is the difference between an emergency and a normal morning.
+    held = ", ".join(f"{n} {r}" for r, n in
+                     sorted(waiting.items(), key=lambda kv: -kv[1])[:3])
     ok = _alert("knocks_silent",
                 f"NOBODY IS BEING CONTACTED - {due} lead(s) waiting",
-                f"{due} lead(s) are due a knock right now and none has gone out in "
-                f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}.",
+                f"{due} lead(s) could be knocked right now and none has gone out in "
+                f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}."
+                + (f" Others waiting: {held}." if held else ""),
                 "The knock engine is running but sending nothing. Check "
                 "/admin/config-check and the knock_error setting.")
     if ok:
@@ -484,7 +495,7 @@ def daily_report(force=False):
     # over it made the report print a module object where a number belonged.
     import knocks as knocks_mod
     try:
-        due = knocks_mod.due_count()
+        due, _waiting = knocks_mod.sendable_count()
     except Exception:                                # noqa: BLE001
         due = 0
     deliv = db.q("""SELECT count(*) AS n,
