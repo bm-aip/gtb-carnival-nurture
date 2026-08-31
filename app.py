@@ -428,8 +428,19 @@ def api_summary():
     errors = {k: db.get_setting(k, "") for k in
               ["selldo_error_RON", "selldo_error_ELEMENTS",
                "meta_error_RON", "meta_error_ELEMENTS",
-               "meta_leads_error_RON", "meta_leads_error_ELEMENTS", "rate_capped_at"]}
+               "meta_leads_error_RON", "meta_leads_error_ELEMENTS", "rate_capped_at",
+               # THE TWO LANES INSIDE THE TICK. Written since the knock engine was
+               # built, read by nothing until 2026-08-31 -- so a lane could throw on
+               # every tick and this page, the daily report and every dashboard
+               # route would all still read healthy. `_last_ok` matters more than
+               # `_error` of the two: an absent error proves nothing, because a lane
+               # that never runs at all raises nothing either.
+               "knock_error", "reopener_error"]}
+    lanes = {k: {"last_ok": db.get_setting(f"{k}_last_ok", "") or "never",
+                 "error": db.get_setting(f"{k}_error", "") or ""}
+             for k in ("knock", "reopener")}
     return jsonify({"day_counts": counts, "funnel": funnel, "errors": errors,
+                    "lanes": lanes, "last_tick_at": db.get_setting("last_tick_at", ""),
                     "paused": sequencer.paused(),
                     # Master switch state, so "why is nothing sending?" is
                     # answerable from the dashboard instead of the Railway env.

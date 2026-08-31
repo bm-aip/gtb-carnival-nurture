@@ -52,6 +52,16 @@ QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 SCAN_PAGE = int(os.environ.get("KNOCK_SCAN_PAGE", "250"))
 SCAN_MAX = int(os.environ.get("KNOCK_SCAN_MAX", "3000"))
 
+# Fatigue's reason codes in the words the watchdog puts in front of a person.
+# _verdict()'s reasons are not debug strings: they are grouped and printed as
+# "Others waiting: 3 waiting on the weekly cap" in the NOBODY IS BEING CONTACTED
+# alert, and that line is the difference between a stuck engine and a lane
+# correctly cooling off.
+_FATIGUE_REASON = {
+    fatigue.CAP_WINDOW: "waiting on the weekly cap",
+    fatigue.CAP_JOURNEY: "journey ceiling reached",
+}
+
 # (days_after_signup, config.KNOCK_TEMPLATES key)
 #
 # FIFTEEN DAYS, NOT TWENTY-FIVE. Owner, 2026-08-25. The visit invitation sat on
@@ -513,6 +523,35 @@ def _verdict(lead, now, claimed):
                 last_try = last_try.replace(tzinfo=timezone.utc)
             if now < last_try + timedelta(hours=config.KNOCK_RETRY_GAP_HOURS):
                 return sent, step_key, "waiting out the retry gap"
+
+    # THE FATIGUE CAP IS A SELECTION RULE, NOT A LAST-MOMENT ONE.
+    #
+    # send_knock() has always called fatigue.check() immediately before the wire,
+    # and that door stays -- knock_now() reaches it without passing through here.
+    # But the picker did not model it, so a lead at the weekly ceiling stayed
+    # sendable in this function's eyes, was chosen on every tick, refused at the
+    # door, and left a `blocked:fatigue:` row behind. Measured over the seven days
+    # to 2026-08-31: 29,865 such rows for t6_visit against 43 real sends, and
+    # 35,156 across all steps against 382. At SEQUENCER_TICK_MIN=1 that is about
+    # three people being re-picked and re-refused every sixty seconds, forever.
+    #
+    # THE RETRY GAP ABOVE CANNOT COVER THIS, and it is worth saying why, because
+    # switching KNOCK_RETRY_ENABLED on looks like the fix and is not:
+    # attempt_state() excludes `blocked:` rows on purpose (our own gates must not
+    # consume one of the ten attempts at reaching a person), so it reports zero
+    # attempts and a null clock no matter how many times fatigue has refused. The
+    # gap never engages. Only a check at selection time ends the loop.
+    #
+    # LAST, DELIBERATELY. Every cheaper reason has already returned by this point,
+    # so the two counting queries inside fatigue.check() run for leads that are
+    # otherwise ready to send -- a handful per tick, not the scan window.
+    #
+    # SIDE-EFFECT FREE, like the rest of this function: check() only counts
+    # message_log; start_journey() is a separate call made by send_knock().
+    allowed, cap = fatigue.check(lead["phone"], msg_type_for(step_key),
+                                 project=lead.get("project"))
+    if not allowed:
+        return sent, step_key, _FATIGUE_REASON.get(cap, f"waiting on {cap}")
     return sent, step_key, None
 
 

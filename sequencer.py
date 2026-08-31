@@ -229,26 +229,53 @@ def tick():
     """
     db.set_setting("last_tick_at", now_ist().isoformat())
     import knocks
-    try:
-        n = knocks.run()
-        if n:
-            log.info("knock engine sent %s", n)
-    except Exception as e:
-        log.exception("knock engine failed: %s", e)
-        db.set_setting("knock_error", str(e)[:500])
+    _run_lane("knock", knocks.run)
 
     # THE GHOST LANE. Separate from the knock engine on purpose: knocks are for
     # people who never answered, this is for conversations that started and
     # stopped. Its own try/except so a fault in one lane cannot silence the other
     # -- the knock engine already spent a fortnight quiet without anyone noticing.
     import reopener
+    _run_lane("reopener", reopener.run)
+
+
+def _run_lane(name, fn):
+    """Run one send lane, and leave behind a record a monitor can actually read.
+
+    WHY THIS IS NOT JUST try/except ANY MORE. Both lanes already caught their own
+    exceptions and wrote the message to `<name>_error`. Nothing in the system ever
+    read those keys -- not the daily report, not any dashboard route. The only
+    other mention anywhere was an alert string telling the reader to check
+    /admin/config-check, a page that does not contain them. So a lane could throw
+    on every tick from the moment of a deploy and every surface would still look
+    healthy. That is the shape of the fortnight the knock engine spent silent, and
+    of the watchdog wire that was never joined.
+
+    TWO KEYS, NOT ONE, AND THE SECOND IS THE LOAD-BEARING ONE.
+      `<name>_error`   -- the last exception, CLEARED ON SUCCESS. Without the
+                          clear, one transient blip would leave a permanent error
+                          string behind and any alarm reading it would cry wolf
+                          forever, which is how an alarm gets ignored.
+      `<name>_last_ok` -- when the lane last completed. This is what distinguishes
+                          "threw once, recovered" from "has been dead an hour", and
+                          it is the only one of the two that can prove a lane is
+                          ALIVE. An absent error is not evidence of life; a lane
+                          that never runs at all raises nothing.
+
+    Deliberately still swallows the exception: a fault in one lane must not stop
+    the other, and must not take the scheduler down.
+    """
     try:
-        n = reopener.run()
+        n = fn()
         if n:
-            log.info("re-opener sent %s", n)
-    except Exception as e:
-        log.exception("re-opener failed: %s", e)
-        db.set_setting("reopener_error", str(e)[:500])
+            log.info("%s lane sent %s", name, n)
+        db.set_setting(f"{name}_last_ok", now_ist().isoformat())
+        db.set_setting(f"{name}_error", "")
+        return n
+    except Exception as e:                           # noqa: BLE001
+        log.exception("%s lane failed: %s", name, e)
+        db.set_setting(f"{name}_error", str(e)[:500])
+        return None
 
 
 def _adopt_direct_inbound(phone, sender_name, opted_out=False, source=None):
