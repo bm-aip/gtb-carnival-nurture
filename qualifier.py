@@ -435,13 +435,43 @@ def run_turn(lead, message, history=None, conv=None):
     # reaches for a figure it half-remembers, _price_problem correctly refuses it,
     # and the buyer gets an escalation instead of a question. Asking which home is
     # the answer that needs no source at all.
+    #
+    # 2026-09-02: this used to ask "the apartments or the villas". Villas only now,
+    # so the choice is between the two villas -- and asking it the old way would
+    # offer a product we cannot sell, in the reply that is supposed to be our most
+    # useful one.
     if message and config.asks_price_without_product(message):
         state += ("\n\nTHEY ASKED THE PRICE WITHOUT SAYING WHICH HOME. Do NOT hand "
                   "this to a colleague and do NOT quote any figure this turn -- you "
-                  "have nothing retrieved to support one. ASK THEM WHICH: the "
-                  "apartments or the villas, and say you will give them the starting "
+                  "have nothing retrieved to support one. ASK THEM WHICH: the 3 bed "
+                  "or the 4 bed villa, and say you will give them the starting "
                   "price for it. That is the whole reply. Set "
                   "gate_asked='configuration' and report the framing you used.")
+
+    # THEY ASKED FOR AN APARTMENT (owner, 2026-09-02). We sell villas only.
+    #
+    # Decided in code and not left to retrieval, for the reason this project keeps
+    # relearning: the corpus can only answer what it is asked, and "do you have a
+    # 2BHK" retrieves villa chunks that say nothing about apartments at all. The
+    # model then answers the question it wishes it had been asked, and the buyer is
+    # never actually told. Being told once, plainly, is the whole of what the owner
+    # asked for.
+    #
+    # WHAT THIS MUST NOT DO is end the conversation or call anybody. An apartment
+    # enquirer is not off-category and is not dead -- see config.ASKS_APARTMENT and
+    # handoff.py's `dead` branch, which suppresses a phone permanently. If they also
+    # cannot reach a villa, `_affordability_verdict` adds the nurture instruction on
+    # the same turn and the two read as one honest reply.
+    if message and config.asks_apartment(message):
+        state += (f"\n\nTHEY HAVE ASKED ABOUT AN APARTMENT. We sell VILLAS ONLY. Say "
+                  f"so ONCE, early and plainly, in these words in spirit:\n"
+                  f"  {config.VILLA_ONLY_FRAMING}\n"
+                  f"Then carry on normally and answer whatever else they asked. Do "
+                  f"NOT apologise, do NOT hand this to a colleague, and do NOT close "
+                  f"the conversation -- they are a live buyer whose budget may move. "
+                  f"Do NOT describe any apartment, quote an apartment price or size, "
+                  f"or suggest we might have one later. If you have already told "
+                  f"them this in an earlier message, do NOT repeat it.")
 
     # THEY HAVE PUT YOU OFF. A deferral leaves the model with nothing to say and
     # something to fill, which is where padding comes from. Lead 1413 said "Will
@@ -748,8 +778,11 @@ _LOW_CONTENT = re.compile(
     r"interested|yes\s*interested|ok(ay)?|\?+)\s*[.!]?\s*$", re.I)
 
 # What such a buyer actually wants: the project, described.
+# Villas only from 2026-09-02. This string is EMBEDDED and matched against the
+# corpus, so naming apartments here pulls apartment chunks to the top of the most
+# common turn in the funnel -- the "Need More Details" tap.
 _OVERVIEW_QUERY = ("Republic of Nature overview: where it is on ECR, the size of the "
-                   "community, the apartments and villas available, and the amenities")
+                   "community, the villas available, and the amenities")
 
 
 def _retrieval_query(message):

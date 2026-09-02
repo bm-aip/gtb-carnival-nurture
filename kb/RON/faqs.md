@@ -176,7 +176,7 @@ Phase 1 - 110Kld
 
 ## Is there a Proper Water Supply and Drainage System Planned for the project ?
 
-Yes, HNS for Villas, Conventional supply from OHT for the apartments
+Yes, HNS for the villas.
 
 <!-- faq:48 xlsx:49 -->
 
@@ -200,7 +200,7 @@ Mock Up Villa Sanitary/cp Roca, Switch board Schneider, Wires Havells, MCB/DB Le
 
 ## EV Charging station points details with the power watts (KV) ?
 
-Villas 1 each- Apartments 2 - 2 Apartments 1 Each
+Villas 1 each.
 
 <!-- faq:53 xlsx:54 -->
 
@@ -240,7 +240,7 @@ We will have a security at the entry and exit point and a boom barrier- Given th
 
 <!-- faq:65 xlsx:65 -->
 
-## What will be the size of driveway for apartment ,vilaments & villa ?
+## What will be the size of driveway for the villas ?
 
 6m wide driveway
 
@@ -314,7 +314,7 @@ Teakwood Door
 
 ## What is the dimension of the main door ?
 
-Podium villas 1200mm x 2400mm, Apartments 1000mm x 2400mm
+Podium villas 1200mm x 2400mm
 
 <!-- faq:84 xlsx:84 -->
 
@@ -386,7 +386,7 @@ Yes
 
 ## Where the clients will dry their clothes (frequently asked)
 
-Apartments & Villas we have balconies, plus Villas have utitlity areas
+The villas have balconies, plus utility areas
 
 <!-- faq:104 xlsx:104 -->
 
@@ -416,7 +416,7 @@ No Water meter
 
 ## Where are the solar panels located?
 
-Roof of Apartments and Villas
+Roof of the villas
 
 <!-- faq:112 xlsx:112 -->
 

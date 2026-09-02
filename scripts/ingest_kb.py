@@ -151,13 +151,17 @@ def chunk_inventory(text):
         return []
     listing = "; ".join(f"{t} at {s} sqft" for t, s in rows)
     return [{
+        # VILLAS ONLY from 2026-09-02. The apartment sentences are gone rather than
+        # guarded, because this chunk's own TEXT is what gets retrieved and quoted --
+        # a rule sitting beside a figure has never stopped the figure being said.
+        # Nothing here names the apartments at all: writing "we no longer sell
+        # apartments" would put the word into the retrieved context for the model to
+        # mirror, which is the same reason APPROVED_ALWAYS never says "do not mention
+        # villaments". What we no longer sell is handled in code, not by the corpus.
         "content": ("Republic of Nature currently offers these configurations: "
-                    + listing + ". Apartments run 1220 to 2133 sqft and villas run "
-                    "2552 to 3634 sqft. 'Compact 2BHK' is a smaller two-bedroom "
-                    "apartment and is a different product from the 2BHK. "
-                    "1BHK apartments, villaments, island villas and beachfront "
-                    "villas are described in older material but are not currently "
-                    "being sold."),
+                    + listing + ". Villas run 2552 to 3634 sqft and are the only "
+                    "homes on sale. Island villas and beachfront villas are "
+                    "described in older material but are not currently being sold."),
         # Pricing moved to its own publishable chunk on 2026-08-02, so this no
         # longer says "never state a price". The 3634/3643 conflict is resolved:
         # the price sheet is authoritative and both documents now say 3634.
@@ -301,7 +305,13 @@ APPROVED_ALWAYS = (
     "Never name the maintenance provider. If asked who maintains the community: it "
     "is managed by a professional service provider, and a colleague can confirm the "
     "details. "
-    "Only 2BHK and 3BHK apartments and 3-bed and 4-bed villas are on sale.")
+    # VILLAS ONLY from 2026-09-02. This one line rides on all eleven approved
+    # answers, so it is the highest-leverage sentence in the corpus -- and it is
+    # phrased as what IS sold, never as a list of what is not. Writing "we no longer
+    # sell apartments" would put the word into the retrieved context on every single
+    # approved answer, and the model mirrors what it reads. Same reason this has
+    # never named villaments.
+    "Only 3-bed and 4-bed villas are on sale.")
 
 
 def chunk_approved(text):

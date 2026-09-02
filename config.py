@@ -145,24 +145,84 @@ VILLA_FLOOR = int(os.environ.get("VILLA_FLOOR", "39400000"))     # Rs 3.94 crore
 # who says 1.2 without we confirming that config is apartment - so both go hand in
 # hand - our job is to qualify for the price and unit configuration".
 #
-# One floor per configuration, not one floor for the project. A 1.5 Cr buyer is
-# qualified for a 2BHK and NOT for the 3BHK they asked about, and the difference
-# matters: sales receiving "qualified, wants 3BHK" for someone 6 lakh short of a
-# 2BHK is the handoff that loses their trust in the queue.
+# One floor per configuration, not one floor for the project. A 4.5 Cr buyer is
+# qualified for a 3 bed villa and NOT for the 4 bed they asked about, and the
+# difference matters: sales receiving "qualified, wants 4 bed" for someone 50 lakh
+# short of it is the handoff that loses their trust in the queue.
+#
+# VILLAS ONLY from 2026-09-02 (owner). The three apartment floors -- Compact 2BHK
+# at 1.28 Cr, 2BHK at 1.46 Cr, 3BHK at 2.1 Cr -- are gone, and with them the
+# project's entry price moves 1.28 Cr -> 3.94 Cr. That is not a small edit: the
+# apartments WERE the downsell, so every buyer who cannot reach a villa now falls
+# through to `_affordability_verdict`'s "reaches NOTHING" branch, which is the
+# nurture path -- keep talking, probe for room, call nobody. Owner's choice
+# 2026-09-02: "honest + park them". Nothing about this may route to `dead`;
+# see classify_configuration.
 CONFIG_FLOORS = (
     # (label, floor) -- ordered cheapest first; the label is what a card shows.
-    ("Compact 2BHK apartment", 12800000),
-    ("2BHK apartment",         14600000),
-    ("3BHK apartment",         21000000),
     ("3 bed villa",            39400000),
     ("4 bed villa",            55000000),
 )
 
 # Buyers understate, and they stretch. Owner: "buyers will be able to strecch -
 # 20% to 25% more is usually fine". So a stated budget is compared to the floor
-# AFTER stretching, which is why 1.2 Cr qualifies for a 1.28 Cr apartment.
-# Effective entry becomes about 1.02 Cr.
+# AFTER stretching, which is why 3.2 Cr qualifies for a 3.94 Cr villa.
+# Effective entry becomes about 3.15 Cr.
 BUDGET_STRETCH = float(os.environ.get("BUDGET_STRETCH", "1.25"))
+
+
+# --- they asked for an apartment (owner, 2026-09-02) --------------------------
+#
+# We sell villas only now. An apartment word is NOT off-category and must never be
+# treated as one: `off-category` ends at handoff.py's `dead` branch, which sets
+# leads.suppressed=TRUE and mutes that phone permanently. Owner's instruction is the
+# opposite -- be honest once, then keep talking and keep following up.
+#
+# So "2BHK" is read as a VILLA enquiry carrying a correction. The buyer is told
+# plainly what we sell, the configuration gate closes rather than looping, and the
+# budget maths then runs against the villa floor. Somebody with 1.5 Cr does not
+# reach it, `affordable_configs` returns nothing, and they land in the "reaches
+# NOTHING in the current release" branch -- which already says do not hand over and
+# do not close. The behaviour the owner asked for falls out of machinery that was
+# already there; nothing new decides anyone's fate.
+#
+# Narrow on purpose. 1BHK, villaments, island villas, 5BHK and beachfront villas
+# were off-category BEFORE this change and stay off-category after it -- this is a
+# decision about apartments, not a reopening of everything we never sold.
+#
+# `bhk` carries NO leading word boundary on purpose. Buyers here type "2bhk" and
+# "3BHK" with no space, so \bbhk\b matches neither -- and those are the commonest
+# spellings in the inbox. The first version of this regex had the boundary and
+# silently classified "2bhk" as unrecognised, which would have left the bot asking
+# the configuration gate over and over at the exact people this change is for.
+ASKS_APARTMENT = re.compile(r"apartment|\bflat\b|bhk", re.I)
+
+# Never sold, before this change or after it. Checked ahead of everything because
+# "island villa" contains "villa" and "1BHK" contains "bhk", so either would
+# otherwise be priced as a product we cannot sell them.
+OFF_CATEGORY = re.compile(
+    r"\b1\s*bhk\b|\bone\s*bhk\b|villament|island\s*villa|"
+    r"beach\s*front|beachfront|\b5\s*bhk\b", re.I)
+
+# Marketing's sentence, owner-approved 2026-09-02. "Rs", never the rupee sign --
+# free session text reaches Wati as a URL query parameter. See VILLA_PRICE_TEXT.
+VILLA_ONLY_FRAMING = os.environ.get(
+    "VILLA_ONLY_FRAMING",
+    "We are only selling villas at Republic of Nature now - they start from "
+    "{price} onwards.").replace("{price}", "Rs 3.94 Cr")
+
+
+def asks_apartment(text):
+    """Did they name an apartment we have stopped selling?
+
+    Off-category first: a 1BHK or a 5BHK enquirer is not owed the villa-only
+    correction, because they were never being offered one of ours to begin with.
+    They keep the handling they already had.
+    """
+    t = (text or "")
+    if not t.strip() or OFF_CATEGORY.search(t):
+        return False
+    return bool(ASKS_APARTMENT.search(t))
 
 
 def classify_configuration(text):
@@ -175,11 +235,12 @@ def classify_configuration(text):
     if not t.strip():
         return None, None
     # OFF-CATEGORY FIRST. These appear in older material and are not currently
-    # sold (see kb/RON/inventory.md), so they have no floor. Checked before
-    # anything else because "island villa" contains "villa" and "1BHK" contains
-    # "bhk" -- both would otherwise be priced as a product we cannot sell them.
-    if re.search(r"\b1\s*bhk\b|\bone\s*bhk\b|villament|island\s*villa|"
-                 r"beach\s*front|beachfront|\b5\s*bhk\b", t):
+    # sold (see kb/RON/inventory.md), so they have no floor.
+    #
+    # Apartments are deliberately NOT in this list. They are no longer sold either,
+    # but a buyer who wants one is a live villa prospect to be corrected and kept,
+    # not a dead end -- see ASKS_APARTMENT above.
+    if OFF_CATEGORY.search(t):
         return None, None
     if "villa" in t:
         if "4" in t or "four" in t:
@@ -187,14 +248,13 @@ def classify_configuration(text):
         if "3" in t or "three" in t:
             return "3 bed villa", 39400000
         return "3 bed villa", 39400000          # villas start at the 3 bed
-    if "apartment" in t or "bhk" in t or "flat" in t:
-        if "compact" in t:
-            return "Compact 2BHK apartment", 12800000
-        if "3" in t or "three" in t:
-            return "3BHK apartment", 21000000
-        if "2" in t or "two" in t:
-            return "2BHK apartment", 14600000
-        return "Compact 2BHK apartment", 12800000   # apartments start here
+    # An apartment ask, in any size. Sized to the villa they are closest to so the
+    # card sales receives names something real: a 3BHK enquirer is pointed at the
+    # 3 bed villa, not silently upgraded to the 5.5 Cr four bed.
+    if ASKS_APARTMENT.search(t):
+        if "4" in t or "four" in t:
+            return "4 bed villa", 55000000
+        return "3 bed villa", 39400000
     return None, None
 
 
@@ -410,12 +470,15 @@ STAFF_TEMPLATE = os.environ.get("WATI_TPL_STAFF", "ron_staff_card_01")
 #
 # "your enquiry" is the default and will be the commonest value: most ghosts go
 # quiet BEFORE saying anything specific.
+# NOTHING READS THIS. reopener.topic_for() builds the topic from the stored
+# checklist instead, so this table has never reached a buyer. The four apartment
+# rows were removed on 2026-09-02 rather than the whole table, because a closed
+# list of approved topic words is the right shape for this template if the lane is
+# ever moved onto it.
 REOPENER_TOPICS = {
-    "apartments":   "the apartments",
-    "compact_2bhk": "the compact 2BHK apartments",
-    "2bhk":         "the 2BHK apartments",
-    "3bhk":         "the 3BHK apartments",
     "villas":       "the villas",
+    "3_bed_villa":  "the 3 bed villas",
+    "4_bed_villa":  "the 4 bed villas",
     "location":     "the location on ECR",
     "sizes":        "the layouts and sizes",
     "amenities":    "the amenities",
@@ -901,9 +964,15 @@ FRAMINGS = {
         "so that we can keep the right homes ready for your visit",
         "so that I can tell you about the connectivity from your area",
     ],
+    # configuration[1] REPLACED IN PLACE 2026-09-02, never reordered or removed.
+    # `asked` stores framing INDEXES against live conversations, so dropping one
+    # would re-point what a mid-flight conversation thinks it has already spent.
+    # It used to say "the apartments and the villas are very different", which
+    # names a product we no longer sell. The gate itself still earns its place --
+    # a 3 bed and a 4 bed villa are 1.5 Cr apart.
     "configuration": [
         "so that I can tell you what is available right now",
-        "the apartments and the villas are very different",
+        "the 3 bed and the 4 bed villas are very different",
         "so that I can suggest the two or three that suit you",
     ],
     "budget": [

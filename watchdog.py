@@ -78,6 +78,19 @@ DELIVERY_MIN_SENDS = int(os.environ.get("WATCHDOG_DELIVERY_MIN_SENDS", "20"))
 POLLER_STALE_MIN = int(os.environ.get("WATCHDOG_POLLER_STALE_MIN", "90"))
 _HB_META_LEADS = "meta_leads_last_ok"
 
+# A send lane has been throwing for this long. The tick runs every minute, so an
+# hour is roughly sixty consecutive failures -- comfortably past a transient
+# database blip or one bad row, and far short of the fortnight a silent lane
+# managed to hide for. Owner's call, 2026-08-31: alert rather than wait for the
+# morning report, but not on a single blip.
+LANE_BROKEN_MIN = int(os.environ.get("WATCHDOG_LANE_BROKEN_MIN", "60"))
+
+# The lanes inside sequencer.tick(), and the plain-English name for each. Adding a
+# third lane means adding it HERE -- a lane absent from this list is unwatched, and
+# unwatched is precisely how the ghost lane came to have no monitoring at all.
+LANES = (("knock", "the follow-up engine"),
+         ("reopener", "the re-opener (dead conversations)"))
+
 # One message per problem per hour. An alert that repeats every 15 minutes is an
 # alert people mute, and a muted alert is worse than none because it still looks
 # like coverage. Same reasoning as the send-once guard on lead cards.
@@ -285,8 +298,9 @@ def _check_nobody_contacted():
                 f"{due} lead(s) could be knocked right now and none has gone out in "
                 f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}."
                 + (f" Others waiting: {held}." if held else ""),
-                "The knock engine is running but sending nothing. Check "
-                "/admin/config-check and the knock_error setting.")
+                "The knock engine is running but sending nothing. Check the "
+                "knock_error and knock_last_ok lines on /api/summary, then "
+                "/admin/config-check for the send gates.")
     if ok:
         _mark_alerted("knocks_silent")
     return f"{due} due, none sent"
@@ -379,6 +393,79 @@ def _check_poller_wedged():
     return f"meta poller stale {int(age_min)}m"
 
 
+def _check_lane_broken():
+    """A send lane inside the tick has been throwing, and nobody could have known.
+
+    THE WIRE THAT WAS NEVER JOINED, AGAIN. sequencer.tick() runs two lanes, each
+    wrapped in its own try/except so one cannot silence the other, and each writing
+    its exception to `<lane>_error`. Nothing read those keys. Not the daily report,
+    not any dashboard route; the only other mention in the codebase was the string
+    in _check_nobody_contacted below, telling the reader to look at
+    /admin/config-check -- a page that does not contain them. So the ghost lane
+    could have failed on its first tick after deploy and every screen would have
+    read healthy.
+
+    WHY BOTH KEYS ARE NEEDED, and this is the part that makes the check honest:
+
+      * an error with a RECENT success is a lane that threw and recovered. Not an
+        alarm -- exactly the transient this must not cry wolf about.
+      * an error with a STALE success is a lane that has been down for an hour.
+      * NO success and NO error is not health, it is a lane that has never run.
+        Measured from boot, like the poller check, for the same reason: a check
+        that stays quiet because it has nothing to look at is the failure this
+        module exists to remove.
+
+    One alert per lane, so a broken knock engine cannot mask a broken re-opener.
+    """
+    out = []
+    for key, label in LANES:
+        err = (db.get_setting(f"{key}_error") or "").strip()
+        raw = db.get_setting(f"{key}_last_ok")
+        since = "completed"
+        if not raw:
+            raw = db.get_setting("app_boot_at")
+            since = "started"
+            if not raw:
+                # Pre-dates the boot marker. Nothing trustworthy to measure
+                # against; the next boot supplies one.
+                continue
+        try:
+            last = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        age_min = (datetime.now(last.tzinfo) - last).total_seconds() / 60
+        if age_min < LANE_BROKEN_MIN:
+            # Ran recently. An error string here is a blip it recovered from.
+            continue
+        if since == "completed" and not err:
+            # Succeeded within living memory but not lately, and is not throwing.
+            # That is _check_nobody_contacted's territory (leads due, none sent) and
+            # not a fault in the lane itself -- two checks alerting on one fact is
+            # how a reader learns to skim both.
+            continue
+        if _muted(f"lane_{key}"):
+            out.append(f"{key} lane broken {int(age_min)}m (muted)")
+            continue
+
+        if since == "started":
+            detail = (f"{label} has NEVER completed since the service started "
+                      f"{int(age_min)} minutes ago.")
+        else:
+            detail = (f"{label} has not completed for {int(age_min)} minutes.")
+        if err:
+            detail += f" Last error: {err[:200]}"
+
+        ok = _alert(f"lane_{key}",
+                    f"{label.upper()} IS NOT RUNNING",
+                    detail,
+                    "This lane is failing on every tick and sends nothing. Check "
+                    f"the {key}_error line on /api/summary, then the deploy logs.")
+        if ok:
+            _mark_alerted(f"lane_{key}")
+        out.append(f"{key} lane broken {int(age_min)}m")
+    return "; ".join(out) if out else None
+
+
 def _check_unbacked_promises():
     """The bot mentioned a person, and no card was ever sent. THE LOOSE NET.
 
@@ -435,7 +522,7 @@ def check():
     found = []
     for fn in (_check_failed_jobs, _check_undelivered_cards, _check_queue_stalled,
                _check_nobody_contacted, _check_delivery_collapse,
-               _check_poller_wedged, _check_unbacked_promises):
+               _check_poller_wedged, _check_lane_broken, _check_unbacked_promises):
         try:
             r = fn()
             if r:
@@ -472,7 +559,16 @@ def daily_report(force=False):
                      AND ts > now() - interval '24 hours'""")
     knocks = n("""SELECT count(*) AS n FROM message_log
                   WHERE direction='out' AND msg_type LIKE 'knock%%'
-                    AND ts > now() - interval '24 hours'""")
+                    AND ts > now() - interval '24 hours'
+                    AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')""")
+    # COUNTED SEPARATELY, BECAUSE 'knock%' DOES NOT MATCH IT. reopener_t7 was
+    # invisible in this report and in /admin/drip alike, so the one number a reader
+    # sees each morning could not distinguish a working ghost lane from one that had
+    # never sent anything at all.
+    reopens = n("""SELECT count(*) AS n FROM message_log
+                   WHERE direction='out' AND msg_type='reopener_t7'
+                     AND ts > now() - interval '24 hours'
+                     AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')""")
     visits = n("""SELECT count(*) AS n FROM message_log
                   WHERE msg_type='handoff_visit'
                     AND ts > now() - interval '24 hours'""")
@@ -516,6 +612,14 @@ def daily_report(force=False):
         problems.append(f"{fail_pct}% of sends not arriving")
     if stalled:
         problems.append(f"{stalled} conversations stalled 3d+")
+    # A LANE THAT IS THROWING BELONGS IN THE HEARTBEAT, not only in an alert. The
+    # alert mutes after one send per hour and a phone can be missed; the daily line
+    # is the surface that cannot be missed, and a broken lane is exactly the kind of
+    # thing that quietly persists for a fortnight. Same reasoning as the verdict
+    # rewrite above.
+    for key, label in LANES:
+        if (db.get_setting(f"{key}_error") or "").strip():
+            problems.append(f"{label} is failing")
 
     verdict = ("ALL CLEAR - nothing needs you today" if not problems
                else "NEEDS YOU: " + "; ".join(problems))
@@ -523,13 +627,15 @@ def daily_report(force=False):
     ok = _alert("daily",
                 "RON bot - 24 hour report",
                 f"{convos} buyers talked to us, {replies} replies sent, "
-                f"{knocks} knocks out ({due} still due). {visits} visits booked, "
+                f"{knocks} knocks out ({due} still due), {reopens} re-openers. "
+                f"{visits} visits booked, "
                 f"{qualified} qualified, {stuck} handed to a human. "
                 f"{fail_pct}% of sends failed.",
                 verdict)
     if ok:
         db.set_setting(_LAST_DAILY, today)
     return {"conversations": convos, "replies": replies, "knocks": knocks,
+            "reopeners": reopens,
             "visits": visits, "qualified": qualified, "stuck": stuck,
             "failed_jobs": failed, "due_now": due, "delivery_fail_pct": fail_pct,
             "stalled_conversations": stalled, "problems": problems,

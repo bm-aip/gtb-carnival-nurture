@@ -53,7 +53,12 @@ R.check("the water image is NOT wired", "water" not in media.WIRED)
 if os.path.isdir(media.MEDIA_DIR):
     on_disk = {f for f in os.listdir(media.MEDIA_DIR) if f.endswith(".jpg")}
     referenced = {fn for fn, _ in media.LIBRARY.values()}
-    R.eq("no file sits in the folder unreferenced", sorted(on_disk - referenced), [])
+    R.eq("no file sits in the folder unreferenced",
+         sorted(on_disk - referenced - media.RETIRED), [])
+    # A retired file must be genuinely unreachable, not merely unwired: LIBRARY is
+    # what /admin/test-media can address by hand.
+    R.eq("retired files are addressed by nothing",
+         sorted(media.RETIRED & referenced), [])
 
 # --- reading the buyer's stated purpose ---------------------------------------
 # Stored as the model wrote it, so it is read rather than looked up. An
@@ -82,24 +87,33 @@ for value, want in PURPOSE_CASES:
     got = media._purpose_slug(value)
     R.eq(f"purpose {value!r} -> {want}", got, want)
 
-# --- villa or apartment -------------------------------------------------------
+# --- which picture their configuration earns ----------------------------------
+#
+# VILLAS ONLY from 2026-09-02. An apartment enquirer is shown the villas, not
+# nothing: this fires on the same turn they are told the apartments are gone, and
+# that is exactly when to show them what they can have instead.
 CONFIG_CASES = [
     ("villa", "villa"), ("3 bed villa", "villa"), ("4BHK Villa", "villa"),
-    ("apartment", "apartment"), ("2BHK apartment", "apartment"),
-    ("3 bhk flat", "apartment"),
-    # Both named, or neither: send nothing rather than pick.
-    ("villa or apartment", None), ("apartments and villas", None),
-    ("3 bhk", None), ("", None), (None, None),
+    ("apartment", "villa"), ("2BHK apartment", "villa"),
+    ("3 bhk flat", "villa"), ("2bhk", "villa"),
+    # Ambiguity used to mean send nothing. There is no ambiguity left to protect --
+    # whichever of the two they meant, the villas are the answer.
+    ("villa or apartment", "villa"), ("apartments and villas", "villa"),
+    ("3 bhk", "villa"),
+    # Naming no home at all still sends nothing.
+    ("", None), (None, None), ("looking to buy", None),
 ]
 for value, want in CONFIG_CASES:
     got = media._config_slug(value)
     R.eq(f"configuration {value!r} -> {want}", got, want)
 
-# The apartment image is the one wired render, so a buyer who says "apartment" is
-# shown CGI. Its caption has to say so -- checked above, restated here because this
-# is the pairing that would mislead someone.
-R.check("the apartment slug is a render and admits it",
-        "render" in (media.caption_for("apartment") or "").lower())
+# No apartment picture may be reachable at all. The renders showed a product we no
+# longer sell, and a slug that still resolves is a slug someone can send by hand.
+R.eq("no apartment slug survives in the library",
+     sorted(k for k in media.LIBRARY if "apartment" in k.lower()), [])
+R.eq("...and none is wired", sorted(k for k in media.WIRED if "apartment" in k.lower()), [])
+R.check("the apartment slug resolves to nothing",
+        media.path_for("apartment") is None and media.caption_for("apartment") is None)
 R.check("the villa slug is a real photograph",
         media.LIBRARY["villa"][0].startswith("ron_photo_"))
 
