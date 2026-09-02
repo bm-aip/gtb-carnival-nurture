@@ -81,7 +81,15 @@ def topic_for(conv):
         # parenthetical aside and take the first clause.
         s = re.sub(r"\([^)]*\)", " ", str(s or ""))
         s = s.split(";")[0].split(",")[0].strip(" .-")
-        return " ".join(s.split())
+        s = " ".join(s.split())
+        # VILLAS ONLY from 2026-09-02, and this lane reads checklists written
+        # BEFORE that. Hundreds of them say "Compact 2BHK apartment" or "3BHK", so
+        # unguarded this template reopens a dead conversation with "we were talking
+        # about the Compact 2BHK apartment" -- naming a home we cannot sell, in an
+        # approved template, to somebody who has not heard from us in a fortnight.
+        # Dropping the phrase is not dropping the person: the caller falls through
+        # to their PURPOSE, which is still true and still specific.
+        return "" if config.asks_apartment(s) else s
 
     # A PARKED VISIT COMES FIRST. It is the strongest thing anyone tells us, and
     # it is what they will remember saying.

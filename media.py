@@ -16,7 +16,7 @@ second place for the set to drift out of step with the code that references it.
 
 NAMES DESCRIBE THE PICTURE, AND THE PREFIX IS PROVENANCE
 --------------------------------------------------------
-`ron_photo_*` is a photograph. `ron_render_*` is CGI, because the apartments are not
+`ron_photo_*` is a photograph. `ron_render_*` is CGI, because those homes are not
 built and nothing photographable exists -- so no render may ever be captioned as the
 site as it stands today.
 
@@ -29,6 +29,7 @@ names, and turned out to be photographs. Look at the file, never the label.
 import os
 import re
 
+import config
 import db
 
 MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -62,8 +63,9 @@ LIBRARY = {
     # --- configuration. He has told us what he wants; show him that, not the other.
     "villa": ("ron_photo_villa_row.jpg",
               "The villas."),
-    "apartment": ("ron_render_apartment_courtyard.jpg",
-                  "The apartment courtyards. A render - they are still being built."),
+    # `apartment` was retired from the LIBRARY on 2026-09-02: villas only. The file
+    # is left on disk but nothing may address it, because a slug that still resolves
+    # is a slug /admin/test-media can send by hand.
 
     # --- a visit is an abstraction until they can see the place they would be
     #     standing in. Fires when a day actually goes in the diary, never on the
@@ -77,10 +79,6 @@ LIBRARY = {
     "balcony_couple": ("ron_photo_balcony_couple.jpg", "One of the balconies."),
     "balcony_coffee": ("ron_photo_balcony_coffee.jpg", "Coffee outside."),
     "terrace_cat": ("ron_photo_terrace_cat.jpg", "A quiet corner."),
-    "apartment_greens": ("ron_render_apartment_greens.jpg",
-                         "The apartments, as designed. A render."),
-    "apartment_family": ("ron_render_apartment_family.jpg",
-                         "The apartments, as designed. A render."),
     "living_room": ("ron_render_living_room_family.jpg",
                     "Inside a home, as designed. A render."),
     # NOT wired and worth a second look before it ever is: it shows a body of water,
@@ -91,9 +89,20 @@ LIBRARY = {
 
 SLUGS = set(LIBRARY)
 
+# RETIRED 2026-09-02, villas only. These three files stay on disk and are addressed
+# by nothing -- not LIBRARY, not WIRED, not /admin/test-media, which can only send a
+# slug. Kept rather than deleted because the decision is the owner's to reverse and
+# a reshoot is expensive; listed here so the "no file sits in the folder
+# unreferenced" guard still fails for a file nobody meant to leave behind.
+RETIRED = {
+    "ron_render_apartment_courtyard.jpg",
+    "ron_render_apartment_greens.jpg",
+    "ron_render_apartment_family.jpg",
+}
+
 # What actually fires today. Everything else in LIBRARY is reachable only by hand.
 WIRED = ("hero", "purpose_weekend", "purpose_primary", "purpose_investment",
-         "villa", "apartment", "visit")
+         "villa", "visit")
 
 
 def path_for(slug):
@@ -145,13 +154,19 @@ def _purpose_slug(value):
 
 
 def _config_slug(value):
-    """Villa or apartment. Anything naming both, or neither, sends nothing."""
+    """Which picture their configuration earns. Villas only from 2026-09-02.
+
+    An apartment enquirer is now shown THE VILLAS, which is the honest picture: it
+    is what we sell and what the reply alongside it is telling them. Sending nothing
+    would be the safer-looking choice and the wrong one -- this fires on the turn
+    they are told the apartments are gone, and that is precisely the moment to show
+    them what they can have instead.
+
+    Anything naming neither still sends nothing.
+    """
     v = str(value or "").lower()
-    villa, apt = "villa" in v, ("apartment" in v or "flat" in v)
-    if villa and not apt:
+    if "villa" in v or config.asks_apartment(v):
         return "villa"
-    if apt and not villa:
-        return "apartment"
     return None
 
 

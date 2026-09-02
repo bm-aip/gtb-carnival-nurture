@@ -21,10 +21,10 @@ There are 343 homes in total across the community.
 
 <!-- approved:Q2 -->
 
-## Is there a swimming pool? Do apartment buyers get a pool?
+## Is there a swimming pool?
 
-Yes. There is a common swimming pool for residents. Apartments do not have a
-separate pool of their own — the pool is a shared community amenity.
+Yes. There is a common swimming pool for residents. It is a shared community
+amenity, not a private pool for each home.
 
 <!-- approved:Q5 -->
 
@@ -86,7 +86,7 @@ June 2028.
 
 ## What makes Republic of Nature different? Tell me about the project. What is special about it?
 
-India's First Man-Made Beach Community. Luxury Apartments & Signature Villas. A
+India's First Man-Made Beach Community. Signature Villas. A
 1,00,000+ sq ft Grand Clubhouse. A low-density community with expansive green
 spaces. Resort-style living, every day.
 
@@ -111,7 +111,7 @@ they govern.
 | The pool is shared. Never imply a private or per-home pool. | pool |
 | The RERA number may be stated to a buyer. | rera |
 | Never name the maintenance provider. If asked who maintains the community, say it is managed by a professional service provider and offer to have a colleague confirm the details. | — |
-| Only 2BHK and 3BHK apartments and 3-bed and 4-bed villas are on sale. Never mention Phase 3, island villas, beachfront villas or villaments. | — |
+| Only 3-bed and 4-bed villas are on sale. Never mention Phase 3, island villas, beachfront villas or villaments. Villas only from 2026-09-02: the apartments are no longer sold. | — |
 
 ## What this file deliberately does NOT answer, and why
 

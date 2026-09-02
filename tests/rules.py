@@ -44,13 +44,32 @@ def test_qualification():
     # stretched. The bot said "that sits a little above your band" and downsold.
     R.eq("villa @3.5cr qualifies (the downsell bug)", _bar("3 bedroom villa", 35 * CR // 10)[0], True)
     R.eq("villa @1.2cr does not", _bar("villa", 12 * CR // 10)[0], False)
-    R.eq("compact 2bhk @1.2cr qualifies on the 25% stretch", _bar("compact 2bhk", 12 * CR // 10)[0], True)
-    R.eq("3bhk @1.5cr does not reach", _bar("3BHK apartment", 15 * CR // 10)[0], False)
-    R.eq("3bhk @2.0cr reaches", _bar("3BHK apartment", 2 * CR)[0], True)
+    R.eq("3 bed villa @3.2cr qualifies on the 25% stretch",
+         _bar("3 bed villa", 32 * CR // 10)[0], True)
     R.eq("4 bed villa @4cr does not reach", _bar("4 bed villa", 4 * CR)[0], False)
+    R.eq("4 bed villa @4.5cr reaches", _bar("4 bed villa", 45 * CR // 10)[0], True)
 
-    ok, why = _bar("3BHK apartment", 15 * CR // 10)
-    R.check("a short budget names the best fit for the pivot", "2BHK apartment" in why, why)
+    # VILLAS ONLY (owner, 2026-09-02). An apartment ask is priced against the villa
+    # it is closest to, so a 2BHK enquirer with 1.5 Cr fails the bar -- but read the
+    # reason: it must be an affordability answer, never an off-category one, because
+    # off-category is what routes to `dead` and mutes the phone for good.
+    ok, why = _bar("2bhk", 15 * CR // 10)
+    R.eq("an apartment ask no longer qualifies on an apartment budget", ok, False)
+    R.check("and it fails on PRICE, not on category",
+            "does not reach" in why and "not recognised" not in why, why)
+
+    ok, why = _bar("2bhk", 45 * CR // 10)
+    R.eq("an apartment ask with a villa budget DOES qualify", ok, True)
+    R.check("...as a villa, which is what sales is told", "villa" in why, why)
+
+    # There is nothing cheaper to name any more. The old assertion here wanted
+    # "2BHK apartment" in the reason -- that pivot no longer exists, and a reason
+    # that named one would send sales after a home we cannot sell.
+    ok, why = _bar("4 bed villa", 15 * CR // 10)
+    R.check("a short budget names no cheaper product, because there is none",
+            "nothing in the current release" in why, why)
+    R.check("and never names an apartment", "apartment" not in why.lower()
+            and "bhk" not in why.lower(), why)
 
     # Configuration is a HARD GATE: no configuration, no qualification.
     R.eq("no configuration -> not qualified",
@@ -66,11 +85,28 @@ def test_configuration_classifier():
     for txt in ("1BHK", "1 bhk apartment", "one bhk", "villament", "island villa",
                 "beachfront villa", "5BHK", "not sure", ""):
         R.eq(f"off-category not priced: {txt!r}", config.classify_configuration(txt)[0], None)
+    # VILLAS ONLY (owner, 2026-09-02). Every apartment word now prices as the villa
+    # nearest it. NOT as off-category: `classify` returning None is what makes the
+    # configuration gate keep asking, and it is what off-category shares with the
+    # `dead` path. An apartment enquirer must be corrected and kept, not looped or
+    # muted -- see config.ASKS_APARTMENT.
     for txt, want in (("villa", "3 bed villa"), ("4BHK villa", "4 bed villa"),
-                      ("3bhk apartment", "3BHK apartment"), ("2 BHK", "2BHK apartment"),
-                      ("compact 2bhk", "Compact 2BHK apartment"),
-                      ("apartment", "Compact 2BHK apartment")):
+                      ("3bhk apartment", "3 bed villa"), ("2 BHK", "3 bed villa"),
+                      ("compact 2bhk", "3 bed villa"), ("apartment", "3 bed villa"),
+                      ("flat", "3 bed villa"), ("4bhk", "4 bed villa")):
         R.eq(f"classify {txt!r}", config.classify_configuration(txt)[0], want)
+
+    # THE SPELLING THAT ACTUALLY ARRIVES. Buyers here type "2bhk" with no space, so
+    # a \bbhk\b boundary matches nothing -- the first cut of this change had one and
+    # silently sent every "2bhk" back round the configuration gate.
+    for txt in ("2bhk", "2 bhk", "3BHK", "3 bhk", "2bhk flat", "apartment"):
+        R.eq(f"apartment ask detected: {txt!r}", config.asks_apartment(txt), True)
+    for txt in ("3 bed villa", "villa", "", "4 bedroom villa"):
+        R.eq(f"villa ask is not an apartment ask: {txt!r}", config.asks_apartment(txt), False)
+    # Off-category keeps its own handling and is not owed the villa-only correction.
+    for txt in ("1BHK", "5BHK", "villament", "island villa"):
+        R.eq(f"off-category is not an apartment ask: {txt!r}",
+             config.asks_apartment(txt), False)
 
 
 # --------------------------------------------------------------------------
@@ -250,9 +286,25 @@ def test_affordability_is_decided_for_the_model():
         {"budget": 35 * CR // 10, "configuration": "3 bedroom villa"}))
     R.check("REACHES is stated plainly", "REACHES" in reach, reach)
     R.check("and forbids a downsell", "cheaper" in reach.lower(), reach)
+    # There is no fallback left to name. Villas only from 2026-09-02, so a 1.5 Cr
+    # buyer reaches nothing -- and the verdict's job is now to hold the bot in the
+    # conversation rather than hand it a cheaper thing to offer.
     short = " ".join(q._affordability_verdict(
-        {"budget": 15 * CR // 10, "configuration": "3BHK apartment"}))
-    R.check("short budget names the fallback", "2BHK apartment" in short, short)
+        {"budget": 15 * CR // 10, "configuration": "3 bed villa"}))
+    R.check("short budget says nothing is reachable",
+            "reaches NOTHING" in short, short)
+    R.check("...and forbids both the handover and the goodbye",
+            "Do NOT hand this to a colleague" in short
+            and "do NOT close the conversation" in short, short)
+    R.check("...and never invents a cheaper home",
+            "apartment" not in short.lower() and "bhk" not in short.lower(), short)
+
+    # The same for someone who asked for an apartment: still no handover, still no
+    # close. This is the case the whole change turns on.
+    apt = " ".join(q._affordability_verdict(
+        {"budget": 15 * CR // 10, "configuration": "2bhk"}))
+    R.check("an apartment ask on a short budget is held, not handed over",
+            "reaches NOTHING" in apt and "Do NOT hand this to a colleague" in apt, apt)
     R.eq("incomplete checklist stays silent",
          q._affordability_verdict({"budget": 2 * CR}), [])
 
@@ -433,13 +485,14 @@ def test_one_floor_and_it_is_stretched():
             not hasattr(config, "BUDGET_FLOOR"),
             "config.BUDGET_FLOOR still exists -- two floors is the whole defect")
 
-    # ₹1.1 cr: stretched = ₹1.375 cr, which reaches the ₹1.28 cr entry apartment.
-    # This is the buyer the raw comparison was killing.
-    R.eq("1.1cr is NOT killed -- stretched it reaches the entry apartment",
-         _rule5(11 * CR // 10), "answer")
+    # ₹3.2 cr: stretched = ₹4.0 cr, which reaches the ₹3.94 cr entry villa. This is
+    # the buyer the raw comparison was killing. The figures moved on 2026-09-02 when
+    # the apartments went; the rule did not.
+    R.eq("3.2cr is NOT killed -- stretched it reaches the entry villa",
+         _rule5(32 * CR // 10), "answer")
     R.eq("...and clears_the_bar agrees, which is the point",
-         cv.clears_the_bar({"checklist": {"budget": 11 * CR // 10, "location": "ECR",
-                                          "configuration": "compact 2bhk"}})[0], True)
+         cv.clears_the_bar({"checklist": {"budget": 32 * CR // 10, "location": "ECR",
+                                          "configuration": "3 bed villa"}})[0], True)
 
 
 # --------------------------------------------------------------------------
@@ -447,11 +500,35 @@ def test_one_floor_and_it_is_stretched():
 # is not to reject but to nurture and see if they are willing to make the jump".
 # --------------------------------------------------------------------------
 def test_below_entry_is_nurtured_not_killed():
-    # 80 lakh stretched is ₹1 cr, genuinely short of the ₹1.28 cr entry.
+    # 80 lakh stretched is ₹1 cr, far short of the ₹3.94 cr entry villa.
     R.eq("80 lakh is nurtured, not killed", _rule5(8000000), "nurture")
     R.eq("...and 20 lakh too, however far below", _rule5(2000000), "nurture")
 
-    R.eq("a reachable budget is left alone", _rule5(2 * CR), "answer")
+    # ₹2 cr USED to clear the old ₹1.28 cr apartment entry and be left alone. Since
+    # 2026-09-02 it reaches nothing -- and the point of this test is that the answer
+    # is still nurture and never death. Far more people land here now, which is
+    # exactly why the branch had to keep working.
+    R.eq("2cr no longer reaches, and is nurtured rather than killed",
+         _rule5(2 * CR), "nurture")
+    R.eq("a reachable budget is left alone", _rule5(4 * CR), "answer")
+
+    # ASKING FOR AN APARTMENT MUST NEVER BE FATAL (owner, 2026-09-02).
+    #
+    # This is the trap the villa-only change had to step around. `dead` sets
+    # leads.suppressed=TRUE, which blocks every future send to that phone forever --
+    # and its own comment reserves it for "wrong city and products we do not sell".
+    # Apartments became a product we do not sell, so the obvious edit would have
+    # silently muted everyone who types "2BHK". The owner asked for the opposite:
+    # be honest once, then keep talking and keep following up.
+    for cfg in ("2bhk", "3BHK apartment", "compact 2bhk", "flat"):
+        ok, why = cv.clears_the_bar(
+            {"checklist": {"budget": 15 * CR // 10, "location": "Adyar",
+                           "configuration": cfg}})
+        R.eq(f"apartment ask {cfg!r} does not qualify", ok, False)
+        R.check(f"...but is refused on price, never on category: {cfg!r}",
+                "not recognised" not in why, why)
+    R.eq("an apartment ask on a short budget is nurtured, not killed",
+         _rule5(15 * CR // 10), "nurture")
 
     # A better exit must survive. Someone who low-balls AND books a visit has given
     # us the visit; the number is worth less than the appointment.
@@ -782,7 +859,11 @@ def test_no_rupee_sign_leaves_the_building():
         open(os.path.join(root, "kb/RON/pricing.md"), encoding="utf-8").read())
     R.check("the pricing document still yields a chunk", len(priced) == 1,
             f"{len(priced)} chunks -- a silent zero withdraws the only sayable price")
-    for cfg in ("Compact 2BHK", "3 bed villa", "4 bed villa"):
+    # "Compact 2BHK" was in this list until 2026-09-02. Villas only now, and the
+    # point of the check is unchanged: chunk_pricing matches table rows on the
+    # currency marker, so an edit that breaks the pattern silently withdraws the
+    # only price the bot may say. The rows must still be found.
+    for cfg in ("3 bed villa", "4 bed villa", "Rs 3.94 Cr", "Rs 5.5 Cr"):
         R.check(f"{cfg} survived the rewrite", cfg in priced[0]["content"])
 
     approved = ing.chunk_approved(
@@ -1174,6 +1255,174 @@ def test_quarantine_survives_a_re_ingest():
             "a withdrawal with no reason cannot be reviewed or reversed")
 
 
+def test_the_apartment_buyer_is_told_once_and_kept():
+    """VILLAS ONLY, owner 2026-09-02: "honest + park them".
+
+    Decided in code, not left to the corpus. "Do you have a 2BHK?" retrieves villa
+    chunks that say nothing about apartments, so the model answers the question it
+    wishes it had been asked and the buyer is never actually told. Same reason
+    WANTS_CALL and asks_price_without_product are decided here.
+
+    What this must NOT do is call anybody or end anything. handoff.py's `dead`
+    branch sets leads.suppressed=TRUE and mutes that phone permanently, and its own
+    comment reserves it for "products we do not sell" -- which apartments now are.
+    The whole change hangs on those two facts not meeting.
+    """
+    import re
+    src = _src("qualifier.py")
+
+    R.check("the villa-only correction is decided in code",
+            "config.asks_apartment(message)" in src,
+            "left to retrieval, the buyer is never told at all")
+    R.check("...and speaks the owner's approved sentence",
+            "config.VILLA_ONLY_FRAMING" in src,
+            "a hand-written variant is a second place for the wording to drift")
+
+    # Normalised, because the instruction is built from adjacent string literals and
+    # a phrase can be split across two source lines by nothing but line wrapping.
+    block = src[src.index("THEY HAVE ASKED ABOUT AN APARTMENT"):]
+    block = block[:block.index("\n\n")]
+    # `f"` before `"`, or every f-string prefix is left stranded mid-sentence as a
+    # bare "f" and the phrase still does not match.
+    block = " ".join(block.replace('f"', " ").replace('"', " ").split())
+    for phrase, why in (
+            ("do NOT hand this to a colleague",
+             "an apartment ask must not spend a salesperson"),
+            ("do NOT close the conversation",
+             "their budget may move; closing loses them for good"),
+            ("Do NOT describe any apartment",
+             "describing one is the thing the whole change exists to stop"),
+            ("do NOT repeat it",
+             "told every turn, the correction becomes nagging")):
+        R.check(f"the instruction says: {phrase!r}", phrase in block, why)
+
+    # The framing is spoken text and goes out as a Wati URL query parameter.
+    R.check("the framing names the villa entry price",
+            "3.94" in config.VILLA_ONLY_FRAMING, config.VILLA_ONLY_FRAMING)
+    R.check("...written Rs, never the symbol",
+            "₹" not in config.VILLA_ONLY_FRAMING, config.VILLA_ONLY_FRAMING)
+    R.check("...and carries no newline, which Wati rejects",
+            "\n" not in config.VILLA_ONLY_FRAMING, config.VILLA_ONLY_FRAMING)
+
+    # THE FATAL PATH, checked from the other end. Nothing may route an apartment to
+    # `dead`, and classify must never return None for one -- None is what makes the
+    # configuration gate ask again, forever.
+    for cfg in ("2bhk", "2 BHK", "3BHK apartment", "compact 2bhk", "flat",
+                "apartment", "3 bhk flat"):
+        label, floor = config.classify_configuration(cfg)
+        R.check(f"{cfg!r} is priced, not left unrecognised",
+                label is not None and floor, f"got {label!r} -- the gate would loop")
+        R.check(f"...and is priced as a villa: {cfg!r}", "villa" in (label or ""), label)
+
+    # The one thing the old code did that the new code must not.
+    R.check("no apartment floor survives in CONFIG_FLOORS",
+            not [l for l, _ in config.CONFIG_FLOORS
+                 if re.search(r"apartment|bhk", l, re.I)],
+            str(config.CONFIG_FLOORS))
+    R.eq("two configurations are left, both villas", len(config.CONFIG_FLOORS), 2)
+
+    # The re-opener reads checklists written BEFORE this change. Hundreds say
+    # "Compact 2BHK apartment", and the template quotes the topic back verbatim.
+    import reopener
+    for stored in ("Compact 2BHK apartment 1250 sqft; also asking about villas",
+                   "3BHK apartment", "2bhk"):
+        topic = reopener.topic_for({"checklist": {"configuration": stored}})
+        R.check(f"a re-open never names a stored apartment: {stored[:28]!r}",
+                topic is None or not re.search(r"apartment|bhk", topic, re.I),
+                f"template would say 'we were talking about {topic}'")
+    R.eq("...but a purpose still carries them into the lane",
+         reopener.topic_for({"checklist": {"configuration": "2bhk",
+                                           "purpose": "weekend_home"}}),
+         "a weekend place")
+
+
+def test_the_corpus_sells_villas_only():
+    """VILLAS ONLY, owner 2026-09-02. The code stopped pricing apartments; this
+    checks the corpus stopped describing them, which is the half a buyer feels.
+
+    Chunks the bot can retrieve are the whole risk here. The bot can say "we only
+    sell villas now" and then answer the very next question with an apartment
+    specification, because retrieval does not know the two statements are related.
+
+    Built from the source files, so it needs no database and no re-ingest.
+    """
+    import ast
+    import importlib.util as _ilu
+    import re as _re
+
+    spec = _ilu.spec_from_file_location("_ing_for_test", os.path.join(
+        os.path.dirname(__file__), "..", "scripts", "ingest_kb.py"))
+    ing = _ilu.module_from_spec(spec)
+    spec.loader.exec_module(ing)
+    docs = {d["path"]: d["chunks"] for d in ing.build("RON")}
+    faq = docs["kb/RON/faqs.md"]
+
+    APT = _re.compile(r"apartment|bhk|\bflat\b", _re.I)
+
+    # THE CHUNK COUNT IS FROZEN AT 64. 26 withdrawals are carried forward by ordinal
+    # and ingest_kb.py REFUSES the whole load if the count moves -- so an apartment
+    # question may have its answer edited, but may never be deleted.
+    R.eq("the FAQ still has 64 questions, so the withdrawals still line up",
+         len(faq), 64)
+
+    # Ordinals already withdrawn by the 2026-08-03 audit. Recorded as v6 ids; ordinal
+    # = id - 358, verified against the questions those reasons describe.
+    qk = _src("scripts/quarantine_kb.py")
+    block = qk[qk.index("QUARANTINE = {"):qk.index("# Facts worth keeping")]
+    already = {int(i) - 358 for i in _re.findall(r"^\s{4}(\d+):", block, _re.M)}
+
+    # Ordinals this change withdraws, read out of the script that will do it.
+    qa = _src("scripts/quarantine_apartments.py")
+    withdraw = ast.literal_eval(
+        qa[qa.index("WITHDRAW = {"):qa.index("\n}\n", qa.index("WITHDRAW = {")) + 2]
+        .split("=", 1)[1].strip())
+
+    # THE ONE THAT MATTERS. Every chunk naming an apartment must be withdrawn --
+    # by the old audit or by this change. Anything else is retrievable and quotable.
+    leaked = [i for i, c in enumerate(faq)
+              if APT.search(c["content"])
+              and i not in already and i not in withdraw]
+    R.check("no retrievable FAQ answer still names an apartment", not leaked,
+            f"ordinals {leaked} are live and mention an apartment: "
+            + " | ".join(faq[i]["content"][:70].replace("\n", " ") for i in leaked))
+
+    # The withdrawal script points at chunks by ordinal, which is only stable while
+    # the question count is. It guards itself with a phrase check; that guard is
+    # worthless if the phrase is not actually there.
+    for ordinal, (phrase, reason) in withdraw.items():
+        R.check(f"ordinal {ordinal} still says {phrase!r}",
+                phrase.lower() in faq[ordinal]["content"].lower(),
+                f"guard phrase missing; the script would refuse. Chunk says: "
+                f"{faq[ordinal]['content'][:100]!r}")
+        R.check(f"...and ordinal {ordinal} has a reason recorded",
+                len(reason) > 40, reason)
+
+    # The other four sources are edited freely -- nothing in them is withdrawn -- so
+    # they must simply be clean.
+    for path in ("kb/RON/inventory.md", "kb/RON/pricing.md",
+                 "kb/RON/approved-answers.md", "kb/RON/location.md"):
+        dirty = [c["content"][:70] for c in docs[path] if APT.search(c["content"])]
+        R.check(f"{path} names no apartment", not dirty, str(dirty))
+
+    # APPROVED_ALWAYS rides on all eleven approved answers, so it is the single most
+    # repeated sentence in the corpus. It must say what IS sold: a rule reading "we
+    # no longer sell apartments" puts the word into retrieved context every time, and
+    # the model mirrors what it reads. Same reason it has never named villaments.
+    R.check("the always-on rule sells villas and names nothing else",
+            "Only 3-bed and 4-bed villas are on sale." in ing.APPROVED_ALWAYS
+            and not APT.search(ing.APPROVED_ALWAYS), ing.APPROVED_ALWAYS)
+
+    # The inventory chunk is where a buyer's "what do you have?" lands.
+    inv = docs["kb/RON/inventory.md"][0]["content"]
+    R.check("the inventory chunk offers villas only",
+            "only homes on sale" in inv and "2552" in inv and "3634" in inv, inv)
+
+    # And the price ladder has no rung below the villa entry any more.
+    price = docs["kb/RON/pricing.md"][0]["content"]
+    R.check("the price chunk starts at the villa entry",
+            "3.94" in price and "1.28" not in price and "1.46" not in price, price)
+
+
 def test_only_live_forms_are_polled():
     """2026-08-07: poll_meta_leads walked all 103 lead forms Meta lists, of which 9
     had produced anything in a week. One pass took ~3 minutes against a 1-minute
@@ -1303,6 +1552,8 @@ def main():
                test_the_purpose_question_says_primary_home_not_full_time,
                test_a_yes_to_a_named_place_is_an_answer,
                test_quarantine_survives_a_re_ingest,
+               test_the_apartment_buyer_is_told_once_and_kept,
+               test_the_corpus_sells_villas_only,
                test_only_live_forms_are_polled,
                test_qualified_card_is_sent_once):
         fn()

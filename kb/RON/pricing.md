@@ -27,17 +27,20 @@ durable, non-negotiable statement. Anything more precise is a human's job.
 
 | Configuration | Starting price |
 |---|---|
-| Apartments (overall entry) | Rs 1.28 Cr onwards |
-| Compact 2BHK apartment | Rs 1.28 Cr onwards |
-| 2BHK apartment | Rs 1.46 Cr onwards |
-| 3BHK apartment | Rs 2.1 Cr onwards |
 | Villas (overall entry) | Rs 3.94 Cr onwards |
 | 3 bed villa | Rs 3.94 Cr onwards |
 | 4 bed villa | Rs 5.5 Cr onwards |
 
-The villa entry is quoted as **Rs 3.94 Cr** because that is the figure in every live
-ad and therefore the number the buyer has already read. The internal sheet rounds
-the same unit to Rs 3.9 Cr; they are the same price.
+The villa entry is quoted as **Rs 3.94 Cr**. That was the figure in every live ad, so
+buyers arrived already knowing it. **Ads stopped on 2026-09-02** and new buyers will
+not have read it anywhere — the number stays anyway, on the owner's decision. It is
+true, it is a starting price, and the earlier blanket ban on saying it is what made
+the bot read as evasive at the very first question. The internal sheet rounds the same
+unit to Rs 3.9 Cr; they are the same price.
+
+**Villas only from 2026-09-02.** There is no cheaper configuration to fall back on, so
+there is nothing below this table to offer. A buyer who cannot reach Rs 3.94 Cr is not
+handed to a colleague and not turned away — see `inventory.md`.
 
 ## Rules that travel with these numbers
 

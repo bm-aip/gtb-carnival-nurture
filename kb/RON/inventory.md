@@ -11,34 +11,17 @@ same sheet live in `pricing-internal.md`, which is **never ingested**.
 
 | Type | Size |
 |---|---|
-| Compact 2BHK apartment | 1220 sqft |
-| Compact 2BHK apartment | 1250 sqft |
-| 2BHK apartment | 1422 sqft |
-| 3BHK apartment | 2030 sqft |
-| 3BHK apartment | 2133 sqft |
 | 3 bed villa | 2552 sqft |
 | 3 bed villa | 2612 sqft |
 | 4 bed villa | 3634 sqft |
 
-Apartments run 1220–2133 sqft. Villas run 2552–3634 sqft.
-
-## "Compact 2BHK" is a real, separate product
-
-Owner-confirmed 2026-07-31: **C2BHK means Compact 2BHK.** It is *not* a synonym for
-2BHK — the two appear side by side on the price sheet at different sizes, 1220/1250
-against 1422 sqft.
-
-The bot says **"Compact 2BHK"**. It never says "C2BHK", which is internal shorthand no
-buyer would recognise.
-
-**Why this matters more than vocabulary:** an earlier curation rule rewrote C2BHK to
-2BHK, which silently merged two products about 200 sqft apart. A buyer asking for a
-2BHK and being shown a compact one finds out at the site visit. Corrected.
+Villas run 2552 to 3634 sqft. Villas are the only homes on sale.
 
 ## Not currently for sale
 
 The FAQ describes a wider set than the sheet offers. Absent from what is being sold:
 
+- **All apartments** - Compact 2BHK, 2BHK and 3BHK
 - 1BHK apartments
 - Villaments (2/3/4BHK)
 - 5BHK island villas
@@ -47,6 +30,21 @@ The FAQ describes a wider set than the sheet offers. Absent from what is being s
 These belong to later phases or are not released. **A buyer asking for any of them is
 not off-category — they are asking for something we do not sell yet.** Escalate to a
 human rather than rejecting them; the answer is a sales conversation, not a gate.
+
+### Apartments are the exception to that (owner, 2026-09-02)
+
+Apartments left the list on 2026-09-02: **villas only from here.** They do NOT get the
+escalation above, and they must never be treated as off-category:
+
+- Say once, plainly, that we are selling villas only now and what they start from.
+- Then carry on. Do **not** call a colleague, and do **not** close the conversation.
+- Somebody who cannot reach a villa is nurtured, exactly as anyone below the entry
+  price always has been — the bot keeps helping and probes gently for room.
+
+The reasoning is the owner's: the number a buyer gives today is not the number they
+will have in two months, and an apartment enquirer is the person most likely to move.
+Handing them to sales wastes a salesperson; closing the conversation loses them for
+good. See `content/answering-rules.md`, "When their budget is below anything we sell".
 
 ## Villa top size — RESOLVED 2026-08-02
 

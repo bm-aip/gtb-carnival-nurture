@@ -246,9 +246,17 @@ def record_turn(conv, decision, gate_asked, framing_index):
 
 
 def wants_villa(checklist):
-    """Is this a villa enquiry? Unknown configuration counts as NOT a villa."""
-    cfg = str((checklist or {}).get("configuration") or "").lower()
-    return "villa" in cfg and "apartment" not in cfg
+    """Is this a villa enquiry? Unknown configuration counts as NOT a villa.
+
+    Nothing calls this today. It is kept correct rather than left to rot because a
+    stale helper that still imports and still returns a plausible boolean is the
+    kind of thing a future change reaches for -- and until 2026-09-02 this said
+    `"apartment" not in cfg`, which after the villas-only change would have called
+    a live villa buyer who typed "2bhk" NOT a villa enquiry.
+    """
+    cfg = str((checklist or {}).get("configuration") or "")
+    label, _ = config.classify_configuration(cfg)
+    return bool(label and "villa" in label)
 
 
 def clears_the_bar(conv):
@@ -264,16 +272,20 @@ def clears_the_bar(conv):
     hand - our job is to qualify for the price and unit configuration".
 
     So configuration is a HARD GATE alongside budget and location. A project-wide
-    floor is not enough: a ₹1.5 Cr buyer asking about a 3BHK (from ₹2.1 Cr) clears
-    the cheapest apartment and still cannot afford what they asked for. Sales
-    receiving "qualified, wants 3BHK" for that person is the handoff that loses
-    their trust in the queue.
+    floor is not enough: a ₹4.5 Cr buyer asking about the 4 bed villa (from ₹5.5 Cr)
+    clears the 3 bed and still cannot afford what they asked for. Sales receiving
+    "qualified, wants 4 bed" for that person is the handoff that loses their trust
+    in the queue.
 
     Budget is compared AFTER stretching -- buyers understate and can reach higher
     (owner: "20% to 25% more is usually fine"), which is why ₹1.2 Cr qualifies for
-    a ₹1.28 Cr apartment. Below what they asked for they are not dead: the bot
-    names what it starts at and offers what they CAN reach, and if they accept,
+    a ₹3.94 Cr villa. Below what they asked for they are not dead: the bot names
+    what it starts at and offers what they CAN reach, and if they accept,
     `configuration` changes and they qualify against the new floor.
+
+    VILLAS ONLY from 2026-09-02. There are two floors left, so "what they CAN reach"
+    is the 3 bed or nothing at all -- and nothing at all is NURTURE, never death.
+    An apartment word prices as a villa on purpose; see config.classify_configuration.
     """
     c = conv["checklist"] or {}
     budget = c.get("budget")
