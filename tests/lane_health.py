@@ -173,8 +173,16 @@ def test_wiring():
     R.check("the check is registered in check()", "_check_lane_broken," in src)
     R.check("a broken lane reaches the daily report too",
             "is failing" in src)
+    # WAS a search for the literal "msg_type='reopener_t7'". That SQL is now the
+    # named helper _reopens_attempted(), which the daily report and the re-opener
+    # guard share -- the alert's own copy of the knock query was the one that
+    # lacked the blocked-row filter for nine days, so one predicate per lane is
+    # the point. The guarantee asserted here is unchanged: re-openers get counted
+    # separately, because 'knock%' never matches them.
     R.check("the daily report counts re-openers, which 'knock%' never matched",
-            "msg_type='reopener_t7'" in src)
+            "def _reopens_attempted(" in src and "_reopens_attempted(24)" in src)
+    R.check("and that helper targets reopener_t7 specifically",
+            '_sends_attempted("reopener_t7"' in src)
     R.check("the stale pointer to /admin/config-check is gone",
             "/admin/config-check and the knock_error setting" not in src)
 

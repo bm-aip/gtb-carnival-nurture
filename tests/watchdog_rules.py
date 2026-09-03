@@ -6,6 +6,7 @@ directly, with the database faked, rather than trusted.
 
 Run: python tests/watchdog_rules.py
 """
+import io
 import logging
 import os
 import sys
@@ -278,25 +279,29 @@ def test_daily_report():
 # one or two knocks dribbled out a day, and for nine days the honest answer to
 # "is it zero" was no. The engine was 99% stopped and nothing said so.
 def test_knocks_expected_arithmetic():
-    """The threshold itself, as a pure function. No database."""
+    """The threshold itself, as a pure function. No database.
+
+    Named for the knock lane because that is where it was found, but the function
+    is lane-agnostic and the re-opener guard shares it -- see
+    test_both_lanes_share_one_threshold."""
     R.eq("nothing due means nothing expected, so a quiet day stays quiet",
-         w._knocks_expected(0, 6), 0)
+         w._expected_sends(0, 6), 0)
 
     # 309 owed at 10% is 31. Two sends is the stall that went unreported.
-    R.eq("309 owed over 6h expects 31", w._knocks_expected(309, 6), 31)
+    R.eq("309 owed over 6h expects 31", w._expected_sends(309, 6), 31)
 
     # Rounds UP, so a handful due can never expect zero and slip through.
-    R.eq("3 owed still expects at least 1", w._knocks_expected(3, 6), 1)
-    R.eq("1 owed still expects at least 1", w._knocks_expected(1, 6), 1)
+    R.eq("3 owed still expects at least 1", w._expected_sends(3, 6), 1)
+    R.eq("1 owed still expects at least 1", w._expected_sends(1, 6), 1)
 
     # CLAMPED TO WHAT THE SENDER MAY ACTUALLY PUSH. Without this the guard would
     # alarm about its own rate limit as soon as the backlog grew past it, which is
     # the false-positive that makes an alert worthless.
     headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
     R.eq("a huge backlog is clamped to the hourly headroom",
-         w._knocks_expected(100000, 6), headroom * 6)
+         w._expected_sends(100000, 6), headroom * 6)
     R.check("and that clamp is below the naive share",
-            w._knocks_expected(100000, 6) < 100000 * w.KNOCK_STALL_PCT // 100)
+            w._expected_sends(100000, 6) < 100000 * w.KNOCK_STALL_PCT // 100)
 
 
 def test_attempted_excludes_blocked_but_not_refused():
@@ -410,6 +415,97 @@ def test_the_morning_line_stays_calm_when_healthy():
             not any("due a knock" in x for x in problems))
 
 
+
+# --------------------------------------------------------------------------
+# Nobody is being woken up -- 379 stalled AND 0 re-openers
+# --------------------------------------------------------------------------
+# The daily report printed both halves of this on one line and compared neither.
+def _reopener_verdict(owed, sent):
+    """Run the re-opener guard with `owed` people due and `sent` re-opens out."""
+    import reopener
+
+    real = reopener.due
+    reopener.due = lambda limit=None: [("row", 0, "topic")] * owed
+    fake = FakeDB(rows={"count": {"n": sent, "last_at": None}})
+    alerts = []
+    _patch(fake, alerts)
+    try:
+        return w._check_reopener_silent(), alerts
+    finally:
+        reopener.due = real
+
+
+def test_reopener_silence_alerts():
+    verdict, alerts = _reopener_verdict(owed=120, sent=0)
+    R.check("120 owed a re-open and none sent raises the alarm", bool(verdict))
+    R.eq("and it actually notifies somebody", len(alerts), 1)
+    body = " ".join(alerts[0]["slots"]) if alerts else ""
+    R.check("the alert names how many are waiting", "120" in body)
+
+    # A trickle must not silence it either -- the same lesson as the knock lane.
+    verdict, alerts = _reopener_verdict(owed=120, sent=1)
+    R.check("120 owed and 1 sent still raises the alarm", bool(verdict))
+
+
+def test_reopener_quiet_when_healthy():
+    verdict, alerts = _reopener_verdict(owed=0, sent=0)
+    R.eq("nobody owed a re-open means no alarm", verdict, None)
+    R.eq("and nobody woken", len(alerts), 0)
+
+    verdict, alerts = _reopener_verdict(owed=20, sent=5)
+    R.eq("20 owed and 5 sent is a working lane", verdict, None)
+
+
+def test_reopener_asks_the_lane_not_the_stalled_count():
+    """THE DESIGN DECISION, PINNED. `stalled 3d+` is a different population.
+
+    This lane also needs the dormancy window, at most REOPEN_MAX deliveries, its
+    own spacing, a usable topic, and it skips dead and visit-booked. Alerting on
+    the stalled tally would fire about people the lane is correctly leaving alone
+    -- the mismatch that produced a false NOBODY IS BEING CONTACTED on 2026-08-26.
+    """
+    src = io.open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "watchdog.py"), encoding="utf-8").read()
+    body = src[src.index("def _check_reopener_silent"):
+               src.index("def _check_delivery_collapse")]
+
+    # CODE ONLY, NOT THE PROSE. The docstring explains at length why knocks.due()
+    # must never be called from here, so a substring search over the whole
+    # function failed on the explanation itself -- a test that could not tell a
+    # warning about a thing from the thing.
+    quote = chr(34) * 3
+    code = body.split(quote)[2] if body.count(quote) >= 2 else body
+    code = " ".join(ln for ln in code.splitlines()
+                    if not ln.strip().startswith("#"))
+
+    R.check("it asks reopener.due(), the code that does the sending",
+            "reopener.due(" in code)
+    R.check("it does not reach for the stalled-conversations tally",
+            "last_turn_at" not in code)
+
+    # knocks.due() calls _give_up() and therefore WRITES. A monitor must never
+    # call it; wiring it in here would end people's journeys from a counter.
+    R.check("and it never calls the knock picker, which has side effects",
+            "knocks.due(" not in code)
+
+
+def test_both_lanes_share_one_threshold():
+    """reopener_t7 is business-initiated exactly like a knock, so it sits under the
+    same reply reserve. Two thresholds would drift, and a monitor that measures
+    something subtly different from the engine it watches is worse than none."""
+    src = io.open(os.path.join(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))), "watchdog.py"), encoding="utf-8").read()
+    R.eq("both guards call the same expectation helper",
+         src.count("_expected_sends(") >= 3, True)
+    R.check("and there is no second, lane-specific copy of it",
+            "_knocks_expected(" not in src and "_reopens_expected(" not in src)
+
+    # One predicate for "a send was attempted", too -- the alert's own count was
+    # the copy that lacked the blocked-row filter for nine days.
+    R.check("and one predicate for what counts as an attempted send",
+            src.count("def _sends_attempted(") == 1)
+
+
 if __name__ == "__main__":
     test_recipients()
     test_clean()
@@ -428,4 +524,8 @@ if __name__ == "__main__":
     test_a_working_engine_stays_quiet()
     test_the_morning_line_reports_a_stall()
     test_the_morning_line_stays_calm_when_healthy()
+    test_reopener_silence_alerts()
+    test_reopener_quiet_when_healthy()
+    test_reopener_asks_the_lane_not_the_stalled_count()
+    test_both_lanes_share_one_threshold()
     sys.exit(0 if R.report("WATCHDOG RULES") else 1)
