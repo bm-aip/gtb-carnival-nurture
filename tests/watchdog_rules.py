@@ -241,18 +241,173 @@ def test_daily_report():
     # Most specific key first: FakeDB returns the first pattern found in the SQL,
     # so a bare "count" would also swallow the failed-jobs tally and the heartbeat
     # would report a problem on a clean day.
-    fake = FakeDB(rows={"status='failed'": {"n": 0}, "count": {"n": 4}})
+    # STALLED CONVERSATIONS MUST BE ZERO FOR THIS FIXTURE, and it needs its own
+    # key. FakeDB returns the first pattern it finds in the SQL, so the bare
+    # "count" below also answered the stalled-conversation tally with 4 -- and a
+    # verdict that correctly reports "4 conversations stalled 3d+" is not the
+    # clean day this case is trying to describe. The assertion predates the
+    # outcome signals PR #60 added to the verdict; the fixture, not the code, was
+    # left behind.
+    fake = FakeDB(rows={"status='failed'": {"n": 0},
+                        "outcome IS NULL AND last_turn_at": {"n": 0},
+                        "count": {"n": 4}})
     _patch(fake, sent)
     out = w.daily_report()
     R.eq("daily report sends", len(sent), 1)
+    # "nothing failed" WAS THE OLD WORDING and has not existed for some time. The
+    # verdict was rewritten to be assembled from outcome signals rather than from
+    # the failed-jobs tally alone -- watchdog.py records why -- and its clean-day
+    # text is now "ALL CLEAR - nothing needs you today". This assertion kept
+    # looking for the retired string, so the one case covering a clean heartbeat
+    # could never pass, and the suite carried a permanent red mark that trained
+    # its readers to skim past exactly the kind of signal this module exists for.
     R.eq("it goes out even when nothing is wrong",
-         "nothing failed" in " ".join(sent[0]["slots"]).lower(), True)
+         "all clear" in " ".join(sent[0]["slots"]).lower(), True)
     R.eq("it reports today's date as sent", bool(out and out["sent"]), True)
 
     sent2 = []
     _patch(fake, sent2)
     w.daily_report()
     R.eq("it does not send twice in one day", len(sent2), 0)
+
+
+# --------------------------------------------------------------------------
+# A trickle is not a pulse -- the 2026-09-03 stall
+# --------------------------------------------------------------------------
+# Both knock guards asked "was the count exactly zero". 309 leads were sendable,
+# one or two knocks dribbled out a day, and for nine days the honest answer to
+# "is it zero" was no. The engine was 99% stopped and nothing said so.
+def test_knocks_expected_arithmetic():
+    """The threshold itself, as a pure function. No database."""
+    R.eq("nothing due means nothing expected, so a quiet day stays quiet",
+         w._knocks_expected(0, 6), 0)
+
+    # 309 owed at 10% is 31. Two sends is the stall that went unreported.
+    R.eq("309 owed over 6h expects 31", w._knocks_expected(309, 6), 31)
+
+    # Rounds UP, so a handful due can never expect zero and slip through.
+    R.eq("3 owed still expects at least 1", w._knocks_expected(3, 6), 1)
+    R.eq("1 owed still expects at least 1", w._knocks_expected(1, 6), 1)
+
+    # CLAMPED TO WHAT THE SENDER MAY ACTUALLY PUSH. Without this the guard would
+    # alarm about its own rate limit as soon as the backlog grew past it, which is
+    # the false-positive that makes an alert worthless.
+    headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
+    R.eq("a huge backlog is clamped to the hourly headroom",
+         w._knocks_expected(100000, 6), headroom * 6)
+    R.check("and that clamp is below the naive share",
+            w._knocks_expected(100000, 6) < 100000 * w.KNOCK_STALL_PCT // 100)
+
+
+def test_attempted_excludes_blocked_but_not_refused():
+    """`blocked:` rows are not sends. Refusals ARE -- the engine tried."""
+    fake = FakeDB(rows={"count": {"n": 7, "last_at": None}})
+    _patch(fake, [])
+    n, _last = w._knocks_attempted(6)
+    R.eq("it returns the count", n, 7)
+
+    sql = " ".join(fake.queries)
+    R.check("blocked rows are excluded -- they never touched WhatsApp",
+            "NOT LIKE 'blocked:" in sql)
+    # Filtering on ok would hide a working engine having a bad night with Meta,
+    # which is a different alert that already exists.
+    R.check("but ok is NOT the filter, so a refusal still counts as an attempt",
+            "AND ok" not in sql)
+
+
+def _silence_verdict(due, sent):
+    """Run the silence check with `due` leads sendable and `sent` knocks out."""
+    import knocks
+
+    real = knocks.sendable_count
+    knocks.sendable_count = lambda *a, **k: (due, {})
+    # The check reads a count, then a last-sent timestamp; both come from the
+    # same helper, so one fixture answers both.
+    fake = FakeDB(rows={"count": {"n": sent, "last_at": None}})
+    alerts = []
+    _patch(fake, alerts)
+    try:
+        return w._check_nobody_contacted(), alerts
+    finally:
+        knocks.sendable_count = real
+
+
+def test_a_trickle_still_alerts():
+    # THE ACTUAL DEFECT: 309 sendable, 2 sent, nine days of silence.
+    verdict, alerts = _silence_verdict(309, 2)
+    R.check("309 due and 2 sent raises the alarm", bool(verdict))
+    R.eq("and it actually notifies somebody", len(alerts), 1)
+    body = " ".join(alerts[0]["slots"]) if alerts else ""
+    R.check("the alert says how many went out, not that nobody was contacted",
+            "2" in body and "nobody" not in body.lower())
+
+    # The old behaviour is preserved, not replaced: total silence still trips.
+    verdict, alerts = _silence_verdict(1, 0)
+    R.check("1 due and 0 sent still raises the alarm", bool(verdict))
+    R.check("and THAT one may say nobody was contacted",
+            "nobody" in " ".join(alerts[0]["slots"]).lower() if alerts else False)
+
+
+def test_a_working_engine_stays_quiet():
+    # A healthy share must not alarm, or the guard gets muted by its own noise
+    # and we are back to nobody reading it.
+    verdict, alerts = _silence_verdict(309, 40)
+    R.eq("309 due and 40 sent is normal", verdict, None)
+    R.eq("and nobody is woken", len(alerts), 0)
+
+    # Nothing due is the ordinary quiet day the ladder's 3/8/15-day gaps produce.
+    verdict, alerts = _silence_verdict(0, 0)
+    R.eq("nothing due, nothing sent, no alarm", verdict, None)
+    R.eq("still nobody woken", len(alerts), 0)
+
+
+
+def _daily_with(due, knocks_sent, stalled=0):
+    """Run the daily report with `due` sendable and `knocks_sent` knocks out."""
+    import knocks
+
+    real = knocks.sendable_count
+    knocks.sendable_count = lambda *a, **k: (due, {})
+    fake = FakeDB(rows={"status='failed'": {"n": 0},
+                        "outcome IS NULL AND last_turn_at": {"n": stalled},
+                        "message_delivery": {"n": 0, "bad": 0},
+                        "count": {"n": knocks_sent, "last_at": None}})
+    sent = []
+    _patch(fake, sent)
+    try:
+        return w.daily_report(force=True), sent
+    finally:
+        knocks.sendable_count = real
+
+
+def test_the_morning_line_reports_a_stall():
+    """THE LINE THE OWNER ACTUALLY READS.
+
+    On 2026-09-03 it said "2 knocks out (309 still due)" and then pronounced the
+    day fine, because the verdict needed knocks to be exactly zero. The narrative
+    carried the evidence and the verdict ignored it -- which is worse than not
+    measuring it at all, because it looks like it was checked.
+    """
+    out, sent = _daily_with(due=309, knocks_sent=2)
+    R.eq("the report still goes out", len(sent), 1)
+    problems = (out or {}).get("problems") or []
+    R.check("a 99% stall is named as a problem",
+            any("due a knock" in x for x in problems))
+    verdict = " ".join(sent[0]["slots"]).lower() if sent else ""
+    R.check("and the verdict says NEEDS YOU, not all clear",
+            "needs you" in verdict and "all clear" not in verdict)
+
+
+def test_the_morning_line_stays_calm_when_healthy():
+    out, sent = _daily_with(due=309, knocks_sent=40)
+    problems = (out or {}).get("problems") or []
+    R.check("a healthy share is not called a problem",
+            not any("due a knock" in x for x in problems))
+
+    out, sent = _daily_with(due=0, knocks_sent=0)
+    problems = (out or {}).get("problems") or []
+    R.check("and neither is an ordinary quiet day",
+            not any("due a knock" in x for x in problems))
 
 
 if __name__ == "__main__":
@@ -267,4 +422,10 @@ if __name__ == "__main__":
     test_undelivered_cards_two_real_cards_still_count_two()
     test_check_survives_a_broken_signal()
     test_daily_report()
+    test_knocks_expected_arithmetic()
+    test_attempted_excludes_blocked_but_not_refused()
+    test_a_trickle_still_alerts()
+    test_a_working_engine_stays_quiet()
+    test_the_morning_line_reports_a_stall()
+    test_the_morning_line_stays_calm_when_healthy()
     sys.exit(0 if R.report("WATCHDOG RULES") else 1)

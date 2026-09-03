@@ -72,6 +72,63 @@ KNOCK_SILENT_HOURS = int(os.environ.get("WATCHDOG_KNOCK_SILENT_HOURS", "6"))
 DELIVERY_FAIL_PCT = int(os.environ.get("WATCHDOG_DELIVERY_FAIL_PCT", "35"))
 DELIVERY_MIN_SENDS = int(os.environ.get("WATCHDOG_DELIVERY_MIN_SENDS", "20"))
 
+# A TRICKLE MUST NOT COUNT AS A PULSE. Both knock guards used to ask "was the count
+# exactly zero", and on 2026-09-03 that let a 99% stall run for nine days: 309 leads
+# were sendable, one or two knocks dribbled out each day, and the answer to "is it
+# zero" was legitimately no. So the question is now "did we send a plausible SHARE
+# of what was owed", and this is that share, as a percentage.
+#
+# 10% is deliberately forgiving. The engine cannot reach everyone due -- the weekly
+# fatigue cap alone forbids it -- so anything near 100% would cry wolf every day.
+# 2 sends against 309 owed is 0.6% and trips it; 40 against 309 is 13% and does not.
+KNOCK_STALL_PCT = int(os.environ.get("WATCHDOG_KNOCK_STALL_PCT", "10"))
+
+
+def _knocks_attempted(hours):
+    """(how many knocks reached the wire in the window, when the last one did).
+
+    THE PREDICATE, IN ONE PLACE, BECAUSE TWO COPIES DISAGREED. The daily report
+    already excluded `blocked:` rows; this alert's own count did not, so on
+    2026-09-03 the 1,380 blocked rows an hour that WERE the bug read to it as 1,380
+    healthy knocks and silenced it. One function now answers for both.
+
+    `ok` IS DELIBERATELY NOT THE TEST, and the distinction matters:
+
+        delivered   ok = TRUE                              engine works
+        refused     we sent it, the provider said no       engine works
+        blocked     our own gate stopped it                engine never tried
+
+    This guard asks "is the engine sending", so a refusal is evidence FOR it. Only
+    the third state is silence. Filtering on `ok` would raise an alarm every time
+    Meta had a bad night, which is a different alert that already exists.
+    """
+    row = db.q("""SELECT count(*) AS n, max(ts) AS last_at FROM message_log
+                  WHERE direction='out' AND msg_type LIKE 'knock%%'
+                    AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')
+                    AND ts > now() - (%s || ' hours')::interval""",
+               (int(hours),), one=True) or {}
+    return (row.get("n") or 0), row.get("last_at")
+
+
+def _knocks_expected(due, hours):
+    """The fewest knocks a working engine would have sent, given `due` were owed.
+
+    Zero due means zero expected, so a quiet day stays quiet. Otherwise it is a
+    share of what was owed -- but CLAMPED to what the sender is actually permitted
+    to push in the window, or the guard would scream at its own rate limit the
+    moment the backlog grew past it.
+
+    The ceiling reuses wati.rate_ok()'s own arithmetic rather than restating it:
+    a proactive send may only use the hour's allowance MINUS the reserve held back
+    for people who are actually talking to us. If those two ever disagreed, the
+    watchdog would be alarming about a limit the sender does not have.
+    """
+    if due <= 0:
+        return 0
+    share = -(-due * KNOCK_STALL_PCT // 100)          # ceil, no float
+    headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
+    return max(1, min(share, headroom * int(hours)))
+
 # How long poll_meta_leads may go without completing before new leads are
 # presumed to have stopped arriving. It runs every minute; a full sweep can
 # legitimately take several, so this is generous and still catches a 24h wedge.
@@ -269,23 +326,21 @@ def _check_nobody_contacted():
     if not due:
         return None
 
-    # The interval is BOUND, not formatted in. db.q always passes a params tuple to
-    # psycopg2, so any bare % left in the SQL is read as a placeholder -- string
-    # formatting here turned 'knock%%' into 'knock%' and the query died with
-    # "IndexError: tuple index out of range" instead of watching anything.
-    row = db.q("""SELECT count(*) AS n, max(ts) AS last_at FROM message_log
-                  WHERE direction='out' AND msg_type LIKE 'knock%%'
-                    AND ts > now() - (%s || ' hours')::interval""",
-               (int(KNOCK_SILENT_HOURS),), one=True) or {}
-    if row.get("n"):
+    # A SHARE, NOT A ZERO. `if sent: return None` lived here, and two knocks a day
+    # against 309 owed satisfied it for nine days. The count and the threshold both
+    # come from shared helpers so this test and the daily report cannot drift.
+    sent, _last_in_window = _knocks_attempted(KNOCK_SILENT_HOURS)
+    expected = _knocks_expected(due, KNOCK_SILENT_HOURS)
+    if sent >= expected:
         return None
 
-    if _muted("knocks_silent"):
-        return f"{due} due, none sent (muted)"
+    # Strictly wider than the old test: with anything due, `expected` is at least 1,
+    # so total silence still trips exactly as before.
 
-    last = db.q("""SELECT max(ts) AS t FROM message_log
-                   WHERE direction='out' AND msg_type LIKE 'knock%%'""", one=True) or {}
-    when = last.get("t")
+    if _muted("knocks_silent"):
+        return f"{due} due, {sent} sent (muted)"
+
+    _all_time, when = _knocks_attempted(24 * 365 * 10)
     ago = "never" if not when else f"{int((datetime.now(when.tzinfo) - when).total_seconds() / 3600)}h ago"
 
     # Why everyone ELSE is waiting, biggest reason first. Without it the reader
@@ -293,17 +348,24 @@ def _check_nobody_contacted():
     # is the difference between an emergency and a normal morning.
     held = ", ".join(f"{n} {r}" for r, n in
                      sorted(waiting.items(), key=lambda kv: -kv[1])[:3])
+    # THE HEADLINE MUST NOT OVERSTATE. "NOBODY IS BEING CONTACTED" was written for
+    # a count of exactly zero; saying it while two messages went out is the kind of
+    # inaccuracy that teaches a reader to discount the next alert. So the number is
+    # in the headline and the word "nobody" is gone.
+    headline = ("NOBODY IS BEING CONTACTED" if not sent
+                else "KNOCKS HAVE ALL BUT STOPPED")
     ok = _alert("knocks_silent",
-                f"NOBODY IS BEING CONTACTED - {due} lead(s) waiting",
-                f"{due} lead(s) could be knocked right now and none has gone out in "
-                f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}."
+                f"{headline} - {due} lead(s) waiting",
+                f"{due} lead(s) could be knocked right now and only {sent} went out "
+                f"in {KNOCK_SILENT_HOURS}h -- a working engine would have sent at "
+                f"least {expected}. Last knock: {ago}."
                 + (f" Others waiting: {held}." if held else ""),
-                "The knock engine is running but sending nothing. Check the "
+                "The knock engine is running but barely sending. Check the "
                 "knock_error and knock_last_ok lines on /api/summary, then "
                 "/admin/config-check for the send gates.")
     if ok:
         _mark_alerted("knocks_silent")
-    return f"{due} due, none sent"
+    return f"{due} due, {sent} sent, {expected} expected"
 
 
 def _check_delivery_collapse():
@@ -557,10 +619,9 @@ def daily_report(force=False):
     replies = n("""SELECT count(*) AS n FROM message_log
                    WHERE direction='out' AND msg_type='qualifier_turn'
                      AND ts > now() - interval '24 hours'""")
-    knocks = n("""SELECT count(*) AS n FROM message_log
-                  WHERE direction='out' AND msg_type LIKE 'knock%%'
-                    AND ts > now() - interval '24 hours'
-                    AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')""")
+    # Was a correct copy of the same query. Now the shared helper, so a change to
+    # what counts as an attempted knock reaches the alert and the report together.
+    knocks, _last_knock_at = _knocks_attempted(24)
     # COUNTED SEPARATELY, BECAUSE 'knock%' DOES NOT MATCH IT. reopener_t7 was
     # invisible in this report and in /admin/drip alike, so the one number a reader
     # sees each morning could not distinguish a working ghost lane from one that had
@@ -606,8 +667,14 @@ def daily_report(force=False):
     problems = []
     if failed:
         problems.append(f"{failed} failed jobs")
-    if due and not knocks:
-        problems.append(f"{due} leads due a knock, none going out")
+    # A SHARE, NOT A ZERO -- the same test the silence alert uses, from the same
+    # helper. `due and not knocks` needed knocks to be exactly 0, so the morning
+    # after 309 leads sat unreachable this line read as a clean bill of health
+    # because two messages had crept out.
+    expected_knocks = _knocks_expected(due, 24)
+    if due and knocks < expected_knocks:
+        problems.append(f"{due} leads due a knock, only {knocks} went out "
+                        f"(expected at least {expected_knocks})")
     if dn >= DELIVERY_MIN_SENDS and fail_pct >= DELIVERY_FAIL_PCT:
         problems.append(f"{fail_pct}% of sends not arriving")
     if stalled:
