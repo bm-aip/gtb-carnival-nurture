@@ -35,6 +35,7 @@ from datetime import datetime, timedelta, timezone
 
 import config
 import db
+import failures
 import fatigue
 import sequencer
 
@@ -60,6 +61,14 @@ SCAN_MAX = int(os.environ.get("KNOCK_SCAN_MAX", "3000"))
 _FATIGUE_REASON = {
     fatigue.CAP_WINDOW: "waiting on the weekly cap",
     fatigue.CAP_JOURNEY: "journey ceiling reached",
+}
+
+# Plain-English for the retry ceilings. These strings are what the watchdog prints
+# in its "Others waiting:" line, so they are written for the owner, not for us.
+_CEILING_REASON = {
+    failures.CEILING_BURST: "this send keeps being refused",
+    failures.CEILING_RECIPIENT: "number cannot receive WhatsApp",
+    failures.CEILING_TRANSIENT: "too many transient failures",
 }
 
 # (days_after_signup, config.KNOCK_TEMPLATES key)
@@ -552,6 +561,41 @@ def _verdict(lead, now, claimed):
                                  project=lead.get("project"))
     if not allowed:
         return sent, step_key, _FATIGUE_REASON.get(cap, f"waiting on {cap}")
+
+    # THE RETRY CEILING IS A SELECTION RULE TOO. Same lesson as the block above,
+    # in the same function, one week later -- and it cost 135,496 rows.
+    #
+    # RETRY_MAX_BURST was added 2026-08-25 as sendgate's last and widest guard:
+    # five refusals of one (phone, msg_type) and that particular send stops, while
+    # the person stays reachable by every other lane. It works perfectly on the
+    # wire -- measured 2026-09-03, every affected lead had exactly 4 delivered and
+    # 5 refused, so nobody was spammed.
+    #
+    # But the picker did not model it. 23 leads whose t6/t2 Meta had stopped
+    # delivering stayed sendable in this function's eyes, were chosen on every
+    # tick, refused at the door, and left a `blocked:retry_ceiling_burst` row
+    # behind each time: 1,380 rows an hour, flat, for nine days. 135,496 rows,
+    # 84% of everything in message_log. Real knocks fell from 162 a day to one,
+    # because those 23 are the OLDEST due rows and so filled every batch of ten
+    # -- 309 sendable buyers sat behind them, unreachable.
+    #
+    # attempt_state() cannot close this, for precisely the reason spelled out
+    # above: it excludes `blocked:` rows on purpose, so the ceiling reads zero
+    # attempts and a null clock however many times the burst cap refused, and
+    # _give_up() counts those same attempts and therefore never fires. Only a
+    # check at selection time ends the loop. Third time that has been true here.
+    #
+    # AFTER FATIGUE, MIRRORING sendgate's order, and last because it is the
+    # widest: the counting queries inside failures.check() run only for leads
+    # already otherwise ready to send. Side-effect free, like the rest of this
+    # function -- check() only reads message_log.
+    #
+    # sendgate's own call STAYS. knock_now() reaches the wire from the leadgen
+    # webhook without passing through the picker, so two doors is correct.
+    allowed, cap = failures.check(lead["phone"], msg_type_for(step_key),
+                                  project=lead.get("project"))
+    if not allowed:
+        return sent, step_key, _CEILING_REASON.get(cap, f"waiting on {cap}")
     return sent, step_key, None
 
 

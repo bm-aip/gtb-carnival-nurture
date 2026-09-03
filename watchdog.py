@@ -72,6 +72,91 @@ KNOCK_SILENT_HOURS = int(os.environ.get("WATCHDOG_KNOCK_SILENT_HOURS", "6"))
 DELIVERY_FAIL_PCT = int(os.environ.get("WATCHDOG_DELIVERY_FAIL_PCT", "35"))
 DELIVERY_MIN_SENDS = int(os.environ.get("WATCHDOG_DELIVERY_MIN_SENDS", "20"))
 
+# A TRICKLE MUST NOT COUNT AS A PULSE. Both knock guards used to ask "was the count
+# exactly zero", and on 2026-09-03 that let a 99% stall run for nine days: 309 leads
+# were sendable, one or two knocks dribbled out each day, and the answer to "is it
+# zero" was legitimately no. So the question is now "did we send a plausible SHARE
+# of what was owed", and this is that share, as a percentage.
+#
+# 10% is deliberately forgiving. The engine cannot reach everyone due -- the weekly
+# fatigue cap alone forbids it -- so anything near 100% would cry wolf every day.
+# 2 sends against 309 owed is 0.6% and trips it; 40 against 309 is 13% and does not.
+KNOCK_STALL_PCT = int(os.environ.get("WATCHDOG_KNOCK_STALL_PCT", "10"))
+
+# THE RE-OPENER RUNS ON A DAY CLOCK, NOT A MINUTE ONE. Its spacing is
+# REOPEN_AFTER_DAYS, so six hours of quiet means nothing here; a whole day with
+# people owed and nothing sent is the contradiction.
+REOPEN_SILENT_HOURS = int(os.environ.get("WATCHDOG_REOPEN_SILENT_HOURS", "24"))
+
+# How deep to look for people owed a re-open. reopener.due() fetches limit * 5
+# candidates and then filters in Python, so this probe examines up to 5x this many
+# conversations -- bounded work, run once every WATCHDOG_CHECK_MIN.
+REOPEN_PROBE = int(os.environ.get("WATCHDOG_REOPEN_PROBE", "400"))
+
+
+def _sends_attempted(pattern, hours):
+    """(how many of this lane reached the wire in the window, when the last did).
+
+    THE PREDICATE, IN ONE PLACE, BECAUSE TWO COPIES DISAGREED. The daily report
+    already excluded `blocked:` rows; this alert's own count did not, so on
+    2026-09-03 the 1,380 blocked rows an hour that WERE the bug read to it as 1,380
+    healthy knocks and silenced it. One function now answers for both.
+
+    `ok` IS DELIBERATELY NOT THE TEST, and the distinction matters:
+
+        delivered   ok = TRUE                              engine works
+        refused     we sent it, the provider said no       engine works
+        blocked     our own gate stopped it                engine never tried
+
+    This guard asks "is the engine sending", so a refusal is evidence FOR it. Only
+    the third state is silence. Filtering on `ok` would raise an alarm every time
+    Meta had a bad night, which is a different alert that already exists.
+    """
+    row = db.q("""SELECT count(*) AS n, max(ts) AS last_at FROM message_log
+                  WHERE direction='out' AND msg_type LIKE %s
+                    AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')
+                    AND ts > now() - (%s || ' hours')::interval""",
+               (pattern, int(hours)), one=True) or {}
+    return (row.get("n") or 0), row.get("last_at")
+
+
+def _knocks_attempted(hours):
+    """The knock lane. `knock%` also catches knock_gave_up and knock_skipped, but
+    both are written ok=FALSE with a `blocked:` detail, so the filter drops them."""
+    return _sends_attempted("knock%", hours)
+
+
+def _reopens_attempted(hours):
+    """The re-opener lane. Counted separately because `knock%` does not match it --
+    reopener_t7 was invisible in this report and in /admin/drip alike."""
+    return _sends_attempted("reopener_t7", hours)
+
+
+def _expected_sends(due, hours):
+    """The fewest sends a working lane would have made, given `due` were owed.
+
+    LANE-AGNOSTIC ON PURPOSE. Both proactive lanes sit under the same reply
+    reserve -- wati.rate_ok() treats reopener_t7 as business-initiated exactly like
+    a knock -- so they share one threshold. Two copies would drift, and a monitor
+    that measures something subtly different from the engine it watches is worse
+    than no monitor.
+
+    Zero due means zero expected, so a quiet day stays quiet. Otherwise it is a
+    share of what was owed -- but CLAMPED to what the sender is actually permitted
+    to push in the window, or the guard would scream at its own rate limit the
+    moment the backlog grew past it.
+
+    The ceiling reuses wati.rate_ok()'s own arithmetic rather than restating it:
+    a proactive send may only use the hour's allowance MINUS the reserve held back
+    for people who are actually talking to us. If those two ever disagreed, the
+    watchdog would be alarming about a limit the sender does not have.
+    """
+    if due <= 0:
+        return 0
+    share = -(-due * KNOCK_STALL_PCT // 100)          # ceil, no float
+    headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
+    return max(1, min(share, headroom * int(hours)))
+
 # How long poll_meta_leads may go without completing before new leads are
 # presumed to have stopped arriving. It runs every minute; a full sweep can
 # legitimately take several, so this is generous and still catches a 24h wedge.
@@ -269,23 +354,21 @@ def _check_nobody_contacted():
     if not due:
         return None
 
-    # The interval is BOUND, not formatted in. db.q always passes a params tuple to
-    # psycopg2, so any bare % left in the SQL is read as a placeholder -- string
-    # formatting here turned 'knock%%' into 'knock%' and the query died with
-    # "IndexError: tuple index out of range" instead of watching anything.
-    row = db.q("""SELECT count(*) AS n, max(ts) AS last_at FROM message_log
-                  WHERE direction='out' AND msg_type LIKE 'knock%%'
-                    AND ts > now() - (%s || ' hours')::interval""",
-               (int(KNOCK_SILENT_HOURS),), one=True) or {}
-    if row.get("n"):
+    # A SHARE, NOT A ZERO. `if sent: return None` lived here, and two knocks a day
+    # against 309 owed satisfied it for nine days. The count and the threshold both
+    # come from shared helpers so this test and the daily report cannot drift.
+    sent, _last_in_window = _knocks_attempted(KNOCK_SILENT_HOURS)
+    expected = _expected_sends(due, KNOCK_SILENT_HOURS)
+    if sent >= expected:
         return None
 
-    if _muted("knocks_silent"):
-        return f"{due} due, none sent (muted)"
+    # Strictly wider than the old test: with anything due, `expected` is at least 1,
+    # so total silence still trips exactly as before.
 
-    last = db.q("""SELECT max(ts) AS t FROM message_log
-                   WHERE direction='out' AND msg_type LIKE 'knock%%'""", one=True) or {}
-    when = last.get("t")
+    if _muted("knocks_silent"):
+        return f"{due} due, {sent} sent (muted)"
+
+    _all_time, when = _knocks_attempted(24 * 365 * 10)
     ago = "never" if not when else f"{int((datetime.now(when.tzinfo) - when).total_seconds() / 3600)}h ago"
 
     # Why everyone ELSE is waiting, biggest reason first. Without it the reader
@@ -293,17 +376,83 @@ def _check_nobody_contacted():
     # is the difference between an emergency and a normal morning.
     held = ", ".join(f"{n} {r}" for r, n in
                      sorted(waiting.items(), key=lambda kv: -kv[1])[:3])
+    # THE HEADLINE MUST NOT OVERSTATE. "NOBODY IS BEING CONTACTED" was written for
+    # a count of exactly zero; saying it while two messages went out is the kind of
+    # inaccuracy that teaches a reader to discount the next alert. So the number is
+    # in the headline and the word "nobody" is gone.
+    headline = ("NOBODY IS BEING CONTACTED" if not sent
+                else "KNOCKS HAVE ALL BUT STOPPED")
     ok = _alert("knocks_silent",
-                f"NOBODY IS BEING CONTACTED - {due} lead(s) waiting",
-                f"{due} lead(s) could be knocked right now and none has gone out in "
-                f"{KNOCK_SILENT_HOURS}h. Last knock: {ago}."
+                f"{headline} - {due} lead(s) waiting",
+                f"{due} lead(s) could be knocked right now and only {sent} went out "
+                f"in {KNOCK_SILENT_HOURS}h -- a working engine would have sent at "
+                f"least {expected}. Last knock: {ago}."
                 + (f" Others waiting: {held}." if held else ""),
-                "The knock engine is running but sending nothing. Check the "
+                "The knock engine is running but barely sending. Check the "
                 "knock_error and knock_last_ok lines on /api/summary, then "
                 "/admin/config-check for the send gates.")
     if ok:
         _mark_alerted("knocks_silent")
-    return f"{due} due, none sent"
+    return f"{due} due, {sent} sent, {expected} expected"
+
+
+def _check_reopener_silent():
+    """People are going cold and nothing is nudging them. 379 AND ZERO.
+
+    On 2026-09-03 the daily report carried both halves of this on one line -- "0
+    re-openers" and "379 conversations stalled 3d+" -- and nothing compared them,
+    so it could never be raised. The lane exists precisely to wake those people.
+
+    WHY THE LANE'S OWN PICKER AND NOT THE STALLED COUNT. "Stalled 3d+" is not the
+    same population as "owed a re-open": this lane also requires the dormancy
+    window, at most REOPEN_MAX deliveries, its own spacing, a usable topic, and it
+    excludes dead and visit-booked conversations. Alerting on the stalled tally
+    would fire on people the lane is correctly leaving alone -- which is exactly
+    the mismatch that produced the false "NOBODY IS BEING CONTACTED" on
+    2026-08-26. So the question is put to reopener.due(), the same code that does
+    the sending.
+
+    SAFE TO CALL, and that is not true of every picker: reopener.due() writes
+    nothing. knocks.due() cannot be used this way -- it calls _give_up() on a
+    ceiling verdict, so a monitor that called it would end people's journeys.
+
+    IT CAN UNDER-REPORT, DELIBERATELY. due() takes the oldest limit * 5 candidates
+    and filters them in Python, so people further back can be invisible to it --
+    the same filter-after-limit shape that deadlocked the knock engine, still
+    present in this lane. That makes this alert conservative: it may miss a stall,
+    it cannot invent one. For something that wakes a human at 8am, quiet-when-
+    unsure is the right failure direction.
+    """
+    import reopener
+
+    owed = reopener.due(limit=REOPEN_PROBE)
+    if not owed:
+        return None
+
+    sent, _last = _reopens_attempted(REOPEN_SILENT_HOURS)
+    expected = _expected_sends(len(owed), REOPEN_SILENT_HOURS)
+    if sent >= expected:
+        return None
+
+    if _muted("reopener_silent"):
+        return f"{len(owed)} owed a re-open, {sent} sent (muted)"
+
+    _all, when = _reopens_attempted(24 * 365 * 10)
+    ago = "never" if not when else f"{int((datetime.now(when.tzinfo) - when).total_seconds() / 3600)}h ago"
+
+    ok = _alert("reopener_silent",
+                f"NOBODY IS BEING WOKEN UP - {len(owed)} gone quiet",
+                f"{len(owed)} conversation(s) are owed a re-open right now and only "
+                f"{sent} went out in {REOPEN_SILENT_HOURS}h -- a working lane would "
+                f"have sent at least {expected}. Last re-open: {ago}."
+                + (f" (Probe examined the oldest {REOPEN_PROBE}; there may be more.)"
+                   if len(owed) >= REOPEN_PROBE else ""),
+                "The re-opener lane has people to nudge and is not nudging them. "
+                "Check the reopener_error line on /api/summary, then REOPENER_TEMPLATE "
+                "and /admin/config-check for the send gates.")
+    if ok:
+        _mark_alerted("reopener_silent")
+    return f"{len(owed)} owed a re-open, {sent} sent"
 
 
 def _check_delivery_collapse():
@@ -521,7 +670,8 @@ def check():
     failing query must not hide the others."""
     found = []
     for fn in (_check_failed_jobs, _check_undelivered_cards, _check_queue_stalled,
-               _check_nobody_contacted, _check_delivery_collapse,
+               _check_nobody_contacted, _check_reopener_silent,
+               _check_delivery_collapse,
                _check_poller_wedged, _check_lane_broken, _check_unbacked_promises):
         try:
             r = fn()
@@ -557,18 +707,14 @@ def daily_report(force=False):
     replies = n("""SELECT count(*) AS n FROM message_log
                    WHERE direction='out' AND msg_type='qualifier_turn'
                      AND ts > now() - interval '24 hours'""")
-    knocks = n("""SELECT count(*) AS n FROM message_log
-                  WHERE direction='out' AND msg_type LIKE 'knock%%'
-                    AND ts > now() - interval '24 hours'
-                    AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')""")
+    # Was a correct copy of the same query. Now the shared helper, so a change to
+    # what counts as an attempted knock reaches the alert and the report together.
+    knocks, _last_knock_at = _knocks_attempted(24)
     # COUNTED SEPARATELY, BECAUSE 'knock%' DOES NOT MATCH IT. reopener_t7 was
     # invisible in this report and in /admin/drip alike, so the one number a reader
     # sees each morning could not distinguish a working ghost lane from one that had
     # never sent anything at all.
-    reopens = n("""SELECT count(*) AS n FROM message_log
-                   WHERE direction='out' AND msg_type='reopener_t7'
-                     AND ts > now() - interval '24 hours'
-                     AND (detail IS NULL OR detail NOT LIKE 'blocked:%%')""")
+    reopens, _last_reopen_at = _reopens_attempted(24)
     visits = n("""SELECT count(*) AS n FROM message_log
                   WHERE msg_type='handoff_visit'
                     AND ts > now() - interval '24 hours'""")
@@ -606,12 +752,30 @@ def daily_report(force=False):
     problems = []
     if failed:
         problems.append(f"{failed} failed jobs")
-    if due and not knocks:
-        problems.append(f"{due} leads due a knock, none going out")
+    # A SHARE, NOT A ZERO -- the same test the silence alert uses, from the same
+    # helper. `due and not knocks` needed knocks to be exactly 0, so the morning
+    # after 309 leads sat unreachable this line read as a clean bill of health
+    # because two messages had crept out.
+    expected_knocks = _expected_sends(due, 24)
+    if due and knocks < expected_knocks:
+        problems.append(f"{due} leads due a knock, only {knocks} went out "
+                        f"(expected at least {expected_knocks})")
     if dn >= DELIVERY_MIN_SENDS and fail_pct >= DELIVERY_FAIL_PCT:
         problems.append(f"{fail_pct}% of sends not arriving")
     if stalled:
         problems.append(f"{stalled} conversations stalled 3d+")
+    # THE PAIR THAT WENT UNCOMPARED. This line already printed "0 re-openers" and
+    # "379 conversations stalled 3d+" side by side and drew no conclusion. Asking
+    # the lane's own picker rather than reusing `stalled`, for the reason set out
+    # on _check_reopener_silent: the two populations are not the same.
+    try:
+        import reopener
+        owed_reopen = len(reopener.due(limit=REOPEN_PROBE))
+    except Exception:                                # noqa: BLE001
+        owed_reopen = 0
+    if owed_reopen and reopens < _expected_sends(owed_reopen, 24):
+        problems.append(f"{owed_reopen} conversation(s) owed a re-open, "
+                        f"only {reopens} went out")
     # A LANE THAT IS THROWING BELONGS IN THE HEARTBEAT, not only in an alert. The
     # alert mutes after one send per hour and a phone can be missed; the daily line
     # is the surface that cannot be missed, and a broken lane is exactly the kind of
