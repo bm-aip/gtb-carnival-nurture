@@ -20,6 +20,7 @@ from _bootstrap import Results        # noqa: E402
 
 import config                          # noqa: E402
 import knocks                          # noqa: E402
+import picker                          # noqa: E402
 
 r = Results()
 
@@ -142,6 +143,14 @@ r.check("due() pages through candidates", "OFFSET %s" in ksrc,
         detail="a fixed window is starved by a backlog of stale rejects")
 r.check("the scan is bounded", "SCAN_MAX" in ksrc and "SCAN_PAGE" in ksrc,
         detail="paging must not become a table scan on every tick")
+# THE WALK MOVED OUT OF THIS LANE, and that is the point: it was fixed here three
+# times and the re-opener inherited none of it. knocks re-exports the names, so
+# the two checks above still read true -- assert the shared rule is what backs
+# them, or this file quietly starts testing an alias. tests/picker_paging.py owns
+# the behaviour, including the proof that a wall of rejects cannot hide anyone.
+r.check("and the walk is the one every lane shares",
+        knocks.SCAN_PAGE == picker.SCAN_PAGE and knocks.SCAN_MAX == picker.SCAN_MAX,
+        detail="one paging rule, not one per lane")
 r.check("the page is bigger than one batch",
         knocks.SCAN_PAGE > config.SEND_BATCH_PER_TICK,
         detail=f"page={knocks.SCAN_PAGE} batch={config.SEND_BATCH_PER_TICK}")

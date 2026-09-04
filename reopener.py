@@ -46,7 +46,9 @@ from datetime import datetime, timezone
 
 import config
 import db
+import failures
 import knocks
+import picker
 import sequencer
 
 log = logging.getLogger("reopener")
@@ -125,7 +127,9 @@ def topic_for(conv):
 def due(limit=None):
     """Conversations owed a re-open right now. Quietest first."""
     limit = limit or config.SEND_BATCH_PER_TICK
-    rows = db.q("""
+
+    def fetch(page, offset):
+        return db.q("""
         SELECT c.id AS conv_id, c.checklist, c.last_turn_at,
                l.id, l.phone, l.name, l.project, l.campaign,
                -- PHONE-KEYED, like knocks.knock_state(). `leads` is UNIQUE
@@ -199,12 +203,11 @@ def due(limit=None):
           AND c.last_turn_at < now() - (%s || ' days')::interval
           AND c.last_turn_at > now() - (%s || ' days')::interval
         ORDER BY c.last_turn_at ASC
-        LIMIT %s""",
-        (MSG_TYPE, MSG_TYPE, MSG_TYPE, MSG_TYPE,
-         REOPEN_AFTER_DAYS[0], DORMANT_DAYS, limit * 5)) or []
+        LIMIT %s OFFSET %s""",
+            (MSG_TYPE, MSG_TYPE, MSG_TYPE, MSG_TYPE,
+             REOPEN_AFTER_DAYS[0], DORMANT_DAYS, page, offset))
 
     now = datetime.now(timezone.utc)
-    out = []
     # PHONE-KEYED WITHIN THE BATCH TOO. The subqueries above read what has already
     # been SENT, so two rows for one person both read zero tries and both qualify.
     # On the first live run 916374295387 received two re-opens one second apart --
@@ -212,36 +215,59 @@ def due(limit=None):
     # phone has two lead rows. knocks.due() has carried this same guard since
     # lavanya was messaged twice on 2026-08-02; this lane needed it too.
     claimed = set()
-    for r in rows:
+
+    def select(r):
         if r["phone"] in claimed:
-            continue
+            return None
         # THE LADDER counts what they received. A refusal must not cost them a
         # chance -- 16 people were sitting at 6 attempts and 1 delivery when this
         # was one counter, silently dormant after a single re-open.
         delivered = r.get("delivered") or 0
         if delivered >= REOPEN_MAX:
-            continue
+            return None
         tries = delivered
         topic = topic_for(r)
         if not topic:
-            continue                       # no context -> not our lane
+            return None                    # no context -> not our lane
         # Spacing: measured from the last try if there is one, otherwise from the
         # moment the conversation went quiet.
         # SPACING counts what we tried. This is the loop bound: a number that
         # refuses forever costs one send per REOPEN_AFTER_DAYS, not one per tick.
         anchor = r.get("last_try") or r.get("last_turn_at")
         if anchor is None:
-            continue
+            return None
         if anchor.tzinfo is None:
             anchor = anchor.replace(tzinfo=timezone.utc)
         wait_days = REOPEN_AFTER_DAYS[tries]
         if (now - anchor).days < wait_days:
-            continue
-        out.append((r, tries, topic))
+            return None
+        # THE DOOR'S CEILING, ASKED AT SELECTION TIME. Twelve re-opens in seven
+        # days were chosen here and then refused by failures.check() inside
+        # sequencer._send, which logs `blocked:` and returns False. A blocked row
+        # is not an attempt, so `last_try` never moved, so the same person was
+        # chosen again on the next pass -- and, being the quietest, chosen FIRST.
+        # That is the knock lane's 2026-09-03 loop rebuilt in a second lane, which
+        # is exactly what a lane-local fix guarantees. Side-effect free: check()
+        # only reads message_log. Last, because it is the widest and the most
+        # expensive, so it runs only for people otherwise ready to go.
+        #
+        # sequencer's own call STAYS. Two doors is correct -- this one stops us
+        # CHOOSING the impossible, that one stops us SENDING it.
+        allowed, _cap = failures.check(r["phone"], MSG_TYPE, project=r.get("project"))
+        if not allowed:
+            return None
         claimed.add(r["phone"])
-        if len(out) >= limit:
-            break
-    return out
+        return (r, tries, topic)
+
+    # ONE WINDOW BECAME A WALK. `limit * 5` was called headroom; on 2026-09-04 it
+    # was starvation. run() asks for SEND_BATCH_PER_TICK=25, so the query examined
+    # the 125 quietest conversations -- every one of them a ghost with no nameable
+    # topic, because ghosts are the quietest by definition -- and returned zero,
+    # every pass, for 90 hours. 26 people with real context sat behind them and the
+    # watchdog could only see them because its probe asked for 400.
+    #
+    # Third lane to learn this, first one to use the shared walk. See picker.py.
+    return picker.scan(fetch, select, limit)
 
 
 def send_one(lead_row, tries, topic):

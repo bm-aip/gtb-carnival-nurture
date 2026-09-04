@@ -37,6 +37,7 @@ import config
 import db
 import failures
 import fatigue
+import picker
 import sequencer
 
 log = logging.getLogger("knocks")
@@ -50,8 +51,12 @@ QUIET_DAYS = int(os.environ.get("KNOCK_REVIVE_QUIET_DAYS", "3"))
 # How far down the candidate queue due() will walk looking for a sendable lead,
 # and in what size steps. Bounded so a tick cannot turn into a table scan, but far
 # larger than any plausible backlog of rejects sitting at the front of the queue.
-SCAN_PAGE = int(os.environ.get("KNOCK_SCAN_PAGE", "250"))
-SCAN_MAX = int(os.environ.get("KNOCK_SCAN_MAX", "3000"))
+# THE WALK ITSELF NOW LIVES IN picker.py, shared with the re-opener. Three
+# lane-local fixes to one bug was three too many, and the fourth lane inherited
+# none of them. Re-exported under the old names because this is where every one
+# of those incidents happened and this is where a reader will look for them.
+SCAN_PAGE = picker.SCAN_PAGE
+SCAN_MAX = picker.SCAN_MAX
 
 # Fatigue's reason codes in the words the watchdog puts in front of a person.
 # _verdict()'s reasons are not debug strings: they are grouped and printed as
@@ -417,54 +422,38 @@ def due(limit=None):
     #
     # Same failure as the fortnight-long knock deadlock: FILTER BEFORE YOU LIMIT.
     now = datetime.now(timezone.utc)
-    out = []
-    rows = []
-    offset, scanned = 0, 0
-    while scanned < SCAN_MAX:
-        page = db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
+
+    def fetch(page, offset):
+        return db.q(_DUE_CTE + _DUE_SELECT + _DUE_FROM_WHERE + """
             ORDER BY COALESCE(l.selldo_response_at, l.created_at) ASC
             LIMIT %s OFFSET %s""",
-                    _due_params() + (SCAN_PAGE, offset)) or []
-        if not page:
-            break
-        rows.extend(page)
-        scanned += len(page)
-        offset += SCAN_PAGE
-        # Enough candidates to fill the batch even if every one is sendable? Then
-        # stop fetching; the loop below decides. Otherwise keep walking.
-        if len(page) < SCAN_PAGE:
-            break
-        if len(rows) >= limit and scanned >= SCAN_PAGE:
-            # Cheap pre-check: how many of what we hold are actually sendable.
-            probe, seen = 0, set()
-            for cand in rows:
-                if _verdict(cand, now, seen)[2] is None:
-                    probe += 1
-                    seen.add(cand["phone"])
-                if probe >= limit:
-                    break
-            if probe >= limit:
-                break
+                    _due_params() + (page, offset))
 
     # Phone-keyed within the batch too. knock_state reads what has already been
     # SENT, so two rows for one person both read zero and both qualify -- which is
     # exactly how lavanya was messaged twice. The database check stops it across
     # runs; this stops it inside one.
     claimed = set()
-    for lead in rows:
+
+    def select(lead):
         step_index, step_key, reason = _verdict(lead, now, claimed)
         if reason == "ceiling":
-            # The ONE side effect in this loop, and it belongs to the engine, not
+            # The ONE side effect in this pass, and it belongs to the engine, not
             # to anything merely counting: ten attempts refused means stop forever.
             _give_up(lead, step_key, config.KNOCK_RETRY_MAX)
-            continue
+            return None
         if reason:
-            continue
-        out.append((lead, step_index, step_key))
+            return None
         claimed.add(lead["phone"])
-        if len(out) >= limit:
-            break
-    return out
+        return (lead, step_index, step_key)
+
+    # THE PROBE IS GONE, and losing it is a simplification rather than a loss. It
+    # fetched pages, then guessed whether it held enough sendable leads by running
+    # _verdict over them a second time and throwing every answer away. picker.scan
+    # decides each row once, as it walks, and stops the instant the batch is full:
+    # it can never fetch more than it needs, and never pays for a verdict twice.
+    # Same bound, same oldest-first order, one pass.
+    return picker.scan(fetch, select, limit)
 
 
 def _verdict(lead, now, claimed):
