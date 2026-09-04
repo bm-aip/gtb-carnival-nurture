@@ -131,5 +131,76 @@ R.check("bookkeeping types are held in one named list",
 R.check("`matched` is still in it", "matched" in wati.NOT_A_SEND)
 R.check("`knock_gave_up` is in it", "knock_gave_up" in wati.NOT_A_SEND)
 
+# --- a closed door must not spend anybody's turn ------------------------------
+# THE SECOND HALF OF THE SAME INCIDENT. Once the counter read full, the re-opener
+# walked its whole batch anyway and earned one `blocked:rate_capped` row per
+# person. `last_try` counts every row of that msg_type, so each non-event pushed
+# that buyer's spacing clock forward by REOPEN_AFTER_DAYS -- twenty real people
+# put to sleep for three days having received nothing, minutes after #81 unjammed
+# the lane that was supposed to reach them.
+#
+# rate_ok() is a property of the CLOCK, not of the person, so the first refusal
+# means every remaining name would be refused too. The pass must stop.
+import knocks                            # noqa: E402
+import reopener                          # noqa: E402
+
+BATCH = 5
+
+
+def _drive(module, run_args, headroom):
+    """Run one lane's real run() with the wire, the picker and the diary faked.
+
+    `db.set_setting` is stubbed because run() records a heartbeat on a successful
+    pass -- a test about who we TRIED to message must not need a database to say
+    so, and must not write one if it has one.
+    """
+    tried = []
+    real_rate, real_due = module.wati.rate_ok, module.due
+    real_send = getattr(module, run_args["send"])
+    real_setting = module.db.set_setting
+    module.wati.rate_ok = lambda msg_type=None: headroom(tried)
+    module.due = lambda limit=None: run_args["batch"]
+    module.db.set_setting = lambda *a, **k: None
+    setattr(module, run_args["send"],
+            lambda *a, **k: (tried.append(a[0]), True)[1])
+    try:
+        module.run()
+    finally:
+        module.wati.rate_ok, module.due = real_rate, real_due
+        module.db.set_setting = real_setting
+        setattr(module, run_args["send"], real_send)
+    return tried
+
+
+def run_lane_with_no_headroom(module, run_args):
+    """Run one lane's pass with the hour full. Returns what it tried to send."""
+    return _drive(module, run_args, lambda tried: False)
+
+
+reopen_batch = [({"id": i, "phone": "9190000%04d" % i, "name": "T",
+                  "project": "RON"}, 0, "a weekend place") for i in range(BATCH)]
+R.eq("a full hour stops the re-opener before it touches anyone",
+     len(run_lane_with_no_headroom(reopener,
+                                   {"send": "send_one", "batch": reopen_batch})), 0)
+
+knock_batch = [({"id": i, "phone": "9190000%04d" % i, "name": "T",
+                 "project": "RON"}, 0, "t1_lifestyle") for i in range(BATCH)]
+R.eq("a full hour stops the knock engine before it touches anyone",
+     len(run_lane_with_no_headroom(knocks,
+                                   {"send": "send_knock", "batch": knock_batch})), 0)
+
+
+def run_lane_with_headroom_for(n, module, run_args):
+    """Headroom for exactly n sends, then the door closes mid-batch."""
+    return _drive(module, run_args, lambda tried: len(tried) < n)
+
+
+got = run_lane_with_headroom_for(2, reopener,
+                                 {"send": "send_one", "batch": reopen_batch})
+R.eq("it sends what the hour allows and stops there", len(got), 2)
+R.check("and the untouched people keep their place in the queue",
+        [r["id"] for r in got] == [0, 1],
+        detail="the rest are simply not tried, so the next tick resumes here")
+
 if __name__ == "__main__":
     sys.exit(0 if R.report("HOURLY BUDGET") else 1)

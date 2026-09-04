@@ -50,6 +50,7 @@ import failures
 import knocks
 import picker
 import sequencer
+import wati
 
 log = logging.getLogger("reopener")
 
@@ -305,6 +306,26 @@ def run():
         return 0
     sent = 0
     for lead_row, tries, topic in batch:
+        # A FULL HOUR ENDS THE PASS. IT MUST NOT SPEND EVERYBODY'S TURN.
+        #
+        # rate_ok() is a property of the CLOCK, not of this person, so once it is
+        # false it is false for every remaining name in the batch. Walking on
+        # regardless writes one `blocked:rate_capped` row each -- and `last_try`
+        # counts every row of this msg_type, so each of those non-events moves the
+        # person's spacing clock forward by REOPEN_AFTER_DAYS.
+        #
+        # 2026-09-04, and it hit the very people #81 had just unjammed: retiring a
+        # dead ad's cohort filled the hourly counter with bookkeeping rows, the
+        # lane picked 23 buyers for the first time in 90 hours, and 20 of them were
+        # turned away at a closed door and put to sleep for three days having
+        # received nothing. One was the Besant Nagar buyer this lane was built for.
+        #
+        # Stopping instead leaves them untouched, so the next tick with headroom
+        # picks up exactly where this one left off. [[never-arrived-must-not-count]]
+        if not wati.rate_ok(MSG_TYPE):
+            log.info("re-opener pass stopped: no hourly headroom, %d left for "
+                     "the next tick", len(batch) - sent)
+            break
         try:
             if send_one(lead_row, tries, topic):
                 sent += 1
