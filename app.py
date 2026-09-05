@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-04-bookkeeping-is-not-a-send"
+CODE_VERSION = "2026-09-05-schema-checked-when-it-changes"
 import db
 import selldo
 import meta
@@ -1227,6 +1227,44 @@ def admin_config_check():
         "fatigue_window_days": config.FATIGUE_WINDOW_DAYS,
         "embed_model": config.EMBED_MODEL,
         "embed_dim": config.EMBED_DIM,
+    })
+
+
+@app.route("/admin/schema-check", methods=["GET", "POST"])
+@auth
+def admin_schema_check():
+    """Is the database the shape this build expects, and force it if not.
+
+    Since 2026-09-05 the schema is applied only when it changes -- boot used to
+    run ~400 statements every time, holding an exclusive lock on fifteen tables,
+    and on a deploy that collided with a running query and took the bot down for
+    ten minutes. See db.init_db.
+
+    The cost of that is a database edited by hand is no longer repaired at boot.
+    This page is the replacement: GET says whether the shapes agree, POST forces
+    the full re-apply without waiting for a deploy. SCHEMA is safe to run twice --
+    every statement is IF NOT EXISTS or ON CONFLICT DO NOTHING.
+    """
+    expected = db.schema_fingerprint()
+    recorded = db.get_setting(db.SCHEMA_KEY)
+
+    applied = None
+    if request.method == "POST":
+        # Logged because a forced re-apply is a write to production, and the next
+        # person asking "who changed the schema" should find an answer.
+        app.logger.warning("schema re-apply forced from /admin/schema-check")
+        applied = db.init_db(force=True)
+        recorded = db.get_setting(db.SCHEMA_KEY)
+
+    return jsonify({
+        "code_version": CODE_VERSION,
+        "expected": expected,
+        "recorded": recorded,
+        # `recorded` is null on a database that has never booted this build. That
+        # is a mismatch, not an error: the next boot will apply and record it.
+        "in_sync": recorded == expected,
+        "forced": applied,
+        "how_to_force": "POST to this same URL",
     })
 
 
