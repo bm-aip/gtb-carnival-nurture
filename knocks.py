@@ -39,6 +39,7 @@ import failures
 import fatigue
 import picker
 import sequencer
+import wati
 
 log = logging.getLogger("knocks")
 
@@ -680,6 +681,16 @@ def run():
         return 0
     sent = 0
     for lead, step_index, step_key in batch:
+        # A FULL HOUR ENDS THE PASS -- see the same guard in reopener.run(). The
+        # hourly cap belongs to the clock, not to this lead, so once it is closed
+        # every remaining name in the batch would only earn a `blocked:rate_capped`
+        # row. Here those rows are counted by the retry bookkeeping instead of the
+        # spacing clock, but the principle is the one this project keeps relearning:
+        # a message that never reached WhatsApp must not cost the person anything.
+        if not wati.rate_ok(msg_type_for(step_key)):
+            log.info("knock pass stopped: no hourly headroom, %d left for the "
+                     "next tick", len(batch) - sent)
+            break
         try:
             if send_knock(lead, step_index, step_key):
                 sent += 1

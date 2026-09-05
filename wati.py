@@ -250,13 +250,40 @@ def fetch_referral(phone, max_pages=6):
     }
 
 
+# ROWS THAT ARE FILED AS OUTBOUND AND NEVER TOUCHED WHATSAPP.
+#
+# `message_log` is the diary of what happened to a lead, not a log of sends, so it
+# carries bookkeeping entries alongside real messages. They are stored as
+# direction='out' because they belong to our side of the conversation -- and every
+# counter that asks "how much have we sent" has to know the difference.
+#
+#   matched          a lead was paired with a phone number.        (2026-08-22)
+#   knock_gave_up    we stopped chasing somebody. The END of
+#                    sending, recorded as though it were a send.   (2026-09-04)
+#
+# `matched` was found the same way and fixed alone, as a named exception. This is
+# now a set, because the next one will be a third name and not a rewrite.
+NOT_A_SEND = ("matched", "knock_gave_up")
+
+
 def sends_last_hour():
     """Messages that actually went on the wire in the last hour.
 
-    `matched` is EXCLUDED. It is a bookkeeping row written when a lead is paired
-    with a phone number -- nothing is sent -- but it is stored as direction='out'
-    with ok=TRUE, so it was consuming the hourly allowance. Four of the hundred
-    slots on 2026-08-22 went to rows that never touched WhatsApp.
+    NOT_A_SEND IS EXCLUDED, and the second entry cost an hour of live sending.
+
+    2026-09-04: retiring 127 leads from a dead ad wrote 126 `knock_gave_up` rows in
+    twenty minutes. Nothing was sent -- the whole point of the row is that we have
+    STOPPED sending to that person -- but each one is direction='out' with a detail
+    that does not begin with `blocked:`, so this counter read 133 sends against a
+    cap of 100 and refused every real message for the next hour. The re-opener,
+    unjammed by #81 minutes earlier, immediately picked 23 people and had 20 of
+    them turned away at the door by a wall of records saying we had given up.
+
+    The failure of 2026-08-22 was identical in shape: four `matched` rows eating
+    four of a hundred slots. It was fixed by naming that one type, which is why
+    this one was free to happen. A bookkeeping row is not a send, and the honest
+    fix is a list of the rows that are not sends -- not one more name in a WHERE
+    clause.
     """
     # ATTEMPTS THAT TOUCHED THE WIRE, not deliveries. `AND ok` alone meant a
     # refused template consumed no allowance, so a lane whose sends were being
@@ -266,10 +293,10 @@ def sends_last_hour():
     # A gate block is still excluded: sendgate stopped it and nothing was sent.
     # Same three states as failures.burst_count().
     r = db.q("""SELECT count(*) AS n FROM message_log
-                WHERE direction='out' AND msg_type <> 'matched'
+                WHERE direction='out' AND NOT (msg_type = ANY(%s))
                   AND (ok OR COALESCE(detail, '') NOT LIKE 'blocked:%%')
                   AND ts > now() - interval '1 hour'""",
-             one=True)
+             (list(NOT_A_SEND),), one=True)
     return r["n"] if r else 0
 
 
