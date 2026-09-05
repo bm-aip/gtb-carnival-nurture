@@ -301,6 +301,23 @@ def send_one(lead_row, tries, topic):
 
 def run():
     """One scheduled pass. Returns how many re-opens went out."""
+    # Same clock, same reasoning as knocks.run(). A re-open is a cold marketing
+    # message to somebody who went quiet -- landing it at 3am is the worst possible
+    # way to restart a conversation.
+    if sequencer.quiet_now():
+        log.info("reopener pass skipped: quiet hours until %02d:%02d IST",
+                 *sequencer.QUIET_END)
+        return 0
+
+    # The daily tier cap, checked once for the same reason as the clock above: the
+    # answer is identical for every name in the batch, so walking a page of them to
+    # reject each one is wasted work. sequencer._send() enforces it again at the
+    # door, which is what makes it true rather than merely usual.
+    if sequencer.daily_budget() <= 0:
+        log.info("reopener pass skipped: daily cap of %d reached",
+                 config.DAILY_SEND_CAP)
+        return 0
+
     batch = due()
     if not batch:
         return 0
