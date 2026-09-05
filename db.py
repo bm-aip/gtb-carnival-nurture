@@ -1,4 +1,6 @@
+import hashlib
 import json
+import time
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
@@ -125,19 +127,6 @@ ALTER TABLE leads ADD COLUMN IF NOT EXISTS knock_lost_at TIMESTAMPTZ;
 -- has already been spent on this person, and the whole rotation is guesswork.
 ALTER TABLE message_log ADD COLUMN IF NOT EXISTS template_name TEXT;
 
--- 2026-08-17: how many turns since we last asked a qualifying question.
---
--- The bot asked one in 81% of its turns, and turns carrying a question were replied
--- to at 47.9% against 70.6% for turns carrying none. Owner: ask a gate only every
--- second or third turn and let the buyer lead in between.
---
--- A COUNTER, not a timestamp, because the rule is "turns", and a conversation can
--- go quiet for a day between two turns without that meaning anything. `asked` cannot
--- answer this -- it records WHICH framings were spent, never when.
---
--- Starts at 99 so a brand-new conversation is immediately eligible: the first turn
--- should still ask, it is the rest that should breathe.
-ALTER TABLE conversations ADD COLUMN IF NOT EXISTS turns_since_gate INT NOT NULL DEFAULT 99;
 -- Per-ad reporting is the whole point of storing source_id, and it is always a
 -- GROUP BY over the full table.
 CREATE INDEX IF NOT EXISTS idx_leads_ctwa_source ON leads (ctwa_source_id);
@@ -211,6 +200,20 @@ CREATE TABLE IF NOT EXISTS conversations (
     UNIQUE (lead_id)
 );
 CREATE INDEX IF NOT EXISTS idx_conv_outcome ON conversations (outcome);
+
+-- 2026-08-17: how many turns since we last asked a qualifying question.
+--
+-- The bot asked one in 81% of its turns, and turns carrying a question were replied
+-- to at 47.9% against 70.6% for turns carrying none. Owner: ask a gate only every
+-- second or third turn and let the buyer lead in between.
+--
+-- A COUNTER, not a timestamp, because the rule is "turns", and a conversation can
+-- go quiet for a day between two turns without that meaning anything. `asked` cannot
+-- answer this -- it records WHICH framings were spent, never when.
+--
+-- Starts at 99 so a brand-new conversation is immediately eligible: the first turn
+-- should still ask, it is the rest that should breathe.
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS turns_since_gate INT NOT NULL DEFAULT 99;
 
 -- The §10 audit guardrail: the day a buyer says "your bot told me X", you need the
 -- exact chunks and document versions that produced the reply. Stored per outbound
@@ -421,10 +424,134 @@ def conn():
         c.close()
 
 
-def init_db():
-    with conn() as c:
-        with c.cursor() as cur:
-            cur.execute(SCHEMA)
+# THE SHAPE OF THE DATABASE, AND WHY WE DO NOT RE-CHECK IT EVERY TIME.
+#
+# SCHEMA is ~400 statements and it used to run on every boot, inside a single
+# transaction, in BOTH processes -- app.py imports it and worker.py calls it, and
+# a deploy restarts the two together. One transaction that ALTERs fifteen tables
+# holds an AccessExclusiveLock on every one of them until the last statement
+# lands. Any ordinary query touching two of those tables in the other direction
+# is then a deadlock waiting for the timing to line up.
+#
+# 2026-09-05 it lined up. Two of three boots died on
+#   psycopg2.errors.DeadlockDetected ... waits for AccessExclusiveLock on 16414
+# and the bot was down for ten minutes -- the watchdog missed a run by thirteen,
+# so the thing that would have raised the alarm was the thing that was off.
+#
+# The schema had not changed since 2026-08-22. Twenty-three deploys re-applied
+# four hundred statements to confirm nothing had moved, and one of them cost an
+# outage. So: write down the shape, and only look when the shape changes.
+#
+# WHAT MAKES IT SAFE TO STOP LOOKING. The fingerprint is written only after the
+# whole apply succeeds, so a half-applied migration leaves no note and the next
+# boot does the work again. Failure is always retried; only proven success is
+# ever trusted. A database edited by hand is NOT repaired at boot any more -- it
+# fails loudly at first use instead, and /admin/schema-check forces a re-apply
+# without waiting for a deploy.
+SCHEMA_KEY = "schema_fingerprint"
+
+# Any 64-bit constant. Postgres advisory locks share one namespace per database,
+# and this is the only thing in this codebase that takes one.
+SCHEMA_LOCK_ID = 8712340001
+
+# A migration that meets a busy reader should give up and come back, not sit in
+# the deadlock detector's way. Five seconds is far longer than any statement here
+# needs when the table is free.
+SCHEMA_LOCK_TIMEOUT = "5s"
+
+# ...and coming back is the other half. A timeout without a retry is still a
+# failed boot -- a cleaner error than a deadlock, but the bot is equally down.
+# Seven tries backing off 2s, 4s, 8s... spans about four minutes, which is longer
+# than any burst of traffic this app generates.
+SCHEMA_APPLY_TRIES = 7
+
+
+def schema_fingerprint(text=None):
+    """The shape of the database as one short string.
+
+    Over the SCHEMA text itself, so any edit -- a new column, a new index, a
+    changed default -- produces a different fingerprint with nobody having to
+    remember to bump a version number. That forgetting is the failure mode of
+    every hand-maintained migration counter.
+    """
+    return hashlib.sha256((SCHEMA if text is None else text).encode("utf-8")).hexdigest()[:16]
+
+
+def _recorded_fingerprint(cur):
+    """What the database says its shape is, or None if it cannot say.
+
+    A fresh database has no `settings` table at all, which is not an error here
+    -- it is the answer. The SAVEPOINT matters: a failed statement aborts the
+    whole transaction, and this lookup runs inside the one that is about to apply
+    SCHEMA, so without rolling back to a savepoint the very first install would
+    die on `InFailedSqlTransaction` instead of creating the tables.
+    """
+    cur.execute("SAVEPOINT look_for_fingerprint")
+    try:
+        cur.execute("SELECT value FROM settings WHERE key=%s", (SCHEMA_KEY,))
+        row = cur.fetchone()
+    except psycopg2.errors.UndefinedTable:
+        cur.execute("ROLLBACK TO SAVEPOINT look_for_fingerprint")
+        return None
+    cur.execute("RELEASE SAVEPOINT look_for_fingerprint")
+    return row[0] if row else None
+
+
+def init_db(force=False):
+    """Bring the database to the shape SCHEMA describes. Usually does nothing.
+
+    Returns "unchanged", "applied", or "applied (forced)" so a caller -- the
+    admin page, a log line -- can say which happened. `force` re-applies even on
+    a match, which is the escape hatch for a database somebody changed underneath
+    us; SCHEMA is written to be safe to run twice.
+    """
+    want = schema_fingerprint()
+
+    if not force:
+        with conn() as c:
+            with c.cursor() as cur:
+                if _recorded_fingerprint(cur) == want:
+                    return "unchanged"
+
+    # Only a real migration gets this far. Two containers boot together on a
+    # deploy, so both would reach here on the same change and re-create the
+    # collision this whole function exists to avoid. The advisory lock makes them
+    # take turns; it is held on the session, not on any table, so nothing else in
+    # the database waits on it.
+    for attempt in range(SCHEMA_APPLY_TRIES):
+        try:
+            with conn() as c:
+                with c.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_xact_lock(%s)", (SCHEMA_LOCK_ID,))
+
+                    # Re-read under the lock: the container that went first has by
+                    # now done the work, and this one should not repeat it.
+                    if not force and _recorded_fingerprint(cur) == want:
+                        return "unchanged"
+
+                    cur.execute("SET LOCAL lock_timeout = %s", (SCHEMA_LOCK_TIMEOUT,))
+                    cur.execute(SCHEMA)
+
+                    # Same transaction as the apply, deliberately. If SCHEMA fails,
+                    # this never lands, and the next boot sees a stale fingerprint
+                    # and does the work again. Written apart from set_setting()
+                    # because that opens its own connection and would commit the
+                    # note without the work it is supposed to be describing.
+                    cur.execute("""INSERT INTO settings (key, value) VALUES (%s, %s)
+                                   ON CONFLICT (key) DO UPDATE
+                                   SET value = EXCLUDED.value""",
+                                (SCHEMA_KEY, want))
+            return "applied (forced)" if force else "applied"
+
+        # ONLY contention is retried. A lock timeout or a deadlock means somebody
+        # else was busy and we should come back; a syntax error or a bad column
+        # means the migration itself is wrong and retrying it six more times just
+        # delays the truth by four minutes.
+        except (psycopg2.errors.LockNotAvailable,
+                psycopg2.errors.DeadlockDetected):
+            if attempt == SCHEMA_APPLY_TRIES - 1:
+                raise
+            time.sleep(2 ** attempt)
 
 
 def q(sql, params=None, one=False):
