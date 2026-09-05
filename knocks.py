@@ -676,6 +676,25 @@ def knock_now(lead):
 
 def run():
     """One scheduled pass. Returns how many knocks went out."""
+    # Quiet hours are a property of the CLOCK, not of any one person, so the
+    # answer is the same for every name in the batch. Checking here rather than
+    # per-message saves walking a page of candidates to reject all of them --
+    # the same reasoning as the hourly brake below. sequencer._send() enforces it
+    # again at the door, which is what makes it true for lanes that forget.
+    if sequencer.quiet_now():
+        log.info("knock pass skipped: quiet hours until %02d:%02d IST",
+                 *sequencer.QUIET_END)
+        return 0
+
+    # The daily tier cap, checked once for the same reason as the clock above: the
+    # answer is identical for every name in the batch, so walking a page of them to
+    # reject each one is wasted work. sequencer._send() enforces it again at the
+    # door, which is what makes it true rather than merely usual.
+    if sequencer.daily_budget() <= 0:
+        log.info("knock pass skipped: daily cap of %d reached",
+                 config.DAILY_SEND_CAP)
+        return 0
+
     batch = due()
     if not batch:
         return 0

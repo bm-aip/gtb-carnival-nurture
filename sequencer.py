@@ -35,6 +35,7 @@ import wati
 import sendgate
 import optout
 import failures
+import fatigue
 import jobs
 
 log = logging.getLogger("sequencer")
@@ -86,9 +87,24 @@ def _daily_sends():
     Session replies inside a window the customer opened are excluded: they do not
     consume the tier. Only ok=TRUE rows count, so neither failed attempts nor
     gate-blocked sends ever eat the daily allowance."""
+    # TWO BUGS LIVED HERE UNTIL 2026-09-05, in code nothing called.
+    #
+    # First, `msg_type LIKE 'knock%'` counted knocks alone. Re-openers and the
+    # m1/m2/m3 first touches are every bit as business-initiated -- wati.rate_ok()
+    # has always treated them so -- and none of them counted against a cap meant to
+    # bound exactly that traffic. The population is now derived from the same two
+    # constants the hourly reserve uses, so the two cannot drift apart.
+    #
+    # Second, that bare `%` was a literal in a query psycopg2 was asked to
+    # parameterise, so the call raised `IndexError: tuple index out of range` every
+    # time. It never surfaced because nothing called it. Parameterising the pattern
+    # removes the escape entirely rather than doubling it and hoping.
     r = db.q("""SELECT count(*) AS n FROM message_log
-                WHERE direction='out' AND ok AND msg_type LIKE 'knock%'
-                AND ts > now() - interval '24 hours'""", one=True)
+                 WHERE direction='out' AND ok
+                   AND (msg_type LIKE %s OR msg_type = ANY(%s))
+                   AND ts > now() - interval '24 hours'""",
+             (fatigue.PROACTIVE_PREFIX + "%", list(wati.COLD_FIRST_TOUCH)),
+             one=True)
     return r["n"] if r else 0
 
 
@@ -129,6 +145,46 @@ def _send(lead, msg_type, body=None, template=None, params=None, sources=None,
     The four Phase 0 safety rules live inside sendgate.check(), not here, so this
     call site does not change again as tasks 2-4 land.
     """
+    # QUIET HOURS, AT THE DOOR SO EVERY LANE INHERITS THEM.
+    #
+    # quiet_now() was written 2026-08 with the comment "held for the knock engine
+    # to consult". Nothing ever consulted it. On 2026-09-04 six cold templates went
+    # out at 23:40 IST -- a buyer's first ever impression of us, at twenty to
+    # midnight. It is the sixth rule found this week that was written correctly and
+    # connected to nothing, which is why it goes HERE rather than in the two lanes
+    # that need it today: a lane added tomorrow inherits it without anyone
+    # remembering to.
+    #
+    # Business-initiated only, reusing the reserve's own predicate rather than a
+    # second list. Someone who writes to us at 11pm gets an answer at 11pm -- that
+    # is inside a session they opened, it costs nothing with Meta, and making them
+    # wait until morning would be worse service, not better manners. Handoff cards
+    # go to staff, not buyers, and are not proactive either.
+    #
+    # NOTHING IS LOGGED. A message that waits for morning has not been tried, and
+    # writing a row here would say it was. `last_try` counts every row of a type,
+    # so a 2am non-event would push that person's next message days out -- exactly
+    # what happened to twenty buyers on 2026-09-04, put to sleep for three days
+    # having received nothing. The knock stays due; 8am picks it up.
+    if wati.is_business_initiated(msg_type) and quiet_now():
+        return False
+
+    # THE DAILY TIER CAP, wired up 2026-09-05. It was written months ago, and
+    # `daily_budget()` -- whose own docstring says "used by the knock engine's
+    # scheduler" -- was called by nothing at all. DAILY_SEND_CAP=500 appeared in
+    # the config, and on the config-check page that displays it, and bounded
+    # nothing. The only real limit was the hourly one, so the true ceiling was 80
+    # an hour around the clock: about 1,900 a day, not 500.
+    #
+    # Same shape as quiet hours, and for the same reason it is HERE: one door, so
+    # a lane written next month cannot forget it.
+    #
+    # NOTHING IS LOGGED, for the reason above. A knock that waits for tomorrow has
+    # not been tried, and a row would say it was -- pushing that person's next
+    # message further out for a message they never got.
+    if wati.is_business_initiated(msg_type) and daily_budget() <= 0:
+        return False
+
     allowed, reason = sendgate.check(lead.get("phone"), msg_type,
                                      project=lead.get("project"))
     if not allowed:

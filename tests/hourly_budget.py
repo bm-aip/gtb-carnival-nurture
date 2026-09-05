@@ -142,6 +142,7 @@ R.check("`knock_gave_up` is in it", "knock_gave_up" in wati.NOT_A_SEND)
 # rate_ok() is a property of the CLOCK, not of the person, so the first refusal
 # means every remaining name would be refused too. The pass must stop.
 import knocks                            # noqa: E402
+import sequencer                         # noqa: E402
 import reopener                          # noqa: E402
 
 BATCH = 5
@@ -158,6 +159,13 @@ def _drive(module, run_args, headroom):
     real_rate, real_due = module.wati.rate_ok, module.due
     real_send = getattr(module, run_args["send"])
     real_setting = module.db.set_setting
+    # 2026-09-05: run() gained two more brakes ahead of the hourly one -- the quiet
+    # window and the daily tier cap. Both are stubbed OPEN here, because this file
+    # is about the hourly budget: a lane stopped for the wrong reason would pass
+    # every assertion below while proving nothing.
+    real_quiet, real_budget = sequencer.quiet_now, sequencer.daily_budget
+    sequencer.quiet_now = lambda n=None: False
+    sequencer.daily_budget = lambda: 10 ** 6
     module.wati.rate_ok = lambda msg_type=None: headroom(tried)
     module.due = lambda limit=None: run_args["batch"]
     module.db.set_setting = lambda *a, **k: None
@@ -168,6 +176,7 @@ def _drive(module, run_args, headroom):
     finally:
         module.wati.rate_ok, module.due = real_rate, real_due
         module.db.set_setting = real_setting
+        sequencer.quiet_now, sequencer.daily_budget = real_quiet, real_budget
         setattr(module, run_args["send"], real_send)
     return tried
 

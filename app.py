@@ -18,8 +18,9 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-04-bookkeeping-is-not-a-send"
+CODE_VERSION = "2026-09-05-quiet-hours-and-daily-cap"
 import db
+import funnel
 import selldo
 import meta
 import sequencer
@@ -1228,6 +1229,33 @@ def admin_config_check():
         "embed_model": config.EMBED_MODEL,
         "embed_dim": config.EMBED_DIM,
     })
+
+
+@app.route("/admin/funnel")
+@auth
+def admin_funnel():
+    """What actually happened to the messages we sent. Read-only, sends nothing.
+
+    Built 2026-09-05 because a straight question -- "is the nurture working" --
+    got three different answers from three counters in one afternoon, and every
+    one of them reported Wati's "accepted" as a delivery. It is not: Wati
+    accepting a message means it will try, and about one in ten is refused by
+    Meta afterwards.
+
+    The delivery and read confirmations were arriving the whole time and matching
+    nothing, because they are joined on a message id that Wati does not return
+    for template sends. Matching on phone instead recovered them. Everything on
+    this page is counted by funnel.py and nowhere else, so two parts of the system
+    can no longer disagree about the same number.
+    """
+    try:
+        days = max(1, min(90, int(request.args.get("days", 7))))
+    except (TypeError, ValueError):
+        days = 7
+    r = funnel.report(days)
+    if request.args.get("format") == "json":
+        return jsonify(r)
+    return render_template("funnel.html", r=r)
 
 
 @app.route("/api/queue")

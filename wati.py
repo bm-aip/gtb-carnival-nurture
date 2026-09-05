@@ -332,7 +332,12 @@ def rate_ok(msg_type=None):
 # quietly change what fatigue means.
 # `reopener_t7` joins them: the 24h window is shut, so a re-open is an approved
 # template and a business-initiated conversation like any other knock.
-_COLD_FIRST_TOUCH = ("m1", "m2", "m3", "reopener_t7")
+# Public: the daily tier cap counts exactly the same population as the hourly
+# reserve, and derives it from here rather than restating it. A second copy is how
+# _daily_sends() came to count `knock%` alone -- silently omitting every re-opener
+# and first-touch from a cap that was supposed to bound them.
+COLD_FIRST_TOUCH = ("m1", "m2", "m3", "reopener_t7")
+_COLD_FIRST_TOUCH = COLD_FIRST_TOUCH        # old private name, kept for callers
 
 
 def is_business_initiated(msg_type):

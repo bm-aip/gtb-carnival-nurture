@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Message funnel</title>
+<style>
+  :root {
+    --ink: #1a1a1a; --dim: #6b6b6b; --line: #e3e3e0; --bg: #faf9f7;
+    --card: #ffffff; --good: #2f6f4f; --warn: #8a6d1f; --bad: #8c3a2e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#e8e6e3; --dim:#9a9a96; --line:#33332f; --bg:#141412;
+            --card:#1c1c1a; --good:#7fbf9a; --warn:#d9b551; --bad:#e08b7d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.5
+         ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 34px 0 10px; letter-spacing: 0.04em;
+       text-transform: uppercase; color: var(--dim); font-weight: 600; }
+  .sub { color: var(--dim); margin: 0 0 6px; }
+  .card { background: var(--card); border: 1px solid var(--line);
+          border-radius: 10px; padding: 2px 16px 14px; margin-bottom: 6px; }
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line);
+           white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { font-size: 12px; letter-spacing: .03em; color: var(--dim); font-weight: 600; }
+  tbody tr:last-child td { border-bottom: 0; }
+  .big { display:flex; flex-wrap:wrap; gap:10px; margin: 14px 0 0; }
+  .stat { background: var(--card); border:1px solid var(--line); border-radius:10px;
+          padding: 12px 16px; min-width: 132px; flex: 1 1 132px; }
+  .stat b { display:block; font-size: 26px; font-weight: 650; letter-spacing:-.02em; }
+  .stat span { color: var(--dim); font-size: 12.5px; }
+  .good { color: var(--good); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  .note { color: var(--dim); font-size: 13px; margin: 10px 0 0; }
+  .note li { margin-bottom: 5px; }
+  .dash { color: var(--dim); }
+  nav a { color: inherit; text-decoration: none; border:1px solid var(--line);
+          padding: 4px 10px; border-radius: 999px; font-size: 13px; margin-right:6px;
+          display:inline-block; }
+  nav a.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Message funnel</h1>
+  <p class="sub">What actually happened to the nurture and re-opener messages,
+     last {{ r.days }} days.</p>
+  <nav>
+    {% for d in [7, 14, 30] %}
+      <a class="{{ 'on' if d == r.days else '' }}" href="?days={{ d }}">{{ d }} days</a>
+    {% endfor %}
+  </nav>
+
+  {% set t = r.totals %}
+  <div class="big">
+    <div class="stat"><b>{{ t.accepted }}</b><span>accepted by Wati</span></div>
+    <div class="stat"><b class="good">{{ t.delivered }}</b><span>delivered to a buyer</span></div>
+    <div class="stat"><b class="good">{{ t.read_ }}</b><span>read</span></div>
+    <div class="stat"><b class="warn">{{ t.unknown }}</b><span>unknown &mdash; never heard</span></div>
+    <div class="stat"><b class="bad">{{ t.rejected }}</b><span>rejected</span></div>
+    <div class="stat"><b>{{ r.replies.replied }}</b><span>replied</span></div>
+  </div>
+
+  <h2>By lane</h2>
+  <div class="card scroll">
+  <table>
+    <thead><tr><th>Lane</th><th>Sent</th><th>Accepted</th><th>Delivered</th>
+      <th>Read</th><th>Unknown</th><th>Rejected</th>
+      <th>People</th><th>Reached</th></tr></thead>
+    <tbody>
+    {% for x in r.by_lane %}
+      <tr>
+        <td>{{ x.lane }}</td><td>{{ x.sent }}</td><td>{{ x.accepted }}</td>
+        <td class="good">{{ x.delivered }}{% if x.delivery_rate is not none %}
+            <span class="dash">&nbsp;{{ x.delivery_rate }}%</span>{% endif %}</td>
+        <td>{{ x.read_ }}{% if x.read_rate is not none %}
+            <span class="dash">&nbsp;{{ x.read_rate }}%</span>{% endif %}</td>
+        <td class="warn">{{ x.unknown }}</td><td class="bad">{{ x.rejected }}</td>
+        <td>{{ x.people }}</td>
+        <td>{{ x.people_reached }}{% if x.reach_rate is not none %}
+            <span class="dash">&nbsp;{{ x.reach_rate }}%</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+
+  <h2>By template</h2>
+  <div class="card scroll">
+  <table>
+    <thead><tr><th>Template</th><th>Sent</th><th>Accepted</th><th>Delivered</th>
+      <th>Delivery</th><th>Read</th><th>Read of delivered</th><th>Unknown</th>
+      <th>Reached end&#8209;to&#8209;end</th></tr></thead>
+    <tbody>
+    {% for x in r.by_template %}
+      <tr>
+        <td>{{ x.template }}</td><td>{{ x.sent }}</td><td>{{ x.accepted }}</td>
+        <td>{{ x.delivered }}</td>
+        <td>{% if x.delivery_rate is none %}<span class="dash">&ndash;</span>
+            {% else %}{{ x.delivery_rate }}%{% endif %}</td>
+        <td>{{ x.read_ }}</td>
+        <td>{% if x.read_rate is none %}<span class="dash">&ndash;</span>
+            {% else %}{{ x.read_rate }}%{% endif %}</td>
+        <td class="warn">{{ x.unknown }}</td>
+        <td>{% if x.end_to_end is none %}<span class="dash">&ndash;</span>
+            {% else %}<b>{{ x.end_to_end }}%</b>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="note"><b>Reached end&#8209;to&#8209;end</b> is delivered &divide; sent &mdash;
+     of every message this template tried to send, how many landed on a phone.
+     It is the only column that judges the template rather than one step of it.</p>
+  </div>
+
+  <h2>Did being reached make them reply</h2>
+  <div class="card">
+    <div class="big">
+      <div class="stat"><b>{{ r.replies.reached }}</b><span>people reached</span></div>
+      <div class="stat"><b>{{ r.replies.replied }}</b><span>wrote back</span></div>
+      <div class="stat"><b>{% if r.replies.reply_rate is none %}&ndash;{% else %}{{ r.replies.reply_rate }}%{% endif %}</b><span>reply rate</span></div>
+    </div>
+  </div>
+
+  <h2>Where conversations ended</h2>
+  <div class="card scroll">
+  <table>
+    <thead><tr><th>Outcome</th><th>Count</th><th>Meaning</th></tr></thead>
+    <tbody>
+    {% for x in r.outcomes %}
+      <tr><td>{{ x.outcome }}</td><td>{{ x.n }}</td>
+          <td style="text-align:left;color:var(--dim)">{{ r.outcome_meanings.get(x.outcome, '') }}</td></tr>
+    {% endfor %}
+    {% if not r.outcomes %}<tr><td colspan="3" class="dash">No conversation reached an outcome.</td></tr>{% endif %}
+    </tbody>
+  </table>
+  <p class="note"><b>qualified</b> and <b>visit_booked</b> are the goals.
+     <b>escalated</b> is not a success &mdash; it means the bot could not answer and
+     called a human.</p>
+  </div>
+
+  <h2>Stopped by us, before Wati</h2>
+  <div class="card scroll">
+  <table>
+    <thead><tr><th>Reason</th><th>Messages</th><th>People</th></tr></thead>
+    <tbody>
+    {% for x in r.held %}
+      <tr><td>{{ x.reason }}</td><td>{{ x.blocked }}</td><td>{{ x.people }}</td></tr>
+    {% endfor %}
+    {% if not r.held %}<tr><td colspan="3" class="dash">Nothing held.</td></tr>{% endif %}
+    </tbody>
+  </table>
+  <p class="note">These never reached Wati. Unlike a rejection, every one is
+     <em>our</em> decision &mdash; a limit, a gate or a bug. The
+     <b>People</b> column is the one that matters: a large message count
+     against few people is a retry loop, not a blocked audience.</p>
+  </div>
+
+  <h2>How to read this</h2>
+  <div class="card">
+    <ul class="note">
+      {% for c in r.caveats %}<li>{{ c }}</li>{% endfor %}
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>
