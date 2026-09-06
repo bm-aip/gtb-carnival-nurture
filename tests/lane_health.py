@@ -91,11 +91,32 @@ def test_dead_lane_alerts():
     R.check("the return value reports it", "reopener" in (out or ""))
 
 
+def _all_ok(**overrides):
+    """Every lane healthy, then whatever this test wants to break.
+
+    ENUMERATED FROM w.LANES so a new lane cannot silently make an unrelated test
+    fail -- which is exactly what happened when the hand-raiser lane was added on
+    2026-09-06 and three fixtures here still described a two-lane system. A test
+    that must be hand-edited for each new lane is a test that will be edited to
+    pass rather than to check.
+    """
+    settings = {"app_boot_at": _ago(240)}
+    for k, _label in w.LANES:
+        settings[f"{k}_last_ok"] = _ago(1)
+    for k, v in overrides.items():
+        if v is None:
+            settings.pop(k, None)
+        else:
+            settings[k] = v
+    return settings
+
+
 def test_never_ran_alerts():
     # THE WORST CASE AND THE QUIETEST. No error, no success -- a lane that has
     # never executed. An error-only check would say nothing here forever.
     sent = []
-    _patch(FakeDB(settings={"app_boot_at": _ago(240), "knock_last_ok": _ago(1)}), sent)
+    # Exactly ONE lane has no record of ever running; the rest are healthy.
+    _patch(FakeDB(settings=_all_ok(reopener_last_ok=None)), sent)
     w._check_lane_broken()
     R.eq("a lane that has never run alerts", len(sent), 1)
     R.check("and says NEVER, which is a worse fact than 'stopped'",
@@ -105,9 +126,9 @@ def test_never_ran_alerts():
 def test_each_lane_alerts_separately():
     # One alert per lane. A broken knock engine must not mask a broken re-opener.
     sent = []
-    _patch(FakeDB(settings={
-        "knock_error": "boom", "knock_last_ok": _ago(120),
-        "reopener_error": "bang", "reopener_last_ok": _ago(120)}), sent)
+    _patch(FakeDB(settings=_all_ok(
+        knock_error="boom", knock_last_ok=_ago(120),
+        reopener_error="bang", reopener_last_ok=_ago(120))), sent)
     w._check_lane_broken()
     R.eq("both broken lanes alert independently", len(sent), 2)
 
@@ -119,27 +140,25 @@ def test_transient_blip_is_not_an_alarm():
     # Threw, then recovered. This is the case that would make the alarm permanent
     # if `_error` were read without `_last_ok`.
     sent = []
-    _patch(FakeDB(settings={
-        "knock_error": "one bad row", "knock_last_ok": _ago(2),
-        "reopener_last_ok": _ago(2)}), sent)
+    _patch(FakeDB(settings=_all_ok(
+        knock_error="one bad row", knock_last_ok=_ago(2))), sent)
     R.eq("a lane that threw but ran a minute ago does not alert", len(sent), 0)
     R.eq("and reports nothing", w._check_lane_broken(), None)
 
 
 def test_healthy_is_silent():
     sent = []
-    _patch(FakeDB(settings={"knock_last_ok": _ago(1),
-                            "reopener_last_ok": _ago(1)}), sent)
+    _patch(FakeDB(settings=_all_ok()), sent)
     w._check_lane_broken()
-    R.eq("two healthy lanes are silent", len(sent), 0)
+    R.eq("healthy lanes are silent", len(sent), 0)
 
 
 def test_quiet_but_not_broken_is_not_this_check():
     # Ran a while ago, no error. That is _check_nobody_contacted's job (leads due,
     # none sent). Two checks alerting on one fact teaches a reader to skim both.
     sent = []
-    _patch(FakeDB(settings={"knock_last_ok": _ago(300),
-                            "reopener_last_ok": _ago(300)}), sent)
+    _patch(FakeDB(settings=_all_ok(**{f"{k}_last_ok": _ago(300)
+                                      for k, _l in w.LANES})), sent)
     w._check_lane_broken()
     R.eq("stale but not erroring is left to the knocks-silent check", len(sent), 0)
 
@@ -197,8 +216,25 @@ def test_wiring():
                             "app.py"), encoding="utf-8").read()
     R.check("both lanes are visible on /api/summary", '"lanes": lanes' in app)
 
-    R.eq("every lane in the tick is watched",
-         sorted(k for k, _ in w.LANES), ["knock", "reopener"])
+    # THE GUARANTEE, NOT A LITERAL LIST. This asserted ["knock", "reopener"], so
+    # adding a lane meant editing the test -- and a test you edit to make a new
+    # lane pass is a test that cannot catch the next unwatched lane. It now reads
+    # what tick() actually runs, from the parse tree, and demands the watchdog
+    # know about each one. Lane four is covered on the day it is written.
+    import ast
+
+    seq = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "sequencer.py"), encoding="utf-8").read()
+    fn = next(n for n in ast.walk(ast.parse(seq))
+              if isinstance(n, ast.FunctionDef) and n.name == "tick")
+    # _run_lane("knock", knocks.run) -> "knock"
+    in_tick = sorted(ast.literal_eval(n.args[0]) for n in ast.walk(fn)
+                     if isinstance(n, ast.Call)
+                     and ast.unparse(n.func) == "_run_lane"
+                     and n.args and isinstance(n.args[0], ast.Constant))
+    R.check("tick() runs at least the two original lanes",
+            {"knock", "reopener"} <= set(in_tick))
+    R.eq("every lane in the tick is watched", sorted(k for k, _ in w.LANES), in_tick)
 
 
 for fn in (test_dead_lane_alerts, test_never_ran_alerts,

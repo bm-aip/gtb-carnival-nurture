@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-06-watchdog-knows-the-clock"
+CODE_VERSION = "2026-09-06-hand-raisers-reach-a-human"
 import db
 import funnel
 import selldo
@@ -447,7 +447,11 @@ def api_summary():
                "knock_error", "reopener_error"]}
     lanes = {k: {"last_ok": db.get_setting(f"{k}_last_ok", "") or "never",
                  "error": db.get_setting(f"{k}_error", "") or ""}
-             for k in ("knock", "reopener")}
+             # ENUMERATED FROM watchdog.LANES, not a third copy of the list.
+             # This tuple was hardcoded, so the hand-raiser lane added on
+             # 2026-09-06 would have been watched and alerted on while staying
+             # invisible on the one page a person opens to ask what is wrong.
+             for k, _label in watchdog.LANES}
     return jsonify({"day_counts": counts, "funnel": funnel, "errors": errors,
                     "lanes": lanes, "last_tick_at": db.get_setting("last_tick_at", ""),
                     "paused": sequencer.paused(),
@@ -1211,6 +1215,92 @@ def admin_delivery():
         "unrecognised_webhooks_1h": (db.q(
             """SELECT count(*) n FROM message_delivery WHERE status='unrecognised'
                AND created_at > now() - interval '1 hour'""", one=True) or {}).get("n"),
+    })
+
+
+@app.route("/admin/unreachable")
+@auth
+def admin_unreachable():
+    """THE CALL LIST. People who asked about the project and whom WhatsApp will
+    not deliver to. Read-only: this route sends nothing and writes nothing.
+
+    2026-09-06: 118 of the 373 stalled conversations -- a third of them -- had
+    `knock_lost_at` set, meaning ten separate sends were refused for that number.
+    They never opted out; the messages simply never arrived. No amount of work on
+    the nurture lanes reaches these people, because the channel itself is closed,
+    and the ledger is emphatic that Meta rather than our configuration is the
+    limiter: retrying only spends sender reputation and gets refused again.
+
+    So the honest answer is a phone call, and this is the list to call from.
+    Ordered by most recent enquiry, because a person who asked last week is worth
+    a call before one who asked in July.
+    """
+    rows = db.q("""
+        SELECT l.id, l.name, l.phone, l.campaign, l.project,
+               l.created_at, l.knock_lost_at, c.checklist, c.last_turn_at,
+               (SELECT im.body FROM message_log im
+                 WHERE im.lead_id = l.id AND im.direction = 'in'
+                 ORDER BY im.ts DESC LIMIT 1)                        AS last_said,
+               (SELECT count(*) FROM message_log m
+                 WHERE m.lead_id = l.id AND m.direction = 'out')     AS tries
+        FROM leads l
+        LEFT JOIN conversations c ON c.lead_id = l.id
+        WHERE l.knock_lost_at IS NOT NULL
+          AND NOT l.suppressed
+          AND COALESCE(c.outcome, '') NOT IN ('dead', 'visit_booked')
+          AND NOT EXISTS (SELECT 1 FROM optouts o WHERE o.phone = l.phone)
+        ORDER BY COALESCE(c.last_turn_at, l.created_at) DESC
+    """) or []
+    # WHERE THE NUMBER IS, ON THE FACE OF THE PAGE. Checked against production
+    # 2026-09-06 before this shipped: of 127 unreachable numbers, 79 were Saudi,
+    # 22 Omani and THREE Indian, and every one arrived through direct_whatsapp
+    # rather than any ad. Everybody still in play is 86% Indian. A flat list of
+    # 127 numbers would have sent the sales team dialling the Gulf for a week
+    # about a villa on ECR, so the page says so first and puts the Indian
+    # numbers at the top.
+    #
+    # Deliberately NOT filtered to India. A Gulf-based Indian buying back home is
+    # a real segment, and a page that silently dropped them would be making that
+    # call on the team's behalf. It shows everything, in a useful order.
+    def _country(phone):
+        p = str(phone or "").lstrip("+")
+        for n, name in (("966", "Saudi Arabia"), ("967", "Yemen"), ("968", "Oman"),
+                        ("971", "UAE"), ("965", "Kuwait"), ("974", "Qatar"),
+                        ("973", "Bahrain"), ("880", "Bangladesh"), ("92", "Pakistan"),
+                        ("94", "Sri Lanka"), ("60", "Malaysia"), ("65", "Singapore"),
+                        ("44", "UK"), ("91", "India"), ("1", "US/Canada")):
+            if p.startswith(n):
+                return name
+        return "unknown"
+
+    people = [{"lead_id": r["id"], "name": r["name"], "phone": r["phone"],
+               "country": _country(r["phone"]),
+                    "campaign": r["campaign"], "project": r["project"],
+                    "enquired": str(r["created_at"])[:16],
+                    "last_activity": str(r["last_turn_at"] or r["created_at"])[:16],
+                    "gave_up_at": str(r["knock_lost_at"])[:16],
+                    "sends_attempted": r["tries"],
+               "they_last_said": " ".join(str(r["last_said"] or "").split())[:120],
+               "what_we_know": r["checklist"] or {}}
+              for r in rows]
+    by_country = {}
+    for person in people:
+        by_country[person["country"]] = by_country.get(person["country"], 0) + 1
+    # Indian numbers first, then most recent enquiry within each group.
+    people.sort(key=lambda x: (x["country"] != "India", x["last_activity"]),
+                reverse=False)
+    people.sort(key=lambda x: x["country"] != "India")
+    return jsonify({
+        "count": len(people),
+        "what_this_is": ("People who enquired and whom WhatsApp refuses to "
+                         "deliver to. They did not opt out. A phone call is the "
+                         "only channel left."),
+        "read_this_first": ("Check `by_country` before dialling. On 2026-09-06 "
+                            "only 3 of 127 were Indian numbers -- the rest came "
+                            "in from the Gulf through direct WhatsApp, not from "
+                            "any ad. Indian numbers are listed first."),
+        "by_country": dict(sorted(by_country.items(), key=lambda kv: -kv[1])),
+        "people": people,
     })
 
 

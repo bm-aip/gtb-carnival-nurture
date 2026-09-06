@@ -311,6 +311,14 @@ def tick():
     import reopener
     _run_lane("reopener", reopener.run)
 
+    # THE HAND-RAISER LANE. Somebody pressed a button on one of our templates and
+    # then went quiet, and neither lane above can reach them: the knock ladder
+    # treats a pressed button as a real inbound and stops forever, the re-opener
+    # has no topic to name. 14 people were in that state on 2026-09-06. This one
+    # sends to STAFF, never to the buyer.
+    import handraiser
+    _run_lane("handraiser", handraiser.run)
+
 
 def _run_lane(name, fn):
     """Run one send lane, and leave behind a record a monitor can actually read.

@@ -252,7 +252,11 @@ LANE_BROKEN_MIN = int(os.environ.get("WATCHDOG_LANE_BROKEN_MIN", "60"))
 # third lane means adding it HERE -- a lane absent from this list is unwatched, and
 # unwatched is precisely how the ghost lane came to have no monitoring at all.
 LANES = (("knock", "the follow-up engine"),
-         ("reopener", "the re-opener (dead conversations)"))
+         ("reopener", "the re-opener (dead conversations)"),
+         # Added with the lane itself, 2026-09-06. A lane absent from this tuple is
+         # unwatched, and unwatched is precisely how the ghost lane came to have no
+         # monitoring at all -- so it goes in with the lane, not after it.
+         ("handraiser", "the hand-raiser cards (button pressed, then silence)"))
 
 # One message per problem per hour. An alert that repeats every 15 minutes is an
 # alert people mute, and a muted alert is worse than none because it still looks
