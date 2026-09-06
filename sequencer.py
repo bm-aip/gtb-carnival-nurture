@@ -108,13 +108,30 @@ def _daily_sends():
     return r["n"] if r else 0
 
 
-def daily_budget():
+def daily_left():
     """How many proactive sends are left against the number's tier allowance.
+
+    SIDE-EFFECT FREE, AND SPLIT OUT OF daily_budget() ON PURPOSE. The watchdog
+    needs this answer to know whether a silent lane is broken or merely holding,
+    and a monitor must not write. daily_budget() stamps `daily_capped_at`, which
+    is meant to record when the ENGINE hit the ceiling; a watchdog calling it
+    every fifteen minutes would overwrite that with its own observation time and
+    the field would stop meaning anything.
+
+    Same lesson as reopener.due() vs knocks.due(): the safe read and the acting
+    call are different functions, and which one a monitor may use is a property
+    worth naming rather than remembering.
+    """
+    return max(0, config.DAILY_SEND_CAP - _daily_sends())
+
+
+def daily_budget():
+    """How many proactive sends are left, and record the moment we run out.
     Used by the knock engine's scheduler (task 17)."""
-    left = config.DAILY_SEND_CAP - _daily_sends()
+    left = daily_left()
     if left <= 0:
         db.set_setting("daily_capped_at", now_ist().isoformat())
-    return max(0, left)
+    return left
 
 
 def _send(lead, msg_type, body=None, template=None, params=None, sources=None,

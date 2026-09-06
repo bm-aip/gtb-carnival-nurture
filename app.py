@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-05-funnel-quiet-hours-schema"
+CODE_VERSION = "2026-09-06-watchdog-knows-the-clock"
 import db
 import funnel
 import selldo
@@ -430,6 +430,14 @@ def api_summary():
               ["selldo_error_RON", "selldo_error_ELEMENTS",
                "meta_error_RON", "meta_error_ELEMENTS",
                "meta_leads_error_RON", "meta_leads_error_ELEMENTS", "rate_capped_at",
+               # WRITTEN SINCE THE DAILY CAP WAS WIRED TO THE DOOR (2026-09-05),
+               # read by nothing until now -- the same shape as knock_error below.
+               # The cap stops both proactive lanes WITHOUT writing a message_log
+               # row, on purpose: a message that waits for tomorrow has not been
+               # tried. That makes it the one send gate with no trace anywhere a
+               # person looks, so "why is nothing going out" was unanswerable from
+               # any screen. It is answerable here now.
+               "daily_capped_at",
                # THE TWO LANES INSIDE THE TICK. Written since the knock engine was
                # built, read by nothing until 2026-08-31 -- so a lane could throw on
                # every tick and this page, the daily report and every dashboard
@@ -446,7 +454,14 @@ def api_summary():
                     # Master switch state, so "why is nothing sending?" is
                     # answerable from the dashboard instead of the Railway env.
                     "sends_enabled": sendgate.sends_enabled(),
-                    "sends_last_hour": wati.sends_last_hour()})
+                    "sends_last_hour": wati.sends_last_hour(),
+                    # THE TWO GATES THAT REFUSE WITHOUT LEAVING A ROW. Both are
+                    # correct behaviour and both look exactly like a dead engine
+                    # from outside. On 2026-09-06 quiet hours produced two "nobody
+                    # is being contacted" alerts and there was no screen that could
+                    # have said "the door is shut until 08:00".
+                    "quiet_now": sequencer.quiet_now(),
+                    "daily_sends_left": sequencer.daily_left()})
 
 
 @app.route("/api/fatigue")
@@ -1220,6 +1235,11 @@ def admin_config_check():
         "max_sends_per_hour": config.MAX_SENDS_PER_HOUR,
         "send_batch_per_tick": config.SEND_BATCH_PER_TICK,
         "daily_send_cap": config.DAILY_SEND_CAP,
+        # A cap you cannot see the remaining balance of is a number, not a gate.
+        "daily_sends_left": sequencer.daily_left(),
+        "quiet_hours_ist": "%02d:%02d-%02d:%02d" % (sequencer.QUIET_START
+                                                    + sequencer.QUIET_END),
+        "quiet_now": sequencer.quiet_now(),
         "send_enabled": sendgate.sends_enabled(),
         "retry_max_recipient": config.RETRY_MAX_RECIPIENT,
         "retry_max_transient": config.RETRY_MAX_TRANSIENT,
