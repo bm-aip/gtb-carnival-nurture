@@ -29,11 +29,16 @@ the silence trustworthy.
 """
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
 
 import config
 import db
 import handoff
+# SAFE AT MODULE LEVEL: nothing in sequencer's import chain imports watchdog --
+# app.py is the only importer of this module. knocks and reopener are still
+# imported inside their functions because knocks imports sequencer, and a
+# module-level import of either here would close a circle.
+import sequencer
 
 log = logging.getLogger("watchdog")
 
@@ -88,6 +93,22 @@ KNOCK_STALL_PCT = int(os.environ.get("WATCHDOG_KNOCK_STALL_PCT", "10"))
 # people owed and nothing sent is the contradiction.
 REOPEN_SILENT_HOURS = int(os.environ.get("WATCHDOG_REOPEN_SILENT_HOURS", "24"))
 
+# HOW MUCH OPEN DOOR IT TAKES BEFORE A LANE MAY BE JUDGED.
+#
+# 2026-09-06, 07:54 IST: both silence alerts fired at once. Nothing was broken.
+# Quiet hours had been wired to the door the previous day (19:30 -> 08:00 IST) and
+# this file has no clock, so it measured six hours in which the engine was not
+# permitted to send and called the result a stalled engine. The 09:08 daily report
+# disproved both alerts by itself -- 76 due became 0 due, and the re-opener that
+# "had not run in 24h" ran at 08:00.
+#
+# A monitor that alarms about a rule the system is correctly obeying is worse than
+# no monitor: it fires every single morning, and an alert people expect to be wrong
+# is one they stop reading. The windows below are now measured in hours the door
+# was actually OPEN, and this is the least open time worth drawing a conclusion
+# from -- below it there is not enough evidence, so the guard stays quiet.
+MIN_OPEN_HOURS = float(os.environ.get("WATCHDOG_MIN_OPEN_HOURS", "1"))
+
 # How deep to look for people owed a re-open. reopener.due() fetches limit * 5
 # candidates and then filters in Python, so this probe examines up to 5x this many
 # conversations -- bounded work, run once every WATCHDOG_CHECK_MIN.
@@ -132,7 +153,55 @@ def _reopens_attempted(hours):
     return _sends_attempted("reopener_t7", hours)
 
 
-def _expected_sends(due, hours):
+def _open_hours(hours, now=None):
+    """How many of the last `hours` the send door was open for cold messages.
+
+    Quiet hours live in ONE place -- sequencer.QUIET_START/QUIET_END, the same
+    constants the door itself obeys -- because a monitor holding its own copy of
+    the schedule is a monitor that disagrees with the engine the day someone moves
+    the hours. Both lanes already skip on sequencer.quiet_now(); this is that same
+    fact, integrated over a window instead of asked about one instant.
+
+    FAILS OPEN, DELIBERATELY. If the constants are ever changed so that the waking
+    window wraps midnight, this cannot compute it, so it reports the whole window
+    as open -- the alert then behaves exactly as it did before this change. An
+    unmodelled schedule must make the watchdog noisier, never quieter: the failure
+    that costs buyers is the one where it says nothing.
+    """
+    now = now or sequencer.now_ist()
+    opens_at = time(*sequencer.QUIET_END)
+    shuts_at = time(*sequencer.QUIET_START)
+    if opens_at >= shuts_at:
+        return float(hours)
+
+    start = now - timedelta(hours=hours)
+    total = 0.0
+    day = start.date()
+    while day <= now.date():
+        lo = max(start, datetime.combine(day, opens_at, tzinfo=now.tzinfo))
+        hi = min(now, datetime.combine(day, shuts_at, tzinfo=now.tzinfo))
+        if hi > lo:
+            total += (hi - lo).total_seconds() / 3600.0
+        day += timedelta(days=1)
+    return total
+
+
+def _allowance_spent():
+    """True when the daily tier cap is used up, so both lanes are correctly holding.
+
+    The cap was wired to the door on 2026-09-05 and, like quiet hours, it returns
+    False from _send() WITHOUT writing a message_log row -- because a message that
+    waits for tomorrow has not been tried, and a row would say it was. Correct for
+    the engine, invisible to a guard that counts rows: a lane obeying the tier cap
+    and a lane that has died look identical from here.
+
+    sequencer.daily_left(), NOT daily_budget(): the latter stamps `daily_capped_at`,
+    and a monitor that writes corrupts the very field it is reporting on.
+    """
+    return sequencer.daily_left() <= 0
+
+
+def _expected_sends(due, hours, now=None):
     """The fewest sends a working lane would have made, given `due` were owed.
 
     LANE-AGNOSTIC ON PURPOSE. Both proactive lanes sit under the same reply
@@ -153,9 +222,18 @@ def _expected_sends(due, hours):
     """
     if due <= 0:
         return 0
+    # THE WINDOW IS ONLY WORTH WHAT THE DOOR WAS OPEN FOR. Six hours ending at
+    # 07:54 contain no permitted sends at all, so a working engine would have sent
+    # nothing and there is nothing to conclude.
+    open_h = _open_hours(hours, now)
+    if open_h < MIN_OPEN_HOURS:
+        return 0
+    # HOLDING IS NOT STALLING. The tier cap is the engine obeying a limit we set.
+    if _allowance_spent():
+        return 0
     share = -(-due * KNOCK_STALL_PCT // 100)          # ceil, no float
     headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
-    return max(1, min(share, headroom * int(hours)))
+    return max(1, min(share, int(headroom * open_h)))
 
 # How long poll_meta_leads may go without completing before new leads are
 # presumed to have stopped arriving. It runs every minute; a full sweep can
@@ -362,6 +440,15 @@ def _check_nobody_contacted():
     if sent >= expected:
         return None
 
+    # The window and the part of it the engine was allowed to send in are two
+    # different numbers whenever quiet hours cut across it, and the alert quotes
+    # the one it actually judged on. "0 sent in 6h" was true and misleading on
+    # 2026-09-06; "0 sent in the 2h the engine was open" could not have been read
+    # the same way.
+    open_h = _open_hours(KNOCK_SILENT_HOURS)
+    window = (f"{KNOCK_SILENT_HOURS}h" if open_h >= KNOCK_SILENT_HOURS
+              else f"the {open_h:.0f}h the engine was open")
+
     # Strictly wider than the old test: with anything due, `expected` is at least 1,
     # so total silence still trips exactly as before.
 
@@ -385,7 +472,7 @@ def _check_nobody_contacted():
     ok = _alert("knocks_silent",
                 f"{headline} - {due} lead(s) waiting",
                 f"{due} lead(s) could be knocked right now and only {sent} went out "
-                f"in {KNOCK_SILENT_HOURS}h -- a working engine would have sent at "
+                f"in {window} -- a working engine would have sent at "
                 f"least {expected}. Last knock: {ago}."
                 + (f" Others waiting: {held}." if held else ""),
                 "The knock engine is running but barely sending. Check the "
@@ -434,6 +521,10 @@ def _check_reopener_silent():
     if sent >= expected:
         return None
 
+    open_h = _open_hours(REOPEN_SILENT_HOURS)
+    window = (f"{REOPEN_SILENT_HOURS}h" if open_h >= REOPEN_SILENT_HOURS
+              else f"the {open_h:.0f}h the lane was open")
+
     if _muted("reopener_silent"):
         return f"{len(owed)} owed a re-open, {sent} sent (muted)"
 
@@ -443,7 +534,7 @@ def _check_reopener_silent():
     ok = _alert("reopener_silent",
                 f"NOBODY IS BEING WOKEN UP - {len(owed)} gone quiet",
                 f"{len(owed)} conversation(s) are owed a re-open right now and only "
-                f"{sent} went out in {REOPEN_SILENT_HOURS}h -- a working lane would "
+                f"{sent} went out in {window} -- a working lane would "
                 f"have sent at least {expected}. Last re-open: {ago}."
                 + (f" (Probe examined the oldest {REOPEN_PROBE}; there may be more.)"
                    if len(owed) >= REOPEN_PROBE else ""),

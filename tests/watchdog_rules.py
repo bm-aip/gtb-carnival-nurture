@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from _bootstrap import Results
 
 import config
+import sequencer
 import watchdog as w
 
 R = Results()
@@ -49,8 +50,41 @@ class FakeDB:
         self.settings[k] = str(v)
 
 
-def _patch(fake, sent):
+# NOON, FIXED. Every guard below now consults a clock, because quiet hours shut
+# the send door from 19:30 to 08:00 IST and a lane that is not permitted to send
+# is not a lane that has stalled. Without pinning the clock these tests would pass
+# by day and fail by night, which is the worst possible property for the suite that
+# guards the alerting.
+NOON = datetime(2026, 9, 6, 12, 0, tzinfo=sequencer.IST)
+
+
+class FakeSequencer:
+    """The clock and the tier cap, both controllable.
+
+    The real sequencer.daily_left() runs a query, so an unpatched watchdog test
+    would open a database connection. Quiet hours come from the REAL constants --
+    a fake schedule would let this suite agree with itself while disagreeing with
+    the door.
+    """
+
+    QUIET_START = sequencer.QUIET_START
+    QUIET_END = sequencer.QUIET_END
+    IST = sequencer.IST
+
+    def __init__(self, now=NOON, left=999):
+        self._now = now
+        self.left = left
+
+    def now_ist(self):
+        return self._now
+
+    def daily_left(self):
+        return self.left
+
+
+def _patch(fake, sent, seq=None):
     w.db = fake
+    w.sequencer = seq or FakeSequencer()
     w.handoff = type("H", (), {
         "_notify": staticmethod(lambda phones, slots, kind: (
             sent.append({"phones": phones, "slots": slots, "kind": kind}) or True))})()
@@ -284,24 +318,124 @@ def test_knocks_expected_arithmetic():
     Named for the knock lane because that is where it was found, but the function
     is lane-agnostic and the re-opener guard shares it -- see
     test_both_lanes_share_one_threshold."""
+    _patch(FakeDB(), [])
     R.eq("nothing due means nothing expected, so a quiet day stays quiet",
-         w._expected_sends(0, 6), 0)
+         w._expected_sends(0, 6, NOON), 0)
 
     # 309 owed at 10% is 31. Two sends is the stall that went unreported.
-    R.eq("309 owed over 6h expects 31", w._expected_sends(309, 6), 31)
+    R.eq("309 owed over 6h expects 31", w._expected_sends(309, 6, NOON), 31)
 
     # Rounds UP, so a handful due can never expect zero and slip through.
-    R.eq("3 owed still expects at least 1", w._expected_sends(3, 6), 1)
-    R.eq("1 owed still expects at least 1", w._expected_sends(1, 6), 1)
+    R.eq("3 owed still expects at least 1", w._expected_sends(3, 6, NOON), 1)
+    R.eq("1 owed still expects at least 1", w._expected_sends(1, 6, NOON), 1)
 
     # CLAMPED TO WHAT THE SENDER MAY ACTUALLY PUSH. Without this the guard would
     # alarm about its own rate limit as soon as the backlog grew past it, which is
     # the false-positive that makes an alert worthless.
     headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
-    R.eq("a huge backlog is clamped to the hourly headroom",
-         w._expected_sends(100000, 6), headroom * 6)
+    # THE CLAMP IS NOW PER OPEN HOUR, NOT PER WALL-CLOCK HOUR. Six hours ending
+    # at noon contain four the engine was allowed to send in, and it cannot be
+    # held to a target it was forbidden to reach.
+    R.eq("a huge backlog is clamped to the headroom of the OPEN hours",
+         w._expected_sends(100000, 6, NOON), headroom * 4)
+    evening = datetime(2026, 9, 6, 19, 30, tzinfo=sequencer.IST)
+    R.eq("and to the full six when all six were open",
+         w._expected_sends(100000, 6, evening), headroom * 6)
     R.check("and that clamp is below the naive share",
-            w._expected_sends(100000, 6) < 100000 * w.KNOCK_STALL_PCT // 100)
+            w._expected_sends(100000, 6, NOON)
+            < 100000 * w.KNOCK_STALL_PCT // 100)
+
+
+# --------------------------------------------------------------------------
+# THE 07:54 FALSE ALARM. Both silence guards fired on 2026-09-06 and nothing was
+# broken: quiet hours had been wired to the door the day before, and this file
+# had no clock. The 09:08 daily report disproved both alerts on its own.
+# --------------------------------------------------------------------------
+def test_open_hours_counts_only_the_hours_the_door_was_open():
+    _patch(FakeDB(), [])
+
+    def at(h, m=0):
+        return datetime(2026, 9, 6, h, m, tzinfo=sequencer.IST)
+
+    # THE ALERT THAT WOKE THE OWNER: 6h ending 07:54, every minute of it quiet.
+    R.eq("the six hours before 07:54 contain no open door",
+         w._open_hours(6, at(7, 54)), 0.0)
+    R.eq("so a full backlog expects nothing and the guard stays silent",
+         w._expected_sends(76, 6, at(7, 54)), 0)
+
+    # Six hours ending at noon reach back to 06:00, so only 08:00-12:00 counts.
+    R.eq("a window straddling 08:00 counts only the part after it opened",
+         w._open_hours(6, at(12)), 4.0)
+    R.eq("and two hours of it at 10:00", w._open_hours(6, at(10)), 2.0)
+
+    # A window wholly inside the waking day is counted in full.
+    R.eq("six hours ending at 19:30 are all open", w._open_hours(6, at(19, 30)), 6.0)
+
+    # The evening boundary: 16:00-22:00 stops counting at 19:30.
+    R.eq("a window straddling 19:30 stops counting at 19:30",
+         w._open_hours(6, at(22)), 3.5)
+
+    # The 24h re-opener window always spans a full night.
+    R.eq("a 24h window is one whole waking day, not 24",
+         w._open_hours(24, at(12)), 11.5)
+
+
+def test_quiet_hours_are_not_a_stall():
+    """The guard must not fire while the engine is forbidden to send."""
+    seq = FakeSequencer(now=datetime(2026, 9, 6, 7, 54, tzinfo=sequencer.IST))
+    verdict, alerts = _silence_verdict(76, 0, seq=seq)
+    R.eq("76 due and 0 sent at 07:54 raises nothing", verdict, None)
+    R.eq("and nobody is woken at a quarter to eight", len(alerts), 0)
+
+    # The same facts an hour later, with the door open, MUST still alarm --
+    # otherwise this fix has bought silence rather than accuracy.
+    seq = FakeSequencer(now=datetime(2026, 9, 6, 12, 0, tzinfo=sequencer.IST))
+    verdict, alerts = _silence_verdict(76, 0, seq=seq)
+    R.check("but the identical stall at noon still alarms", bool(verdict))
+    R.eq("and it does notify", len(alerts), 1)
+
+
+def test_a_spent_daily_cap_is_not_a_stall():
+    """Holding for the tier cap is the engine obeying us, not the engine dying.
+
+    The cap refuses at the door WITHOUT writing a message_log row, so from a
+    row-counting guard a capped lane and a dead lane look identical."""
+    verdict, alerts = _silence_verdict(76, 0, seq=FakeSequencer(left=0))
+    R.eq("a spent daily allowance raises nothing", verdict, None)
+    R.eq("and sends no alert", len(alerts), 0)
+
+    verdict, _ = _silence_verdict(76, 0, seq=FakeSequencer(left=200))
+    R.check("with allowance left the same silence still alarms", bool(verdict))
+
+
+def test_the_monitor_never_writes():
+    """daily_budget() stamps daily_capped_at. A guard calling it would overwrite
+    the engine's own record with its own observation time, every 15 minutes.
+
+    Read from the AST, not the text: on 2026-09-03 a source assertion in this
+    project passed on a COMMENT that said the opposite of what it claimed."""
+    import ast
+
+    path = os.path.join(os.path.dirname(__file__), "..", "watchdog.py")
+    with io.open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    fn = next(n for n in ast.walk(tree)
+              if isinstance(n, ast.FunctionDef) and n.name == "_allowance_spent")
+    calls = {ast.unparse(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+    R.check("the guard reads the side-effect-free daily_left()",
+            "sequencer.daily_left" in calls)
+    R.check("and never the one that writes daily_capped_at",
+            "sequencer.daily_budget" not in calls)
+
+
+def test_open_hours_fails_open_on_a_schedule_it_cannot_model():
+    """An unmodelled schedule must make the watchdog noisier, never quieter."""
+    seq = FakeSequencer()
+    seq.QUIET_START = (8, 0)      # inverted: waking window would wrap midnight
+    seq.QUIET_END = (19, 30)
+    _patch(FakeDB(), [], seq)
+    R.eq("it reports the whole window as open rather than suppressing",
+         w._open_hours(6, NOON), 6.0)
 
 
 def test_attempted_excludes_blocked_but_not_refused():
@@ -320,7 +454,7 @@ def test_attempted_excludes_blocked_but_not_refused():
             "AND ok" not in sql)
 
 
-def _silence_verdict(due, sent):
+def _silence_verdict(due, sent, seq=None):
     """Run the silence check with `due` leads sendable and `sent` knocks out."""
     import knocks
 
@@ -330,7 +464,7 @@ def _silence_verdict(due, sent):
     # same helper, so one fixture answers both.
     fake = FakeDB(rows={"count": {"n": sent, "last_at": None}})
     alerts = []
-    _patch(fake, alerts)
+    _patch(fake, alerts, seq)
     try:
         return w._check_nobody_contacted(), alerts
     finally:
@@ -519,6 +653,11 @@ if __name__ == "__main__":
     test_check_survives_a_broken_signal()
     test_daily_report()
     test_knocks_expected_arithmetic()
+    test_open_hours_counts_only_the_hours_the_door_was_open()
+    test_quiet_hours_are_not_a_stall()
+    test_a_spent_daily_cap_is_not_a_stall()
+    test_the_monitor_never_writes()
+    test_open_hours_fails_open_on_a_schedule_it_cannot_model()
     test_attempted_excludes_blocked_but_not_refused()
     test_a_trickle_still_alerts()
     test_a_working_engine_stays_quiet()
