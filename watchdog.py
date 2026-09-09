@@ -256,7 +256,11 @@ LANES = (("knock", "the follow-up engine"),
          # Added with the lane itself, 2026-09-06. A lane absent from this tuple is
          # unwatched, and unwatched is precisely how the ghost lane came to have no
          # monitoring at all -- so it goes in with the lane, not after it.
-         ("handraiser", "the hand-raiser cards (button pressed, then silence)"))
+         ("handraiser", "the hand-raiser cards (button pressed, then silence)"),
+         # Added with the lane itself, 2026-09-09. A lane absent from this tuple is
+         # unwatched, and this one is the recovery path -- the worst thing to find
+         # out about after the fact.
+         ("resume", "the outage resume step"))
 
 # One message per problem per hour. An alert that repeats every 15 minutes is an
 # alert people mute, and a muted alert is worse than none because it still looks

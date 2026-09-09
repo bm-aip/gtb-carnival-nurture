@@ -36,6 +36,7 @@ import handoff
 import jobs
 import media
 import qualifier
+import resume
 import sequencer
 import wati
 
@@ -245,7 +246,12 @@ def _handle_inbound(job):
 
     decision = qualifier.run_turn(lead, text, history=history, conv=conv)
 
-    sent = sequencer._send(lead, "qualifier_turn", body=decision["reply"],
+    # AN ANSWER THAT KEPT SOMEBODY WAITING SAYS SO. A message replayed after a
+    # provider outage opens with an apology; every other reply is untouched. Plain
+    # code, not a prompt instruction -- the model has just come back from being
+    # unreachable and must not also be trusted to remember its manners.
+    sent = sequencer._send(lead, "qualifier_turn",
+                           body=resume.with_apology(decision["reply"], payload),
                            sources=decision.get("sources"))
     if not sent:
         # The gate refused, or the send failed. Do NOT advance the checklist or
@@ -284,6 +290,13 @@ def run_once():
         retrying = jobs.fail(job, e)
         log.warning("job %s: %s", job["id"],
                     "will retry" if retrying else "GAVE UP -- left in table as failed")
+        # WE GAVE UP ON A BUYER. If the reason was the provider being down rather
+        # than a fault of ours, say so to them in one line of plain code -- the
+        # model is the thing that is unavailable, so nothing here may need it.
+        # 2026-09-09: two people, one of them mid-conversation having just tapped
+        # "Need More Details", got total silence instead. See resume.py.
+        if not retrying:
+            resume.hold(job, e)
         return True
 
 
