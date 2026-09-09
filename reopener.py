@@ -33,9 +33,10 @@ WHAT STOPS A RE-OPEN, in order:
                                 DELIVERIES, not attempts: a refusal must never
                                 spend somebody's allowance (#71). Loops are bound
                                 by SPACING on attempts instead -- see due().
-  * sendgate.check()         -- master switch, pause, opt-out, retry ceiling,
+  * sendgate.would_allow()   -- master switch, pause, opt-out, retry ceilings,
                                 and the class-agnostic burst cap added after the
-                                2026-08-25 runaway (failures.burst_check)
+                                2026-08-25 runaway. Asked at SELECTION time, not
+                                only at the door: see due().
 
 The send goes through sequencer._send like everything else. One door.
 """
@@ -49,12 +50,17 @@ import db
 import failures
 import knocks
 import picker
+import sendgate
 import sequencer
 import wati
 
 log = logging.getLogger("reopener")
 
 MSG_TYPE = "reopener_t7"
+
+# This lane messages BUYERS, so its picker must end on the send gate. Read by
+# tests/one_gate.py, which fails the build if a buyer-facing lane skips it.
+SENDS_TO_BUYER = True
 
 # Days of silence before the first re-open, then between tries. Three tries in
 # total -- the design's "one re-open, then two more spaced tries".
@@ -242,19 +248,25 @@ def due(limit=None):
         wait_days = REOPEN_AFTER_DAYS[tries]
         if (now - anchor).days < wait_days:
             return None
-        # THE DOOR'S CEILING, ASKED AT SELECTION TIME. Twelve re-opens in seven
-        # days were chosen here and then refused by failures.check() inside
-        # sequencer._send, which logs `blocked:` and returns False. A blocked row
-        # is not an attempt, so `last_try` never moved, so the same person was
-        # chosen again on the next pass -- and, being the quietest, chosen FIRST.
-        # That is the knock lane's 2026-09-03 loop rebuilt in a second lane, which
-        # is exactly what a lane-local fix guarantees. Side-effect free: check()
-        # only reads message_log. Last, because it is the widest and the most
-        # expensive, so it runs only for people otherwise ready to go.
+        # THE DOOR'S OWN QUESTION, ASKED AT SELECTION TIME. Twelve re-opens in
+        # seven days were chosen here and then refused inside sequencer._send,
+        # which logs `blocked:` and returns False. A blocked row is not an attempt,
+        # so `last_try` never moved, so the same person was chosen again on the
+        # next pass -- and, being the quietest, chosen FIRST. That is the knock
+        # lane's 2026-09-03 loop rebuilt in a second lane, which is exactly what a
+        # lane-local fix guarantees.
+        #
+        # This was `failures.check()` alone -- the one rule that had already bitten
+        # us -- which is how every partial copy in this system started. It asks the
+        # whole gate now, so the master switch, an operator pause and an opt-out
+        # are modelled here for the first time. Side-effect free: would_allow()
+        # only reads. Last, because it is the widest and most expensive, so it runs
+        # only for people otherwise ready to go.
         #
         # sequencer's own call STAYS. Two doors is correct -- this one stops us
         # CHOOSING the impossible, that one stops us SENDING it.
-        allowed, _cap = failures.check(r["phone"], MSG_TYPE, project=r.get("project"))
+        allowed, _cap = sendgate.would_allow(r["phone"], MSG_TYPE,
+                                             project=r.get("project"))
         if not allowed:
             return None
         claimed.add(r["phone"])

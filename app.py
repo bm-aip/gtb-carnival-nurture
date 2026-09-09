@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-06-hand-raisers-reach-a-human"
+CODE_VERSION = "2026-09-09-one-gate"
 import db
 import funnel
 import selldo

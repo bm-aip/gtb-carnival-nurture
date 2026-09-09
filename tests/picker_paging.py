@@ -132,10 +132,14 @@ R.check("the knock lane no longer double-checks candidates to guess ahead",
 # and the same 23 leads refilled every batch for nine days. The re-opener had 12
 # such sends in seven days and no such check. A door alone cannot stop this; only
 # not CHOOSING them can.
-R.check("the knock lane asks the ceiling before choosing",
-        "failures.check" in calls_in(ksrc, "_verdict"))
-R.check("the re-opener lane asks the ceiling before choosing",
-        "failures.check" in calls_in(rsrc, "due"))
+# Since #88 that ceiling is asked as part of ONE question -- sendgate.would_allow()
+# -- rather than as a lane-local copy of the one rule that had already bitten us.
+# tests/one_gate.py pins the wider rule (every buyer-facing lane asks, and none
+# keeps a private copy); these two keep the incident that caused it named here.
+R.check("the knock lane asks the gate before choosing",
+        "sendgate.would_allow" in calls_in(ksrc, "_verdict"))
+R.check("the re-opener lane asks the gate before choosing",
+        "sendgate.would_allow" in calls_in(rsrc, "due"))
 
 # --- reopener.due stays safe for a monitor to call ----------------------------
 # The watchdog calls reopener.due() every 15 minutes and must never call
@@ -162,17 +166,26 @@ def always_allow(phone, msg_type, project=None):
 
 
 def run_due(rows, check=always_allow, limit=25):
-    real_q, real_check = reopener.db.q, reopener.failures.check
+    """The lane, driven by a fake page of rows and a fake gate.
+
+    THE GATE IS STUBBED AS A WHOLE since #88, where it used to be
+    `failures.check` alone. Stubbing the module attribute rather than the
+    function inside it keeps this test honest about what the lane consults: if
+    the lane went back to asking a rule directly, the stub would stop covering
+    it and the real one would reach a database this test does not have.
+    """
+    real_q, real_gate = reopener.db.q, reopener.sendgate
 
     def fake_q(sql, params=None, one=False):
         page, offset = params[-2], params[-1]
         return rows[offset:offset + page]
 
-    reopener.db.q, reopener.failures.check = fake_q, check
+    reopener.db.q = fake_q
+    reopener.sendgate = type("G", (), {"would_allow": staticmethod(check)})()
     try:
         return reopener.due(limit=limit)
     finally:
-        reopener.db.q, reopener.failures.check = real_q, real_check
+        reopener.db.q, reopener.sendgate = real_q, real_gate
 
 
 # THE 2026-09-04 INCIDENT, EXACTLY. The quietest conversations are ghosts -- an ad

@@ -46,6 +46,8 @@ import config                          # noqa: E402
 import failures                        # noqa: E402
 import fatigue                         # noqa: E402
 import knocks                          # noqa: E402
+import optout                          # noqa: E402
+import sendgate                        # noqa: E402
 
 r = Results()
 
@@ -69,6 +71,23 @@ knocks.attempt_state = lambda phone, step_key: (0, None)
 # which counts message_log -- and a guard test that needs a database is a guard
 # test nobody runs.
 _ALLOW = (True, None)
+
+# THE PICKER NOW ASKS THE WHOLE GATE (#88), so these cases run through the real
+# sendgate.would_allow() rather than around it -- which is the point: it proves the
+# fatigue cap and the retry ceiling still reach the picker THROUGH the gate, and
+# that their reasons still arrive in the owner's words.
+#
+# Three things have to be held open for that to be a test of fatigue rather than a
+# test of the environment. The master switch is OFF in a test process (SEND_ENABLED
+# has no value outside Railway), `paused()` reads `settings` and `is_blocked()`
+# reads `optouts` -- so left alone, every case below would block on the switch,
+# each assertion would pass or fail for a reason that has nothing to do with what
+# it claims to check, and the two that reach a database would need one.
+_real_enabled, _real_paused = sendgate.sends_enabled, sendgate.paused
+_real_is_blocked = optout.is_blocked
+sendgate.sends_enabled = lambda: True
+sendgate.paused = lambda: False
+optout.is_blocked = lambda phone, project=None: (False, None)
 
 
 def verdict_when(allowed, cap):
@@ -138,10 +157,33 @@ step, key, reason = verdict_when_ceiling(True, None)
 r.eq("a lead under every ceiling is still sendable", reason, None)
 r.eq("and carries its step index", step, 0)
 
+# --- the switch and the pause reach the picker too, now they are asked --------
+# They never did before: _verdict copied two of the gate's rules and knew nothing
+# about the other three, so with sending switched off or paused the engine went on
+# choosing people every minute and the door refused every one of them.
+def verdict_when_gate(reason):
+    real = knocks.sendgate
+    knocks.sendgate = type("G", (), {
+        "would_allow": staticmethod(lambda p, m, project=None: (False, reason))})()
+    try:
+        return knocks._verdict(dict(LEAD), NOW, set())[2]
+    finally:
+        knocks.sendgate = real
+
+
+r.eq("with sending switched off, nobody is even chosen",
+     verdict_when_gate(sendgate.BLOCKED_DISABLED), "sending is switched off")
+r.eq("an operator pause stops the picker, not just the door",
+     verdict_when_gate(sendgate.BLOCKED_PAUSED), "sending is paused")
+r.eq("and somebody who opted out is not chosen either",
+     verdict_when_gate(sendgate.BLOCKED_OPTOUT_GLOBAL), "they asked us to stop")
+
 fatigue.check = _real_check
 failures.check = _real_failures_check
 knocks.knock_state = _real_knock_state
 knocks.attempt_state = _real_attempt_state
+sendgate.sends_enabled, sendgate.paused = _real_enabled, _real_paused
+optout.is_blocked = _real_is_blocked
 
 # --- the reasons are human, because a person reads them -----------------------
 # _verdict's reasons are grouped and printed in the watchdog's NOBODY IS BEING
@@ -169,19 +211,39 @@ r.eq("all three retry ceilings are mapped",
 # path loses its fatigue guard entirely and a burst becomes possible.
 _src = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                          "knocks.py"), encoding="utf-8").read()
+# READ FROM THE PARSE TREE. These were substring searches until #88; on
+# 2026-09-03 a search of this kind passed on a COMMENT saying the opposite of what
+# it asserted, and the comments in this file name every call it looks for.
+import ast                             # noqa: E402
+
+
+def _calls_in(src, fn_name):
+    fn = next(n for n in ast.walk(ast.parse(src))
+              if isinstance(n, ast.FunctionDef) and n.name == fn_name)
+    return {ast.unparse(n.func) for n in ast.walk(fn) if isinstance(n, ast.Call)}
+
+
 r.check("send_knock still calls fatigue.check before the wire",
-        "allowed, reason = fatigue.check(" in _src)
-r.check("_verdict checks fatigue too", "allowed, cap = fatigue.check(" in _src)
-r.check("_verdict checks the retry ceiling too",
-        "allowed, cap = failures.check(" in _src)
+        "fatigue.check" in _calls_in(_src, "send_knock"))
+# ONE QUESTION, NOT A COPY OF TWO RULES (#88). _verdict used to call fatigue.check
+# and failures.check itself -- a partial, hand-maintained copy of the door, and
+# each half was added only after the missing one had caused an outage. It asks the
+# gate now, so a rule added to the gate reaches SELECTION on the day it is written.
+r.check("_verdict asks the send gate", "sendgate.would_allow" in _calls_in(_src, "_verdict"))
+r.check("and keeps no private copy of the fatigue cap",
+        "fatigue.check" not in _calls_in(_src, "_verdict"))
+r.check("and keeps no private copy of the retry ceiling",
+        "failures.check" not in _calls_in(_src, "_verdict"))
 
 # sendgate is the one door every send passes through, and knock_now() reaches the
 # wire without the picker. Both gates must survive there, or the picker becomes
 # the only guard -- which is how a webhook send would escape both.
 _gate = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                           "sendgate.py"), encoding="utf-8").read()
-r.check("sendgate still checks fatigue", "fatigue.check(" in _gate)
-r.check("sendgate still checks the retry ceiling", "failures.check(" in _gate)
+r.check("sendgate still checks fatigue",
+        "fatigue.check" in _calls_in(_gate, "would_allow"))
+r.check("sendgate still checks the retry ceiling",
+        "failures.check" in _calls_in(_gate, "would_allow"))
 
 # THE STANDING TRAP, stated once so the next person need not rediscover it:
 # attempt_state() excludes `blocked:` rows on purpose, so ANY gate that refuses
@@ -201,10 +263,16 @@ def _at(needle):
     return _src.find(needle)
 
 
-r.check("_verdict asks fatigue after the retry block",
-        -1 < _at("waiting out the retry gap") < _at("allowed, cap = fatigue.check("))
-r.check("_verdict asks the retry ceiling last of all",
-        -1 < _at("allowed, cap = fatigue.check(")
-        < _at("allowed, cap = failures.check("))
+r.check("_verdict asks the gate after the retry block",
+        -1 < _at("waiting out the retry gap")
+        < _at("allowed, cap = sendgate.would_allow("))
+
+# THE ORDER INSIDE THE GATE, which is where these two rules now live. Cheapest and
+# most absolute first: the master switch needs no database at all, and the two
+# counting queries run only for somebody otherwise ready to send.
+_gi = [_gate.find(x) for x in ("sends_enabled()", "optout.is_blocked(",
+                               "fatigue.check(", "failures.check(")]
+r.check("the gate still asks in order: switch, opt-out, fatigue, ceiling",
+        all(-1 < a < b for a, b in zip(_gi, _gi[1:])), detail=str(_gi))
 
 sys.exit(0 if r.report("KNOCK FATIGUE PREFILTER") else 1)
