@@ -319,6 +319,13 @@ def tick():
     import handraiser
     _run_lane("handraiser", handraiser.run)
 
+    # THE RESUME STEP. Not a follow-up lane: it watches for the provider coming
+    # back after an outage and answers the buyers whose messages died while it was
+    # down. Costs one settings read when nothing is broken. Owner, 2026-09-09:
+    # "I don't need an alarm but a resume step". See resume.py.
+    import resume
+    _run_lane("resume", resume.run)
+
 
 def _run_lane(name, fn):
     """Run one send lane, and leave behind a record a monitor can actually read.
