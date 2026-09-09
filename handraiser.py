@@ -57,6 +57,24 @@ log = logging.getLogger("handraiser")
 
 MSG_TYPE = "handoff_handraiser"
 
+# THIS LANE NEVER MESSAGES THE BUYER, so its picker does NOT ask sendgate about the
+# person it selects -- and that is the whole reason this flag is written down.
+#
+# Every other lane must end its selection on sendgate.would_allow(), because the
+# door will refuse what a picker wrongly chose and the refusal loops forever (see
+# sendgate.would_allow). Here the person selected is not the recipient: they are
+# the SUBJECT of a card that goes to STAFF_PHONES. Asking whether the buyer may be
+# messaged would answer a question nobody asked, and asking it about the wrong
+# phone would silently stop cards -- an opted-out buyer is exactly the person a
+# salesperson most needs told about.
+#
+# The staff card itself still passes the door: handoff._notify -> sequencer._send
+# -> sendgate.check() on the salesperson's number.
+#
+# tests/one_gate.py reads this flag, and pairs it with an AST check that this
+# module really does no buyer send -- a lane cannot simply declare its way out.
+SENDS_TO_BUYER = False
+
 # How long a hand stays up before it needs a human. Three days matches the
 # re-opener's first rung: long enough that somebody mid-conversation is not
 # reported as gone quiet, short enough that a live buying signal is still warm.

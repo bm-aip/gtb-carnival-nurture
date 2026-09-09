@@ -59,8 +59,32 @@ def paused():
     return (db.get_setting("global_pause", "false") == "true") or config.GLOBAL_PAUSE_ENV
 
 
-def check(phone, msg_type, project=None):
-    """Return (allowed: bool, reason: str) for one outbound message.
+def would_allow(phone, msg_type, project=None):
+    """THE PREDICATE: (allowed: bool, reason: str) for one outbound message.
+
+    The same question the door asks, in a form a PICKER may ask BEFORE choosing
+    somebody. Pure -- it reads `settings`, `optouts` and `message_log` and writes
+    nothing -- so a monitor, a dry run or a counting pass may call it freely.
+
+    WHY IT HAS A NAME OF ITS OWN. Every stall this project has had is one shape:
+    two pieces of code decide whether a person may be messaged, and only one of
+    them knows all the rules.
+
+        the door     `check()` below, called by sequencer._send  -- knows all of them
+        the pickers  a partial copy in each lane                 -- knew some of them
+
+    So a picker keeps choosing people the door will refuse; each refusal writes a
+    `blocked:` row; a `blocked:` row is not an attempt, so no clock moves and the
+    same people -- the oldest, therefore the front of every queue -- are chosen
+    again on the next tick. Measured: 35,156 phantom rows on the fatigue cap
+    (#77/#78), then 135,496 more on the burst ceiling (#80) while 309 sendable
+    buyers sat behind 23 of them for nine days.
+
+    It was repaired inside the knock lane three times. A repair that lives in one
+    lane is a habit, not a rule, so the re-opener rebuilt it in #67 and lane three
+    would have too. The rule now has exactly one home: this function is what the
+    door asks, and what every buyer-facing picker asks as its LAST check.
+    `tests/one_gate.py` fails the build if a lane does not.
 
     Order is cheapest-and-most-absolute first: the master switch needs no
     database at all, so in the state this system will sit in for weeks a blocked
@@ -101,3 +125,21 @@ def check(phone, msg_type, project=None):
         return False, cap
 
     return True, OK
+
+
+def check(phone, msg_type, project=None):
+    """THE DOOR. Called by `sequencer._send()` and by nothing else.
+
+    Identical to `would_allow()` today, and deliberately a separate name rather
+    than an alias: the two have different jobs and will not stay identical. The
+    door is the last word before the wire and is where a rule that can only be
+    evaluated at send time belongs; the predicate is what a picker asks minutes
+    earlier and must stay cheap and side-effect free enough to ask about hundreds
+    of people.
+
+    THE DOOR'S OWN CALL STAYS EVEN THOUGH EVERY PICKER NOW ASKS FIRST. Two doors
+    is correct: `knocks.knock_now()` reaches the wire straight from the leadgen
+    webhook without passing through any picker, and the qualifier's replies never
+    pass through one either.
+    """
+    return would_allow(phone, msg_type, project)

@@ -21,12 +21,15 @@ WHAT STOPS A KNOCK. In order, cheapest first:
                                       conversation and a scheduled template would
                                       talk over a live human being.
   * a terminal outcome             -- qualified / visit_booked / dead / escalated
-  * fatigue.check()                -- the 4-per-journey counter AND the
-                                      non-resettable 2-per-7-days ceiling
-  * sendgate.check()               -- master switch, pauses, opt-out, retry ceiling
+  * sendgate.would_allow()         -- the master switch, an operator pause, an
+                                      opt-out, the fatigue caps (4 per journey and
+                                      a non-resettable 2 per 7 days) and the retry
+                                      ceilings, in one question
 
-The last two are not re-implemented here. There is one door and this walks through
-it like everything else.
+That last one is not re-implemented here, and no longer partially copied here
+either: `_verdict()` asks the gate the same question the door asks, so a rule
+added to the gate reaches this lane's SELECTION on the day it is written. There is
+one door and this walks through it like everything else.
 """
 import logging
 import os
@@ -38,8 +41,13 @@ import db
 import failures
 import fatigue
 import picker
+import sendgate
 import sequencer
 import wati
+
+# This lane messages BUYERS, so its picker must end on the send gate. Read by
+# tests/one_gate.py, which fails the build if a buyer-facing lane skips it.
+SENDS_TO_BUYER = True
 
 log = logging.getLogger("knocks")
 
@@ -76,6 +84,19 @@ _CEILING_REASON = {
     failures.CEILING_RECIPIENT: "number cannot receive WhatsApp",
     failures.CEILING_TRANSIENT: "too many transient failures",
 }
+
+# EVERY REASON THE DOOR CAN GIVE, IN THE OWNER'S WORDS. _verdict() now asks
+# sendgate.would_allow() rather than keeping a partial copy of its rules, so it
+# can be handed back reasons the knock engine never used to see -- the master
+# switch, an operator pause, an opt-out. A reason with no entry here still prints,
+# as "waiting on <code>": an unmapped code must never become an invisible one.
+_GATE_REASON = dict(_FATIGUE_REASON, **_CEILING_REASON)
+_GATE_REASON.update({
+    sendgate.BLOCKED_DISABLED: "sending is switched off",
+    sendgate.BLOCKED_PAUSED: "sending is paused",
+    sendgate.BLOCKED_OPTOUT_GLOBAL: "they asked us to stop",
+    sendgate.BLOCKED_OPTOUT_PROJECT: "they asked us to stop about this project",
+})
 
 # (days_after_signup, config.KNOCK_TEMPLATES key)
 #
@@ -523,69 +544,42 @@ def _verdict(lead, now, claimed):
             if now < last_try + timedelta(hours=config.KNOCK_RETRY_GAP_HOURS):
                 return sent, step_key, "waiting out the retry gap"
 
-    # THE FATIGUE CAP IS A SELECTION RULE, NOT A LAST-MOMENT ONE.
+    # THE SEND GATE IS A SELECTION RULE, NOT ONLY A LAST-MOMENT ONE.
     #
-    # send_knock() has always called fatigue.check() immediately before the wire,
-    # and that door stays -- knock_now() reaches it without passing through here.
-    # But the picker did not model it, so a lead at the weekly ceiling stayed
-    # sendable in this function's eyes, was chosen on every tick, refused at the
-    # door, and left a `blocked:fatigue:` row behind. Measured over the seven days
-    # to 2026-08-31: 29,865 such rows for t6_visit against 43 real sends, and
-    # 35,156 across all steps against 382. At SEQUENCER_TICK_MIN=1 that is about
-    # three people being re-picked and re-refused every sixty seconds, forever.
+    # This used to be two separate calls -- fatigue.check() and failures.check() --
+    # a partial, hand-maintained copy of what the door already knew. Each was added
+    # here only after the missing one had cost a real outage:
     #
-    # THE RETRY GAP ABOVE CANNOT COVER THIS, and it is worth saying why, because
-    # switching KNOCK_RETRY_ENABLED on looks like the fix and is not:
-    # attempt_state() excludes `blocked:` rows on purpose (our own gates must not
-    # consume one of the ten attempts at reaching a person), so it reports zero
-    # attempts and a null clock no matter how many times fatigue has refused. The
-    # gap never engages. Only a check at selection time ends the loop.
+    #   2026-08-31  the weekly fatigue cap was not modelled. 35,156 `blocked:`
+    #               rows against 382 real sends; 29,865 of them one template.
+    #   2026-09-03  the burst ceiling was not modelled. 135,496 rows, 84% of
+    #               message_log, 23 leads re-picked 1,380 times an hour for nine
+    #               days -- and because they are the OLDEST due rows they filled
+    #               every batch, so 309 sendable buyers sat behind them in the dark.
     #
-    # LAST, DELIBERATELY. Every cheaper reason has already returned by this point,
-    # so the two counting queries inside fatigue.check() run for leads that are
-    # otherwise ready to send -- a handful per tick, not the scan window.
+    # The mechanism is the same both times and it is not fixed by the retry gap
+    # above: attempt_state() excludes `blocked:` rows ON PURPOSE, so that our own
+    # gates cannot consume one of the ten attempts at reaching a person. The clock
+    # therefore never moves however many times we are refused, _give_up() never
+    # fires, and the loop is eternal. Only not CHOOSING them ends it.
     #
-    # SIDE-EFFECT FREE, like the rest of this function: check() only counts
-    # message_log; start_journey() is a separate call made by send_knock().
-    allowed, cap = fatigue.check(lead["phone"], msg_type_for(step_key),
-                                 project=lead.get("project"))
+    # So the copy is gone. One question, asked of the one thing that knows the
+    # answer -- and the master switch, an operator pause and an opt-out come with
+    # it, none of which this lane modelled before.
+    #
+    # LAST, DELIBERATELY. Every cheaper reason has already returned by now, so the
+    # gate's counting queries run only for leads otherwise ready to send: a handful
+    # per tick, not the whole scan window.
+    #
+    # SIDE-EFFECT FREE, like the rest of this function. would_allow() writes
+    # nothing; start_journey() is a separate call made by send_knock().
+    #
+    # THE DOOR'S OWN CALL STAYS. knock_now() reaches the wire from the leadgen
+    # webhook without passing through this function, so two doors is correct.
+    allowed, cap = sendgate.would_allow(lead["phone"], msg_type_for(step_key),
+                                        project=lead.get("project"))
     if not allowed:
-        return sent, step_key, _FATIGUE_REASON.get(cap, f"waiting on {cap}")
-
-    # THE RETRY CEILING IS A SELECTION RULE TOO. Same lesson as the block above,
-    # in the same function, one week later -- and it cost 135,496 rows.
-    #
-    # RETRY_MAX_BURST was added 2026-08-25 as sendgate's last and widest guard:
-    # five refusals of one (phone, msg_type) and that particular send stops, while
-    # the person stays reachable by every other lane. It works perfectly on the
-    # wire -- measured 2026-09-03, every affected lead had exactly 4 delivered and
-    # 5 refused, so nobody was spammed.
-    #
-    # But the picker did not model it. 23 leads whose t6/t2 Meta had stopped
-    # delivering stayed sendable in this function's eyes, were chosen on every
-    # tick, refused at the door, and left a `blocked:retry_ceiling_burst` row
-    # behind each time: 1,380 rows an hour, flat, for nine days. 135,496 rows,
-    # 84% of everything in message_log. Real knocks fell from 162 a day to one,
-    # because those 23 are the OLDEST due rows and so filled every batch of ten
-    # -- 309 sendable buyers sat behind them, unreachable.
-    #
-    # attempt_state() cannot close this, for precisely the reason spelled out
-    # above: it excludes `blocked:` rows on purpose, so the ceiling reads zero
-    # attempts and a null clock however many times the burst cap refused, and
-    # _give_up() counts those same attempts and therefore never fires. Only a
-    # check at selection time ends the loop. Third time that has been true here.
-    #
-    # AFTER FATIGUE, MIRRORING sendgate's order, and last because it is the
-    # widest: the counting queries inside failures.check() run only for leads
-    # already otherwise ready to send. Side-effect free, like the rest of this
-    # function -- check() only reads message_log.
-    #
-    # sendgate's own call STAYS. knock_now() reaches the wire from the leadgen
-    # webhook without passing through the picker, so two doors is correct.
-    allowed, cap = failures.check(lead["phone"], msg_type_for(step_key),
-                                  project=lead.get("project"))
-    if not allowed:
-        return sent, step_key, _CEILING_REASON.get(cap, f"waiting on {cap}")
+        return sent, step_key, _GATE_REASON.get(cap, f"waiting on {cap}")
     return sent, step_key, None
 
 
