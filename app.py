@@ -18,7 +18,7 @@ import config
 # serving before flipping a switch that messages real people -- and it silently
 # lied through the whole Phase 0 rollout, still reporting the carnival build while
 # the new code was live. A stale value here is worse than no value.
-CODE_VERSION = "2026-09-09-resume-step"
+CODE_VERSION = "2026-09-13-split-send-budgets"
 import db
 import funnel
 import selldo
@@ -1323,6 +1323,12 @@ def admin_config_check():
         "promote_forms": config.PROMOTE_FORMS,
         "promote_window_hours": config.PROMOTE_WINDOW_HOURS,
         "max_sends_per_hour": config.MAX_SENDS_PER_HOUR,
+        # The two budgets, and what each has actually spent this hour. Reading one
+        # without the other is how a quiet knock engine looked like a broken knock
+        # engine for a day: replies had eaten an allowance nobody could see.
+        "proactive_sends_per_hour": config.PROACTIVE_SENDS_PER_HOUR,
+        "proactive_sends_this_hour": wati.sends_last_hour(business_initiated=True),
+        "all_sends_this_hour": wati.sends_last_hour(),
         "send_batch_per_tick": config.SEND_BATCH_PER_TICK,
         "daily_send_cap": config.DAILY_SEND_CAP,
         # A cap you cannot see the remaining balance of is a number, not a gate.

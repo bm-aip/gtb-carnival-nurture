@@ -266,8 +266,14 @@ def fetch_referral(phone, max_pages=6):
 NOT_A_SEND = ("matched", "knock_gave_up")
 
 
-def sends_last_hour():
+def sends_last_hour(business_initiated=False):
     """Messages that actually went on the wire in the last hour.
+
+    `business_initiated=True` counts only the proactive population -- exactly the
+    one `sequencer._daily_sends()` counts, derived from the same two constants
+    rather than restated, so the hourly fuse and the daily tier cap can never
+    disagree about who they are bounding. The three predicates below apply either
+    way: one definition of "a send", narrowed, never a second query.
 
     NOT_A_SEND IS EXCLUDED, and the second entry cost an hour of live sending.
 
@@ -292,34 +298,54 @@ def sends_last_hour():
     #
     # A gate block is still excluded: sendgate stopped it and nothing was sent.
     # Same three states as failures.burst_count().
-    r = db.q("""SELECT count(*) AS n FROM message_log
+    sql = """SELECT count(*) AS n FROM message_log
                 WHERE direction='out' AND NOT (msg_type = ANY(%s))
                   AND (ok OR COALESCE(detail, '') NOT LIKE 'blocked:%%')
-                  AND ts > now() - interval '1 hour'""",
-             (list(NOT_A_SEND),), one=True)
+                  AND ts > now() - interval '1 hour'"""
+    params = [list(NOT_A_SEND)]
+    if business_initiated:
+        # The SQL twin of is_business_initiated(), built from its own two
+        # constants. A hand-written 'knock%' here is how _daily_sends() came to
+        # omit every re-opener and first touch from a cap meant to bound them.
+        sql += " AND (msg_type LIKE %s OR msg_type = ANY(%s))"
+        params += [fatigue.PROACTIVE_PREFIX + "%", list(COLD_FIRST_TOUCH)]
+    r = db.q(sql, tuple(params), one=True)
     return r["n"] if r else 0
 
 
 def rate_ok(msg_type=None):
     """Is there hourly capacity for this message?
 
-    A PROACTIVE send may only use the first part of the hour's allowance; the rest
-    is held back for people who are actually talking to us.
+    TWO BUDGETS, BECAUSE THEY BOUND TWO DIFFERENT THINGS.
 
-    2026-08-22, and this is why: the knock backlog sent 172 templates and used
-    exactly 100 of 100 slots in one hour. Sanjay Agarwalla read his message, pressed
-    "Need More Details", and got nothing -- his reply arrived at slot 101. Vivek
-    Chordia hit the same wall thirteen minutes earlier. A marketing blast outranked
-    two live buyers because it got there first and the budget was shared.
+    Proactive traffic is metered against PROACTIVE_SENDS_PER_HOUR and counts only
+    proactive sends. Replies keep the account-wide ceiling, unchanged, for now.
 
-    Someone who read our message and asked a question is worth more than the 173rd
-    cold template. The reserve encodes that, cheaply: knocks stop early, replies
-    keep the remainder.
+    2026-08-22 is why a proactive ceiling exists at all: the knock backlog sent
+    172 templates and used exactly 100 of 100 slots in one hour. Sanjay Agarwalla
+    read his message, pressed "Need More Details", and got nothing -- his reply
+    arrived at slot 101. Vivek Chordia hit the same wall thirteen minutes earlier.
+    A marketing blast outranked two live buyers because it got there first and the
+    budget was shared.
+
+    REPLY_RESERVE_PER_HOUR was the answer then: knocks stop early, replies keep the
+    remainder. It is no longer load-bearing for that promise -- a knock cannot
+    reach a reply's allowance if it is not counted against it -- but it still sets
+    the DEFAULT proactive ceiling, so it stays until step 3 retires it explicitly.
+    Removing it here would move two things at once.
+
+    2026-09-10 is why the counter split: the reserve protected replies from knocks
+    and nothing protected knocks from replies. 57 of one hour's 94 sends were
+    answers to shop autoresponders, and the marketing lanes went quiet behind them
+    with no row, no alert and no explanation.
+
+    ⚠️ This function is NOT the whole answer to "may we send". Quiet hours and the
+    daily tier cap sit ahead of it in sequencer._send(); sendgate sits after.
     """
-    used = sends_last_hour()
     if msg_type is not None and is_business_initiated(msg_type):
-        return used < max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
-    return used < config.MAX_SENDS_PER_HOUR
+        return (sends_last_hour(business_initiated=True)
+                < max(1, config.PROACTIVE_SENDS_PER_HOUR))
+    return sends_last_hour() < config.MAX_SENDS_PER_HOUR
 
 
 # The carnival first-touch types. Cold business-initiated templates, exactly like a

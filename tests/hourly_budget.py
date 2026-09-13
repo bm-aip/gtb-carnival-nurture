@@ -53,6 +53,26 @@ class FakeLog:
 
     def q(self, sql, params=None, one=False):
         excluded = set(params[0]) if params else set()
+        # THE NARROWING IS READ OFF THE SQL, NOT OFF THE PARAMETERS.
+        #
+        # It read the params first, and a proof-by-revert caught it: deleting the
+        # `AND (msg_type LIKE ...)` clause from wati.py left the bind values in
+        # place, so this fake went on filtering a query that no longer filtered.
+        # 48 assertions passed against a counter that in production would have
+        # counted every reply as proactive again -- the precise bug this file
+        # exists to prevent, hidden by the test written to catch it.
+        #
+        # A stand-in for a database has to model the QUERY. Both halves are
+        # asserted below so neither can drift away from the other again.
+        narrowing = "msg_type LIKE %s" in sql
+        if narrowing:
+            assert params and len(params) > 2, \
+                "SQL narrows to proactive rows but no prefix/cold-list was bound"
+            prefix, cold = params[1], set(params[2])
+        else:
+            assert not params or len(params) == 1, \
+                "proactive bind values passed to a query that does not narrow"
+            prefix, cold = None, set()
         n = 0
         for r in self.rows:
             if r.get("direction") != "out":
@@ -61,6 +81,10 @@ class FakeLog:
                 continue
             if not (r.get("ok") or not str(r.get("detail") or "").startswith("blocked:")):
                 continue
+            if prefix is not None:
+                mt = str(r["msg_type"] or "")
+                if not (mt.startswith(prefix.rstrip("%")) or mt in cold):
+                    continue
             n += 1
         return {"n": n} if one else [{"n": n}]
 
@@ -69,11 +93,21 @@ def row(msg_type, ok=True, detail=None, direction="out"):
     return {"msg_type": msg_type, "ok": ok, "detail": detail, "direction": direction}
 
 
-def count(rows):
+def count(rows, business_initiated=False):
     real = wati.db.q
     wati.db = type("D", (), {"q": staticmethod(FakeLog(rows).q)})()
     try:
-        return wati.sends_last_hour()
+        return wati.sends_last_hour(business_initiated=business_initiated)
+    finally:
+        wati.db = type("D", (), {"q": staticmethod(real)})()
+
+
+def gate(rows, msg_type):
+    """wati.rate_ok() against a diary held in memory."""
+    real = wati.db.q
+    wati.db = type("D", (), {"q": staticmethod(FakeLog(rows).q)})()
+    try:
+        return wati.rate_ok(msg_type)
     finally:
         wati.db = type("D", (), {"q": staticmethod(real)})()
 
@@ -210,6 +244,113 @@ R.eq("it sends what the hour allows and stops there", len(got), 2)
 R.check("and the untouched people keep their place in the queue",
         [r["id"] for r in got] == [0, 1],
         detail="the rest are simply not tried, so the next tick resumes here")
+
+# --- TWO BUDGETS, NOT ONE (step 1, 2026-09-13) -------------------------------
+#
+# THE BUG. sends_last_hour() summed every outbound row and the proactive ceiling
+# was measured against that total, so an hour of REPLIES shut the knock engine
+# down. 2026-09-10: 57 of one hour's 94 sends were answers to shop autoresponders
+# and the marketing lanes went quiet behind them -- with no row, no alert, and
+# nothing anywhere saying that was the reason.
+#
+# The reverse protection has always existed (REPLY_RESERVE_PER_HOUR, 2026-08-22).
+# This is the missing half.
+
+replies = ([row("qualifier_turn")] * 60 + [row("media")] * 30
+           + [row("handoff_escalation")] * 4)
+
+R.eq("replies are counted when the question is 'how busy are we'",
+     count(replies), 94)
+R.eq("and NOT counted against the proactive budget",
+     count(replies, business_initiated=True), 0)
+R.check("so a flood of replies no longer closes the marketing door",
+        gate(replies, "knock_t1_lifestyle"),
+        detail="94 replies used to read as 94 of 80 proactive slots")
+
+# The door must still close on the traffic it is meant to bound. A test that only
+# proved the gate opens would pass with the gate deleted.
+R.check("a proactive burst still closes it",
+        not gate([row("knock_t1_lifestyle")] * config.PROACTIVE_SENDS_PER_HOUR,
+                 "knock_t1_lifestyle"),
+        detail="%d proactive sends must exhaust the proactive budget"
+               % config.PROACTIVE_SENDS_PER_HOUR)
+R.check("and a reply flood still closes the REPLY door at the account ceiling",
+        not gate([row("qualifier_turn")] * config.MAX_SENDS_PER_HOUR,
+                 "qualifier_turn"),
+        detail="replies keep today's ceiling until step 3")
+
+# MIXED TRAFFIC, THE REAL SHAPE OF AN HOUR. Neither budget may be spent by the
+# other's traffic, in either direction.
+#
+# EVERY COUNT HERE IS DERIVED FROM CONFIG, NEVER TYPED. Written against the
+# production numbers (100/20/80) these assertions passed for the wrong reason and
+# failed under the code defaults (30/20/10), which is the same mistake as reading
+# a cap off config.py instead of off the deployment.
+P = config.PROACTIVE_SENDS_PER_HOUR
+
+# One proactive slot still free, and enough replies that the OLD shared counter
+# would have read the hour as full.
+mixed = [row("qualifier_turn")] * P + [row("knock_t2_location")] * (P - 1)
+R.eq("proactive spend is read off proactive rows alone",
+     count(mixed, business_initiated=True), P - 1)
+R.check("marketing keeps sending through a busy conversation hour",
+        gate(mixed, "knock_t2_location"),
+        detail="%d proactive of %d, with %d replies alongside" % (P - 1, P, P))
+R.check("PROOF OF THE OLD BUG: the shared counter would have refused that send",
+        not (count(mixed) < P),
+        detail="total %d against the old proactive ceiling of %d"
+               % (count(mixed), P))
+
+# The reverse direction, which has held since 2026-08-22 and must keep holding.
+burst_full = [row("knock_t1_lifestyle")] * P
+R.check("buyers keep being answered through a marketing burst",
+        gate(burst_full, "qualifier_turn"),
+        detail="the 2026-08-22 promise, now structural rather than a reserve")
+R.check("while that same burst has closed the marketing door",
+        not gate(burst_full, "knock_t1_lifestyle"))
+
+# --- the two populations must be the SAME population -------------------------
+#
+# The counter's narrowing is SQL; is_business_initiated() is Python. They are
+# built from the same two constants on purpose -- _daily_sends() once restated
+# 'knock%' by hand and silently omitted every re-opener and first touch from a cap
+# meant to bound them. This asserts the two agree for every type we actually send.
+EVERY_MSG_TYPE = [
+    "knock_t1_lifestyle", "knock_t2_location", "knock_t3_low_density",
+    "knock_t6_visit", "reopener_t7", "m1", "m2", "m3",
+    "qualifier_turn", "qualifier_ack", "media", "handoff_alert",
+    "handoff_escalation", "handoff_wants_sales", "handoff_handraiser",
+    "resume_answer", "ack_shortcircuit",
+]
+for mt in EVERY_MSG_TYPE:
+    R.eq("SQL and Python agree on whether %s is business-initiated" % mt,
+         count([row(mt)], business_initiated=True),
+         1 if wati.is_business_initiated(mt) else 0)
+
+R.check("re-openers are proactive, and counted as such",
+        count([row("reopener_t7")], business_initiated=True) == 1,
+        detail="the 24h window is shut, so a re-open is an approved template")
+
+# --- the default must not change anybody's ceiling on deploy day -------------
+R.eq("the proactive ceiling defaults to exactly what it was before the split",
+     config.PROACTIVE_SENDS_PER_HOUR,
+     max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR))
+
+# --- the monitor must read the engine's number, not its own copy -------------
+#
+# watchdog._knocks_expected() used to restate MAX - RESERVE. It read the same on
+# the day it was written; a monitor computing its own version of the number it
+# watches is how a starving engine reports healthy.
+import inspect                           # noqa: E402
+import watchdog                          # noqa: E402
+
+_wd_src = inspect.getsource(watchdog)
+_wd_code = "\n".join(l for l in _wd_src.splitlines() if not l.strip().startswith("#"))
+R.check("the watchdog reads PROACTIVE_SENDS_PER_HOUR",
+        "config.PROACTIVE_SENDS_PER_HOUR" in _wd_code)
+R.check("and no longer recomputes the engine's arithmetic",
+        "MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR" not in _wd_code,
+        detail="one definition, shared -- not two that agree today")
 
 if __name__ == "__main__":
     sys.exit(0 if R.report("HOURLY BUDGET") else 1)
