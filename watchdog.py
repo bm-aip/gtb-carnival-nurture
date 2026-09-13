@@ -232,7 +232,12 @@ def _expected_sends(due, hours, now=None):
     if _allowance_spent():
         return 0
     share = -(-due * KNOCK_STALL_PCT // 100)          # ceil, no float
-    headroom = max(1, config.MAX_SENDS_PER_HOUR - config.REPLY_RESERVE_PER_HOUR)
+    # ONE DEFINITION, SHARED WITH THE ENGINE. This used to restate the engine's
+    # arithmetic as MAX_SENDS_PER_HOUR - REPLY_RESERVE_PER_HOUR. It read the same
+    # on the day it was written, and a monitor that computes its own version of
+    # the number it is watching reports healthy while the engine starves -- the
+    # exact failure it exists to catch. It now reads the constant rate_ok() reads.
+    headroom = max(1, config.PROACTIVE_SENDS_PER_HOUR)
     return max(1, min(share, int(headroom * open_h)))
 
 # How long poll_meta_leads may go without completing before new leads are

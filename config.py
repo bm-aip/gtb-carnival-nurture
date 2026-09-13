@@ -1251,6 +1251,34 @@ MAX_SENDS_PER_HOUR = int(os.environ.get("MAX_SENDS_PER_HOUR", "30"))
 # inbound messages that whole day against 172 knocks), so the reserve costs the
 # knock engine almost nothing and buys a guarantee.
 REPLY_RESERVE_PER_HOUR = int(os.environ.get("REPLY_RESERVE_PER_HOUR", "20"))
+
+# --- THE HOURLY CEILING ON PROACTIVE SENDS, COUNTED AGAINST PROACTIVE SENDS ---
+#
+# Step 1 of 3 (design 2026-09-13). Until now ONE counter served two unrelated
+# jobs: `wati.sends_last_hour()` summed every outbound row, and the proactive
+# ceiling was `that total < MAX_SENDS_PER_HOUR - REPLY_RESERVE_PER_HOUR`. So a
+# busy hour of REPLIES silently shut the knock engine down, and nothing anywhere
+# said that was why. 2026-09-10 is the worked example: 57 of one hour's 94 sends
+# were answers to shop autoresponders, and the marketing lanes went quiet behind
+# them.
+#
+# The two populations are not comparable. Meta's messaging tier limits
+# BUSINESS-INITIATED conversations; a reply inside a window the buyer opened is
+# unlimited and free, which DAILY_SEND_CAP's own comment has said all along. So
+# proactive traffic now measures itself, and only itself.
+#
+# DEFAULTS TO TODAY'S EFFECTIVE PROACTIVE CEILING (80 = 100 - 20 on this
+# deployment), so nothing has to be edited in Railway for this to land. The value
+# is the operator's brake: lowering it throttles marketing without touching
+# replies, which is the lever to reach for if this change ever needs holding back.
+#
+# It is NOT a Meta limit -- no such per-hour limit exists on the Cloud API. It is
+# a blast-radius fuse, and it is the last remaining descendant of a 2026-07-06
+# Wasender-era throttle (see wati.rate_ok). DAILY_SEND_CAP is what actually
+# respects the tier.
+PROACTIVE_SENDS_PER_HOUR = int(os.environ.get(
+    "PROACTIVE_SENDS_PER_HOUR",
+    str(max(1, MAX_SENDS_PER_HOUR - REPLY_RESERVE_PER_HOUR))))
 # Rolling-24h cap on PROACTIVE sends (m1/m2/m3) to respect the WhatsApp number's
 # messaging tier. New number = 250/day; raise this as Meta bumps the tier
 # (250 -> 1K -> 10K). Acks don't count -- they're replies inside an open
